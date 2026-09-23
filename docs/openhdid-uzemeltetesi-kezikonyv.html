@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="hu" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenHDID üzemeltetési kézikönyv</title>
+<style>
+:root { --ground: #f6f7f9; --paper: #ffffff; --ink: #1b2430; --muted: #5c6b7c; --rule: #d9dee5; --accent: #36495d; --accent-soft: #e8edf2; --gold: #a8841c; --gold-soft: #f7f0dc; --mono-bg: #eef1f5; --danger: #b42318; --danger-soft: #fde8e6; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ground: #10151c; --paper: #171d26; --ink: #e6eaf0; --muted: #9aa7b6; --rule: #2a3340; --accent: #a9bccf; --accent-soft: #1e2833; --gold: #d8b64a; --gold-soft: #2c2716; --mono-bg: #202834; --danger: #f28b82; --danger-soft: #3a1f1c; } }
+:root[data-theme="dark"] { --ground: #10151c; --paper: #171d26; --ink: #e6eaf0; --muted: #9aa7b6; --rule: #2a3340; --accent: #a9bccf; --accent-soft: #1e2833; --gold: #d8b64a; --gold-soft: #2c2716; --mono-bg: #202834; --danger: #f28b82; --danger-soft: #3a1f1c; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font-family: "Source Sans 3", "Segoe UI", system-ui, sans-serif; font-size: 16px; line-height: 1.55; }
+.page { max-width: 860px; margin: 0 auto; padding: 40px 24px 80px; }
+.eyebrow { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1, h2, h3 { font-family: "Source Serif 4", Georgia, serif; text-wrap: balance; line-height: 1.2; margin: 0; }
+h1 { font-size: 38px; font-weight: 600; margin-top: 8px; }
+h2 { font-size: 25px; font-weight: 600; margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--rule); display: flex; gap: 14px; align-items: baseline; }
+h2 .num { font-family: "JetBrains Mono", monospace; font-size: 14px; color: var(--accent); }
+h3 { font-size: 18px; font-weight: 600; margin-top: 28px; }
+p { margin: 12px 0; max-width: 74ch; }
+.lead { font-size: 18px; color: var(--muted); }
+.meta { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 20px; padding: 14px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); font-size: 14px; }
+.meta div span { display: block; }
+.meta .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+.toc { margin: 28px 0 8px; padding: 16px 20px; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; font-size: 14px; }
+.toc .eyebrow { margin-bottom: 10px; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px 20px; }
+.toc a { color: var(--muted); text-decoration: none; display: flex; gap: 8px; }
+.toc a:hover, .toc a:focus-visible { color: var(--accent); }
+.toc a span:first-child { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--accent); min-width: 1.6em; }
+ul, ol { padding-left: 22px; margin: 10px 0; max-width: 74ch; }
+li { margin: 6px 0; }
+ol.steps li::marker { font-weight: 600; color: var(--accent); }
+code { font-family: "JetBrains Mono", monospace; font-size: 0.86em; background: var(--mono-bg); padding: 1px 5px; border-radius: 3px; }
+pre { font-family: "JetBrains Mono", monospace; font-size: 13px; background: var(--mono-bg); padding: 12px 14px; border-radius: 6px; overflow-x: auto; line-height: 1.5; max-width: none; }
+pre code { background: none; padding: 0; font-size: inherit; }
+.callout { background: var(--accent-soft); border-left: 3px solid var(--accent); padding: 12px 16px; margin: 18px 0; border-radius: 0 6px 6px 0; }
+.callout.gold { background: var(--gold-soft); border-left-color: var(--gold); }
+.callout.danger { background: var(--danger-soft); border-left-color: var(--danger); }
+.callout p { margin: 0; max-width: none; }
+.callout strong:first-child { display: block; margin-bottom: 4px; }
+.tablewrap { overflow-x: auto; margin: 16px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+td code { white-space: nowrap; }
+.check { list-style: none; padding-left: 0; }
+.check li { padding-left: 28px; position: relative; }
+.check li::before { content: "☐"; position: absolute; left: 4px; color: var(--accent); }
+.foot { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+<style id="hdid-print-style">
+@page { size: A4; margin: 14mm 15mm 18mm; }
+@media print {
+    html, body { background: #fff; color: #1b2430; }
+    body { font-family: Arial, sans-serif; font-size: 11pt; line-height: 1.4; }
+    .page { max-width: none; width: auto; margin: 0; padding: 0; }
+    h1, h2, h3 { font-family: Georgia, serif; text-wrap: initial; }
+    h1 { font-size: 25pt; }
+    h2 { font-size: 17pt; margin-top: 8mm; padding-top: 3mm; }
+    h3 { font-size: 13pt; margin-top: 5mm; }
+    h2, h3, thead { break-after: avoid; }
+    p, ul, ol.steps { max-width: none; orphans: 3; widows: 3; }
+    .lead { font-size: 12pt; }
+    .toc { font-size: 10pt; margin: 5mm 0; }
+    .toc ol { display: block; }
+    .req, .dec, .uc { display: block; break-inside: auto; margin: 3mm 0; padding: 2mm 0; }
+    .req > .id, .dec > .id { break-after: avoid; margin-bottom: 2mm; font-weight: bold; }
+    .callout { break-inside: avoid; }
+    figure { break-inside: avoid; margin: 4mm 0; padding: 2mm; border-radius: 0; }
+    figure img { width: auto; height: auto; max-width: 100%; max-height: 180mm; object-fit: contain; margin: 0 auto; }
+    figcaption { font-size: 9pt; margin: 2mm 0 0; }
+    svg { max-width: 100%; height: auto; }
+    .tablewrap { overflow: visible; }
+    table { width: 100%; table-layout: fixed; font-size: 9pt; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; }
+    th, td, td.num { white-space: normal; overflow-wrap: anywhere; padding: 2mm; }
+    th code, td code { white-space: normal; }
+    #roviditesek + .tablewrap th:first-child { width: 20%; }
+    pre { white-space: pre-wrap; overflow: visible; overflow-wrap: anywhere; break-inside: auto; font-size: 9pt; }
+    code { overflow-wrap: anywhere; }
+    .foot { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="page">
+<div class="eyebrow">Üzemeltetési kézikönyv</div>
+<h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
+<p class="lead">A konténeres OpenHDID napi üzemeltetése: ellenőrzés, szolgáltatások kezelése, naplók és felügyelet, ütemezett feladatok, a leggyakoribb helyzetek, mentés és visszaállítás, frissítés, skálázás és biztonsági karbantartás.</p>
+<div class="meta">
+    <div><span class="k">Verzió</span><span>1.0 · 2026. szeptember 23.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.0.0</span></div>
+    <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
+    <div><span class="k">Kapcsolódó</span><span>telepítési útmutató 1.0, felhasználói kézikönyv 1.23</span></div>
+</div>
+
+<nav class="toc" aria-label="Tartalom">
+    <div class="eyebrow">Tartalom</div>
+    <ol>
+        <li><a href="#s1"><span>1</span><span>Napi és heti ellenőrzés</span></a></li>
+        <li><a href="#s2"><span>2</span><span>Szolgáltatások kezelése</span></a></li>
+        <li><a href="#s3"><span>3</span><span>Naplók és felügyelet</span></a></li>
+        <li><a href="#s4"><span>4</span><span>Ütemezett feladatok</span></a></li>
+        <li><a href="#s5"><span>5</span><span>Beállítások és titkok módosítása</span></a></li>
+        <li><a href="#s6"><span>6</span><span>Üzemeltetési helyzetek</span></a></li>
+        <li><a href="#s7"><span>7</span><span>Mentés és visszaállítás</span></a></li>
+        <li><a href="#s8"><span>8</span><span>Frissítés és visszaállás</span></a></li>
+        <li><a href="#s9"><span>9</span><span>Skálázás és teljesítmény</span></a></li>
+        <li><a href="#s10"><span>10</span><span>Biztonsági karbantartás</span></a></li>
+        <li><a href="#s11"><span>11</span><span>Adatmegőrzés</span></a></li>
+        <li><a href="#s12"><span>12</span><span>Parancsreferencia</span></a></li>
+        <li><a href="#roviditesek"><span>R</span><span>Rövidítésjegyzék</span></a></li>
+    </ol>
+</nav>
+
+<p>Minden parancs a telepítési mappából (például <code>/opt/openhdid</code>) futtatandó, ahol a <code>compose.yaml</code>, a <code>.env</code> és a <code>db.env</code> található. Az alkalmazás parancsainak előtagja <code>docker compose exec web php artisan</code>.</p>
+
+<h2 id="s1"><span class="num">1</span>Napi és heti ellenőrzés</h2>
+<p>A legtöbb kérdésre az <em>Adminisztráció › Rendszer › Rendszerállapot</em> oldal válaszol. Minden összetevő állapota színes jelvénnyel látszik, lenyitható tanáccsal; a fejléc a futó verziót mutatja. Ugyanezek az ellenőrzések gépi úton:</p>
+<ul>
+    <li><code>GET /health</code>: 200, ha semmi nem hibás, 503, ha bármi hibás; csak a felügyeleti címekről érhető el, lásd <code>OPENHDID_MONITORING_ALLOW</code>;</li>
+    <li><code>docker compose exec web php artisan hdid:health</code>: kilépési kód 0 rendben, 1 figyelmeztetés (csak <code>--strict</code> mellett), 2 hiba; <code>--json</code> géppel olvasható.</li>
+</ul>
+<p><strong>Naponta:</strong></p>
+<ul>
+    <li><code>docker compose ps</code>: minden szolgáltatás fut, a <code>web</code> <code>healthy</code>, a <code>migrate</code> <code>exited (0)</code>;</li>
+    <li>a Rendszerállapot kártyái zöldek:
+    <ul>
+        <li>sárga: naplózó levelező, élő csomag-felülírás, hiányzó API-kulcs, vagy a panelről indított, 5 percnél régebben várakozó átvétel;</li>
+        <li>piros: nem futó feldolgozó vagy ütemező, adatbázis-hiba, élesben naplózó SMS, vagy a várt időköz kétszeresénél régebbi utolsó sikeres átvétel;</li>
+    </ul></li>
+    <li><em>Kimenő üzenetek</em>: nincs „sikertelen” vagy órák óta „várakozik” tétel;</li>
+    <li><em>Ügyféltörzs-átvételek</em>: az utolsó átvétel sikeres, a lezárt tételek száma nem ugrott meg.</li>
+</ul>
+<p><strong>Hetente:</strong></p>
+<ul>
+    <li>az auditnapló <code>login.rejected</code>, <code>login.request_throttled</code>, <code>api_key.rejected</code> és <code>id_session.manual</code> eseményei;</li>
+    <li>a lemezterület: <code>docker system df</code>, és a kötetek mérete;</li>
+    <li>a heti sérülékenységvizsgálat eredménye a kiadott image-en (10. fejezet).</li>
+</ul>
+
+<h2 id="s2"><span class="num">2</span>Szolgáltatások kezelése</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>Teendő</th><th>Parancs</th></tr></thead>
+<tbody>
+<tr><td>Állapot</td><td><code>docker compose ps</code></td></tr>
+<tr><td>Indítás, módosítás érvényesítése</td><td><code>docker compose up -d</code> (csak a változott konténereket indítja újra)</td></tr>
+<tr><td>Egy szolgáltatás újraindítása</td><td><code>docker compose restart web</code> (vagy <code>worker</code>, <code>sync-worker</code>, <code>scheduler</code>)</td></tr>
+<tr><td>Leállítás (adatok megmaradnak)</td><td><code>docker compose stop</code>, illetve <code>docker compose down</code> (a kötetek maradnak; a <code>-v</code> kapcsolót soha ne használja élesben)</td></tr>
+<tr><td>Alkalmazásparancs</td><td><code>docker compose exec web php artisan &lt;parancs&gt;</code></td></tr>
+<tr><td>Parancs új, ideiglenes konténerben</td><td><code>docker compose run --rm web artisan &lt;parancs&gt;</code></td></tr>
+<tr><td>nginx újratöltése (tanúsítványcsere)</td><td><code>docker compose exec web openhdid reload</code></td></tr>
+<tr><td>Tanúsítvány ellenőrzése</td><td><code>docker compose exec web openhdid tls-check</code></td></tr>
+<tr><td>Verzió</td><td><code>docker compose exec web openhdid version</code></td></tr>
+<tr><td>Karbantartási mód</td><td><code>docker compose exec web php artisan down --retry=30</code>, majd <code>… up</code></td></tr>
+</tbody></table></div>
+<p><strong>Újraindítás.</strong> A konténerek újraindítási szabálya <code>unless-stopped</code>: leállás vagy a gazdagép újraindítása után maguktól elindulnak. A <code>web</code> két folyamata (nginx és PHP-FPM) egymást felügyeli: ha az egyik leáll, a konténer is kilép, és a Docker újraindítja. Leállításkor mindkettő befejezi a futó kéréseket.</p>
+<p><strong>Karbantartási mód.</strong> <code>APP_MAINTENANCE_DRIVER=cache</code> mellett minden webpéldányra hat. Alatta a portál, a panel és a telefonközponti végpontok is „karbantartás” választ adnak; időzítse forgalmon kívülre.</p>
+
+<h2 id="s3"><span class="num">3</span>Naplók és felügyelet</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>Forrás</th><th>Hol</th><th>Mire jó</th></tr></thead>
+<tbody>
+<tr><td>Webkiszolgáló</td><td><code>docker compose logs web</code>: JSON access log (idő, IP, kérésazonosító, metódus, státusz, méret, időtartam), nginx- és PHP-FPM-hibák</td><td>forgalom, hibaarány, lassú kérések; URL, lekérdezés és süti nincs benne</td></tr>
+<tr><td>Alkalmazás</td><td><code>docker compose logs web worker sync-worker scheduler</code></td><td>kivételek, figyelmeztetések (<code>LOG_LEVEL=warning</code>), naplózó módban a kimenő üzenetek</td></tr>
+<tr><td>Indítás és beállítás</td><td>a konténerek első sorai: <code>openhdid:</code> előtaggal</td><td>beállítási hibák, tanúsítvány-összefoglaló, figyelmeztetések</td></tr>
+<tr><td>Auditnapló</td><td>felület: <em>Rendszer › Auditnapló</em> (szűrők, CSV-export)</td><td>ki, mikor, mit: belépések, elutasítások, beállítások, azonosítások, kulcsok</td></tr>
+<tr><td>Rendszerállapot</td><td>felület, <code>/health</code>, <code>hdid:health</code></td><td>összetevők, életjelek, sorhossz, átvétel kora, megőrzés</td></tr>
+</tbody></table></div>
+<pre><code>docker compose logs -f --tail=200 web
+docker compose logs --since 30m --no-log-prefix web | grep '"status":5'
+docker compose logs --since 1d --no-log-prefix web | grep -v '^{'      # hibák, figyelmeztetések
+docker compose logs --no-log-prefix web | grep '"status":429' | wc -l  # forgalomkorlát-elutasítások</code></pre>
+<p><strong>Forgatás és gyűjtés.</strong></p>
+<ul>
+    <li><strong>Forgatás:</strong> a naplókat a Docker forgatja (<code>local</code> meghajtó, 10 × 20 MB szolgáltatásonként, a <code>compose.yaml</code> <code>x-logging</code> blokkjában).</li>
+    <li><strong>Központi gyűjtés:</strong> ugyanitt állítható a <code>journald</code>, <code>syslog</code>, <code>gelf</code> vagy <code>fluentd</code> meghajtó. A napló titkosított csatornán, a futtatási fióktól elkülönített, módosítás ellen védett tárba kerüljön.</li>
+    <li><strong>Hibasorok:</strong> az nginx és az alkalmazás hibasoraiban URL vagy személyes adat lehet: korlátozott hozzáférés, rövid nyers megőrzés.</li>
+</ul>
+<p><strong>Külső felügyelet.</strong> Ajánlott figyelni:</p>
+<ul>
+    <li>a <code>/health</code> választ (503 = riasztás);</li>
+    <li>a konténerek egészségét (<code>docker compose ps</code>, <code>health_status</code> események);</li>
+    <li>a lemezterületet és a tanúsítvány lejáratát (a web naplója 30 nappal előtte figyelmeztet);</li>
+    <li>a kiugró 4xx/5xx arányt.</li>
+</ul>
+<p>Egyszerű gazdagépes riasztás, ha nincs felügyeleti rendszer:</p>
+<pre><code>*/5 * * * * cd /opt/openhdid &amp;&amp; docker compose exec -T web php artisan hdid:health &gt;/dev/null || echo "OpenHDID: hibás rendszerállapot" | mail -s "OpenHDID" uzemeltetes@example.org</code></pre>
+
+<h2 id="s4"><span class="num">4</span>Ütemezett feladatok</h2>
+<p>A cron szerepét a <code>scheduler</code> szolgáltatás tölti be. A gazdagépen nincs crontab-bejegyzés, és a konténerekben sincs cron-démon. A feladatok listája és a következő futásuk:</p>
+<pre><code>docker compose exec scheduler php artisan schedule:list</code></pre>
+<ul>
+    <li><strong>Percenként:</strong> lejárt azonosítási munkamenetek zárása; életjelek; elakadt üzenetek újrasorolása.</li>
+    <li><strong>15 percenként:</strong> ügyféltörzs-token frissítése, ha be van kapcsolva.</li>
+    <li><strong>Óránként:</strong> csomag-felülírások lejárata; befejezett hívások tisztítása; beragadt hívások lezárása.</li>
+    <li><strong>Naponta 03:30-kor:</strong> adatmegőrzési tisztítás.</li>
+    <li><strong>Az <code>EMD_SYNC_CRON</code> szerint:</strong> teljes ügyféltörzs-átvétel.</li>
+</ul>
+<p>Időzóna: <code>APP_TIMEZONE</code>.</p>
+<p><strong>Az ütemező vagy a feldolgozó életjele hiányzik</strong> (piros „Ütemező” vagy „Feladatsor” kártya):</p>
+<ol class="steps">
+    <li><code>docker compose ps scheduler worker</code>: fut-e; ha újraindulgat, <code>docker compose logs --tail=100 scheduler</code>. Jellemzően adatbázis-kapcsolat vagy beállítási hiba az ok, a konténer első soraiban.</li>
+    <li>A kártyák a következő percben zöldre váltanak, amint az életjel megérkezik.</li>
+    <li>Az ütemezőből pontosan egy példány fusson; skálázáskor se növelje.</li>
+</ol>
+<p><strong>A panelről indított átvétel „várakozik” állapotban marad:</strong> a <code>sync-worker</code> nem fut, vagy az <code>EMD_SYNC_QUEUE</code> nem egyezik a figyelt sorral (alapból mindkettő <code>sync</code>). A Rendszerállapot 5 perc után figyelmeztet.</p>
+
+<h2 id="s5"><span class="num">5</span>Beállítások és titkok módosítása</h2>
+<ul>
+    <li><strong>Telepítési érték</strong> (<code>.env</code>): szerkesztés, majd <code>docker compose up -d</code>. Az érintett konténerek újraindulnak, a konfigurációs gyorsítótár újraépül; ha egy érték hibás, a konténer nem indul el, az oka a naplóban.</li>
+    <li><strong>Üzleti paraméter</strong> (Beállítások oldal): azonnal él minden folyamatban, újraindítás nélkül.</li>
+    <li><strong>Titokcsere</strong> (adatbázis, EWS, Ozeki, SSO, ügyféltörzs): előbb a partner oldalán, majd a <code>.env</code>-ben (vagy a titokfájlban, <code>*_FILE</code>), végül <code>docker compose up -d</code>.</li>
+    <li><strong>Az adatbázis-jelszó cseréje</strong> a beépített MariaDB-ben:
+<pre><code>docker compose exec mariadb sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -uroot -e "ALTER USER \`openhdid\`@\`%\` IDENTIFIED BY \"új-jelszó\";"'</code></pre>
+    Utána a <code>.env</code> <code>DB_PASSWORD</code> értéke és <code>docker compose up -d</code>.</li>
+    <li><strong>Az ügyféltörzs tokenjei</strong> jelszó- vagy végpontcsere után: <code>docker compose exec web php artisan hdid:emd-sync-token</code>.</li>
+</ul>
+<div class="callout danger"><p><strong>APP_KEY</strong> Meglévő telepítésen nem cserélhető a szokásos módon. A titkosított válaszok, kódmásolatok, API-tokenek, sütik és kulcsolt lenyomatok mind tőle függnek; cseréje külön adatmigrációs tervet és visszaállítási próbát igényel.</p></div>
+
+<h2 id="s6"><span class="num">6</span>Üzemeltetési helyzetek</h2>
+<p>Az alkalmazás működésével kapcsolatos helyzetek (belépés, azonosítás, hívások, jogosultságok) a felhasználói kézikönyvben és a Rendszerállapot kártyáinak tanácsaiban szerepelnek. Ez a fejezet a konténeres üzemre jellemző eseteket írja le.</p>
+<h3>A konténer nem indul el vagy újraindulgat</h3>
+<ol class="steps">
+    <li><code>docker compose ps</code> és <code>docker compose logs --tail=50 &lt;szolgáltatás&gt;</code>. Az indítószkript <code>openhdid: ERROR:</code> sora megnevezi az okot: hiányzó vagy hibás <code>APP_KEY</code>, nem https <code>APP_URL</code>, hiányzó adatbázis-adat, élesben tiltott beállítás, tanúsítványhiba, nem írható <code>storage</code> kötet.</li>
+    <li>A <code>migrate</code> hibájánál a többi szolgáltatás nem indul: <code>docker compose logs migrate</code>. Jellemző okok: az adatbázis nem érhető el 120 másodpercen belül, hibás migrációs jelszó a <code>db.env</code>-ben, vagy a migrációs fióknak nincs joga.</li>
+    <li>Javítás után: <code>docker compose up -d</code>.</li>
+</ol>
+<h3>Tanúsítványhiba vagy lejárat</h3>
+<p>A <code>web</code> indításkor ellenőrzi a tanúsítványt. A <code>docker compose exec web openhdid tls-check</code> kiírja:</p>
+<ul>
+    <li>az alanyt, a kiállítót és a lejáratot;</li>
+    <li>a kulcs típusát és a láncot;</li>
+    <li>a lefedett neveket és a hibát.</li>
+</ul>
+<p>Csere: új fájlok a <code>tls</code> mappába (tulajdonos 82, a kulcs 400-as joggal), majd <code>docker compose exec web openhdid reload</code>. Ha a web nem fut, a javítás után <code>docker compose up -d</code>.</p>
+<h3>Nem mennek ki az e-mailek vagy az SMS-ek</h3>
+<ol class="steps">
+    <li><em>Tartalom › Kimenő üzenetek</em>: „várakozik” állapotnál a <code>worker</code> nem fut (<code>docker compose ps worker</code>); „sikertelen”-nél a sor hibaszövege mondja meg az okot.</li>
+    <li>Kapcsolatpróba az ügyfelek érintése nélkül: <code>docker compose exec web php artisan hdid:test-mail cim@example.org --now</code>, illetve <code>hdid:test-sms +36301234567 --now</code>.</li>
+    <li>Belső CA-val hitelesítő Exchange-nél a CA-fájl a <code>ca</code> mappába kerüljön, majd <code>docker compose up -d</code>; a TLS-ellenőrzést ne kapcsolja ki.</li>
+    <li>A kimenő tűzfal engedje a konténerek felől az EWS/SMTP és az Ozeki címét.</li>
+</ol>
+<h3>Az ügyféltörzs-átvétel hibát jelez</h3>
+<p>Az <em>Ügyféltörzs-átvételek</em> lista hibaszövege dönt; az okok részletes listája a Rendszerállapot kártyájának tanácsában olvasható.</p>
+<ul>
+    <li><strong>„Üres forrás” és „Gyanús forrás”:</strong> a védőkorlát megállította a futást, senki nem zárult le. Ellenőrizze az export teljességét.</li>
+    <li><strong>Hitelesítési hiba:</strong> <code>docker compose exec web php artisan hdid:emd-sync-token</code>.</li>
+    <li><strong>Próbafuttatás javítás után:</strong> <code>docker compose exec web php artisan hdid:emd-sync --dry-run</code>.</li>
+    <li><strong>Túl régi utolsó sikeres futás:</strong> <code>docker compose exec scheduler php artisan schedule:list</code> mutatja, ütemezve van-e a <code>hdid:emd-sync</code> (<code>EMD_SYNC_CRON</code>).</li>
+</ul>
+<h3>A naplóban nem a kliensek IP-címe látszik</h3>
+<p>Ha az access log <code>ip</code> mezője minden kérésnél a Docker-átjáró vagy a terheléselosztó címe, az IP-alapú forgalomkorlát és az auditnapló címe hamis. A lehetséges okok és teendők:</p>
+<ul>
+    <li><strong>IPv6-kapcsolat:</strong> kapcsolja be a Docker IPv6-NAT-ját (<code>ip6tables</code>).</li>
+    <li><strong>Terheléselosztó mögött:</strong> <code>OPENHDID_TLS=off</code> és a <code>TRUSTED_PROXIES</code> a terheléselosztó címe (telepítési útmutató 6.5).</li>
+    <li><strong>Userland-proxy:</strong> kapcsolja ki a Docker-démonban (<code>"userland-proxy": false</code>).</li>
+</ul>
+<h3>Kiszolgáló kompromittálódása</h3>
+<ol class="steps">
+    <li><strong>Elszigetelés:</strong> izolálja a gazdagépet, és őrizze meg a naplókat.</li>
+    <li><strong>Új gép:</strong> állítson fel tiszta gazdagépet, és a telepítést ellenőrzött kiadásból (aláírt image, 8. fejezet) és mentésből állítsa vissza.</li>
+    <li><strong>Titokcsere:</strong> cserélje az összes titkot: adatbázis, EWS, Ozeki, SSO, API-kulcsok, ügyféltörzs, TLS-kulcs.</li>
+    <li><strong>Visszavonások:</strong> vonja vissza a munkameneteket és a tokeneket. Az <code>APP_KEY</code> cseréje csak külön terv szerint történhet (5. fejezet).</li>
+</ol>
+
+<h2 id="s7"><span class="num">7</span>Mentés és visszaállítás</h2>
+<p>Négy dolgot kell menteni, egyszerre és rendszeresen (naponta ajánlott):</p>
+<ol>
+    <li><strong>az adatbázist;</strong></li>
+    <li><strong>a <code>storage</code> kötetet</strong> (arculati képek, feltöltések);</li>
+    <li><strong>a <code>.env</code> és a <code>db.env</code> fájlt</strong>, benne az <code>APP_KEY</code>-jel;</li>
+    <li><strong>a <code>tls</code> és a <code>ca</code> mappát.</strong></li>
+</ol>
+<pre><code>cd /opt/openhdid
+d=$(date +%F)
+# Adatbázis, a migrációs fiókkal, konzisztens pillanatképként:
+docker compose exec -T mariadb sh -c 'MYSQL_PWD="$DB_PASSWORD" exec mariadb-dump -u"$DB_USERNAME" --single-transaction --routines --triggers "$MARIADB_DATABASE"' | gzip &gt; mentes/openhdid-db-$d.sql.gz
+# Feltöltött fájlok:
+docker run --rm -v openhdid_storage:/data:ro -v "$PWD/mentes":/backup alpine:3.24 tar czf /backup/openhdid-storage-$d.tar.gz -C /data .
+# Beállítások és kulcsok (külön, szigorúbb hozzáféréssel):
+tar czf mentes/openhdid-config-$d.tar.gz .env db.env tls ca compose.yaml</code></pre>
+<p><strong>Követelmények a mentéssel szemben.</strong></p>
+<ul>
+    <li>A mentés titkosított, a gazdagéptől elkülönített és módosítás ellen védett legyen.</li>
+    <li>A konfigurációs mentés (kulcsok) más hozzáférési szabállyal kerüljön tárolásra, mint az adatbázisé.</li>
+    <li>Határozza meg a megengedett adatvesztést (RPO) és a helyreállítási időt (RTO), és rendszeres visszaállítási próbával mérje.</li>
+    <li>Külső adatbázisnál az adatbázis mentését az adatbázis üzemeltetője végzi; a többi tétel ugyanez.</li>
+</ul>
+<h3>Visszaállítás</h3>
+<ol class="steps">
+    <li><strong>Előkészítés:</strong> állítsa vissza a konfigurációs mentést a telepítési mappába. Ugyanaz az <code>OPENHDID_VERSION</code> legyen, mint a mentéskor.</li>
+    <li><strong>Csak az adatbázis indul:</strong> <code>docker compose up -d mariadb</code>, és várja meg, hogy <code>healthy</code> legyen.</li>
+    <li><strong>Adatbázis:</strong>
+<pre><code>gunzip -c mentes/openhdid-db-DATUM.sql.gz | docker compose exec -T mariadb sh -c 'MYSQL_PWD="$DB_PASSWORD" exec mariadb -u"$DB_USERNAME" "$MARIADB_DATABASE"'</code></pre></li>
+    <li><strong>Fájlok:</strong>
+<pre><code>docker run --rm -v openhdid_storage:/data -v "$PWD/mentes":/backup alpine:3.24 sh -c 'tar xzf /backup/openhdid-storage-DATUM.tar.gz -C /data &amp;&amp; chown -R 82:82 /data'</code></pre></li>
+    <li><strong>Indítás:</strong> <code>docker compose up -d</code>.</li>
+    <li><strong>Ellenőrzés:</strong> Rendszerállapot; belépés; egy ügyfél adatlapján a válaszok száma és egy kérdés-válasz próba. Ez bizonyítja, hogy a titkosított adatok az <code>APP_KEY</code>-jel olvashatók.</li>
+</ol>
+
+<h2 id="s8"><span class="num">8</span>Frissítés és visszaállás</h2>
+<p><strong>Kiadások.</strong> A kiadások a <a href="https://github.com/adamfhun/openhdid/releases">GitHub Releases</a> oldalon jelennek meg, jegyzettel, dokumentumokkal és ellenőrzőösszegekkel.</p>
+<ul>
+    <li><strong>Verziózás:</strong> SemVer. A javítóverzió (1.0.<em>x</em>) hibajavítást vagy platformfrissítést hoz (PHP, nginx, OpenSSL, Alpine), az alverzió (1.<em>x</em>) új funkciót. Ha a főverzió változik, a jegyzet leírja a teendőket.</li>
+    <li><strong>Címkék:</strong> egy kiadott címke soha nem változik.</li>
+</ul>
+<ol class="steps">
+    <li><strong>Az image ellenőrzése</strong> (választható, ajánlott):
+<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.0.1 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.0.1 \
+  --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre></li>
+    <li><strong>Mentés</strong> a 7. fejezet szerint.</li>
+    <li><strong>Frissítés:</strong> az <code>OPENHDID_VERSION</code> átírása, majd <code>docker compose pull &amp;&amp; docker compose up -d</code>. A migrációk automatikusan lefutnak, a szolgáltatások az új image-dzsel indulnak.</li>
+    <li><strong>Ellenőrzés:</strong> <code>docker compose ps</code>, Rendszerállapot (a fejlécben az új verzió), a telepítési útmutató 12. fejezetének próbái.</li>
+</ol>
+<h3>Visszaállás sikertelen frissítés után</h3>
+<ol class="steps">
+    <li><strong>Ha nem futott migráció:</strong> az <code>OPENHDID_VERSION</code> visszaírása az előző verzióra, majd <code>docker compose up -d</code>.</li>
+    <li><strong>Ha futott migráció:</strong> a migrációk csak előre futnak. Állítsa vissza az adatbázist a frissítés előtti mentésből (7. fejezet), majd indítsa az előző verziót. A mentés óta keletkezett adatok elvesznek.</li>
+</ol>
+
+<h2 id="s9"><span class="num">9</span>Skálázás és teljesítmény</h2>
+<p>A helyes méret mérésből jön, nem becslésből. Mielőtt bővít, mérje meg a jellemző terhelést a saját környezetében (például k6-tal), és rögzítse a céljait (például p95 &lt; 300 ms). A tipikus forgatókönyvek:</p>
+<ul>
+    <li>hívásesemények (<code>POST /api/v1/callcenter/calls</code>);</li>
+    <li>IVR-kódellenőrzés;</li>
+    <li>portálbelépés;</li>
+    <li>a vezérlőpult betöltése sok egyidejű ügyintézővel.</li>
+</ul>
+<h3>1. fokozat – egy kiszolgáló, alapbeállítás</h3>
+<p>Egy <code>web</code> 8 PHP-FPM folyamattal, egy-egy feldolgozó, beépített MariaDB, adatbázis-alapú munkamenet, gyorsítótár és sor. Néhány ezer ügyfél és napi több ezer hívás mellett elegendő.</p>
+<h3>2. fokozat – egy kiszolgáló, nagyobb terhelés</h3>
+<ul>
+    <li><strong>PHP-FPM:</strong> <code>OPENHDID_FPM_MAX_CHILDREN</code> ≈ (a webkonténernek szánt memória − 150 MB) / 70 MB; <code>OPENHDID_FPM_PM=static</code> egyenletes terhelésnél.</li>
+    <li><strong>MariaDB:</strong> <code>OPENHDID_DB_BUFFER_POOL</code> a gép memóriájának 25–50%-a. A <code>OPENHDID_DB_MAX_CONNECTIONS</code> legyen legalább az összes FPM-folyamat + a feldolgozók + 20.</li>
+    <li><strong>Valkey:</strong> <code>COMPOSE_PROFILES=db,redis</code>, <code>SESSION_DRIVER=redis</code>, <code>CACHE_STORE=redis</code>, <code>QUEUE_CONNECTION=redis</code>, <code>REDIS_PASSWORD</code>. Ez leveszi a munkamenetek, a zárak és a sor terhét az adatbázisról. A Valkey a sor tartósságához AOF-naplót használ.</li>
+    <li><strong>Feldolgozók:</strong> <code>docker compose up -d --scale worker=3</code>. Az üzenetek egyszer mennek ki, több feldolgozó mellett is.</li>
+</ul>
+<h3>3. fokozat – több kiszolgáló</h3>
+<ul>
+    <li><strong>Terheléselosztó:</strong> a TLS a terheléselosztón zárul le; a webpéldányokon <code>OPENHDID_TLS=off</code>, a <code>TRUSTED_PROXIES</code> a terheléselosztó címe.</li>
+    <li><strong>Közös <code>storage</code>:</strong> NFS vagy más, több gépről írható kötet. Az arculati képek és a panel fájlfeltöltései (a Livewire ideiglenes feltöltései) több webpéldány között csak így érhetők el.</li>
+    <li><strong>Közös állapot:</strong> Valkey kötelező; <code>APP_MAINTENANCE_DRIVER=cache</code>.</li>
+    <li><strong>Ütemező:</strong> egyetlen példány az egész telepítésben.</li>
+    <li><strong>Adatbázis:</strong> menedzselt vagy replikált MariaDB, egyetlen írható elsődleges példánnyal. Galera-fürtnél is egy írási csomópontot használjon; a kimutatások olvasási replikára terelhetők.</li>
+</ul>
+<h3>Kubernetes-megfeleltetés</h3>
+<div class="tablewrap"><table>
+<thead><tr><th>Szerep</th><th>Kubernetes-erőforrás</th></tr></thead>
+<tbody>
+<tr><td><code>web</code></td><td>Deployment (több replika, HPA CPU alapján), Service, Ingress vagy terheléselosztó; <code>OPENHDID_TLS=off</code>. Élő- és készenléti próba: <code>exec</code> <code>openhdid healthcheck</code>.</td></tr>
+<tr><td><code>worker</code>, <code>sync-worker</code></td><td>Deployment; a replikaszám a sorhossz szerint is skálázható.</td></tr>
+<tr><td><code>scheduler</code></td><td>Deployment 1 replikával, <code>Recreate</code> stratégiával.</td></tr>
+<tr><td><code>migrate</code></td><td>Job, a web frissítése előtt (például Helm pre-upgrade hook).</td></tr>
+<tr><td><code>storage</code></td><td>ReadWriteMany PVC (NFS, CephFS).</td></tr>
+<tr><td>titkok</td><td>Secret fájlként csatolva + <code>*_FILE</code> változók.</td></tr>
+<tr><td>biztonsági környezet</td><td><code>runAsNonRoot</code>, <code>runAsUser: 82</code>, <code>readOnlyRootFilesystem</code>, <code>allowPrivilegeEscalation: false</code>, <code>capabilities.drop: [ALL]</code>, <code>seccompProfile: RuntimeDefault</code>; <code>/tmp</code> memóriában lévő <code>emptyDir</code>-ként.</td></tr>
+<tr><td>MariaDB, Valkey</td><td>menedzselt szolgáltatás vagy operátor.</td></tr>
+</tbody></table></div>
+<p>Az Octane-szerű, memóriában maradó PHP-futtatás tovább növelhetné az áteresztőképességet, de az nginx + PHP-FPM modellt váltaná ki, és kódátvizsgálást igényel. Csak méréssel igazolt igény esetén jöhet szóba.</p>
+
+<h2 id="s10"><span class="num">10</span>Biztonsági karbantartás</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>Gyakoriság</th><th>Teendő</th></tr></thead>
+<tbody>
+<tr><td>Folyamatosan</td><td><code>/health</code>, konténerállapot, tanúsítványlejárat, kiugró 4xx/5xx, sikertelen belépések és kulcshasználat; a riasztás próbával igazolt felelőshöz érkezzen.</td></tr>
+<tr><td>Hetente</td><td>A kiadott image-et a projekt hetente automatikusan átvizsgálja (Trivy). Ha javítható, magas kockázatú lelet van, javítóverzió készül, és a kiadási jegyzet jelzi. Kövesse a kiadásokat (GitHub „Watch › Releases”), és a gazdagép OS- és Docker-frissítéseit is.</td></tr>
+<tr><td>Minden frissítéskor</td><td>Mentés, aláírás-ellenőrzés, a telepítési útmutató 12. fejezetének próbái.</td></tr>
+<tr><td>Negyedévente</td><td>Hozzáférések, titkok és gépi kulcsok felülvizsgálata, mentés-visszaállítási próba, tűzfalszabályok, az OWASP-eltérések (telepítési útmutató 12.3) állapota.</td></tr>
+</tbody></table></div>
+<p><strong>Támogatási naptár</strong> (a 2026. szeptemberi állapot):</p>
+<ul>
+    <li>PHP 8.5 aktív támogatás 2027. 12. 31-ig;</li>
+    <li>Alpine 3.24 2028. 05.-ig;</li>
+    <li>OpenSSL 3.5 LTS 2030-ig;</li>
+    <li>MariaDB 12.3 LTS 2029. 06.-ig;</li>
+    <li>a buildhez használt Node.js 2026. 10. 28-tól a 26 LTS ágra vált.</li>
+</ul>
+<p>A projekt a lejárat előtt javítóverzióban lép a következő ágra, és a kiadási jegyzet jelzi.</p>
+<p><strong>Az image védelmei:</strong></p>
+<ul>
+    <li>nem root felhasználó, csak olvasható fájlrendszer, elvett Linux-képességek, <code>no-new-privileges</code>;</li>
+    <li>digesttel rögzített alapimage-ek, aláírt image, SBOM.</li>
+</ul>
+<p>A <code>compose.yaml</code> biztonsági beállításait (<code>read_only</code>, <code>cap_drop</code>, <code>security_opt</code>) ne lazítsa.</p>
+
+<h2 id="s11"><span class="num">11</span>Adatmegőrzés</h2>
+<p>A megőrzést két felületi beállítás szabályozza (<em>Beállítások › Adatmegőrzés</em>):</p>
+<ul>
+    <li><strong>általános megőrzés</strong> (alapból 5 év): auditnapló, azonosítási munkamenetek, hívások, kimenő üzenetek, átvételek;</li>
+    <li><strong>rövid életű tételek</strong> (alapból 2 év): lejárt egyszeri kódok, feltöltött állományok.</li>
+</ul>
+<p>A napi 03:30-as tisztítás véglegesen töröl; az eredmény <code>retention.pruned</code> eseményként az auditnaplóban áll. A titkot hordozó üzenetek törzse már a kiküldés után törlődik. A mentések megőrzését a mentési rend külön szabályozza: az alkalmazás nem törli őket.</p>
+
+<h2 id="s12"><span class="num">12</span>Parancsreferencia</h2>
+<p>Az alkalmazásparancsok (<code>hdid:*</code>) a <code>docker compose exec web php artisan</code> előtaggal futnak.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Parancs</th><th>Mit tesz</th></tr></thead>
+<tbody>
+<tr><td><code>docker compose run --rm --no-deps web key</code></td><td>Új <code>APP_KEY</code> kiírása, csak új telepítéshez.</td></tr>
+<tr><td><code>docker compose exec web openhdid tls-check</code> / <code>reload</code> / <code>version</code></td><td>Tanúsítvány ellenőrzése / nginx újratöltése ellenőrzéssel / verzió.</td></tr>
+<tr><td><code>hdid:make-admin email [--name=]</code></td><td>Főrendszergazda létrehozása vagy előléptetése (jelszót kér).</td></tr>
+<tr><td><code>hdid:health [--strict] [--json]</code></td><td>Rendszerállapot; kilépési kód 0/1/2.</td></tr>
+<tr><td><code>hdid:emd-sync [--file=] [--dry-run]</code></td><td>Ügyféltörzs-átvétel (a régi <code>hdid:sync</code> név álnévként működik).</td></tr>
+<tr><td><code>hdid:emd-sync-token</code></td><td>Az ügyféltörzs API-tokenjének frissítése, szükség esetén új belépés.</td></tr>
+<tr><td><code>hdid:test-mail cím [--now]</code>, <code>hdid:test-sms szám [--now]</code></td><td>Próbaüzenet; <code>--now</code> a sor megkerülésével.</td></tr>
+<tr><td><code>hdid:api-key:create "Név" callcenter|mobile_backend</code></td><td>Gépi kulcs; egyszer jelenik meg.</td></tr>
+<tr><td><code>hdid:messages:flush</code></td><td>Várakozó üzenetek azonnali küldése.</td></tr>
+<tr><td><code>hdid:prune</code></td><td>Adatmegőrzési tisztítás kézzel.</td></tr>
+<tr><td><code>schedule:list</code> (a <code>scheduler</code> konténerben)</td><td>Ütemezett feladatok és következő futásuk.</td></tr>
+<tr><td><code>queue:failed</code>, <code>queue:retry all</code></td><td>Sikertelen feladatok listája, újrapróbálása a hiba javítása után.</td></tr>
+<tr><td><code>down --retry=30</code>, <code>up</code></td><td>Karbantartási mód be és ki (minden példányra).</td></tr>
+</tbody></table></div>
+
+<h2 id="roviditesek">Rövidítésjegyzék</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>Rövidítés</th><th>Jelentés</th></tr></thead>
+<tbody>
+<tr><td>EMD</td><td>Enterprise Master Data; magyarul ügyféltörzs.</td></tr>
+<tr><td>AOF</td><td>Append Only File – a Valkey tartós naplója.</td></tr>
+<tr><td>FPM</td><td>FastCGI Process Manager – a PHP folyamatkezelője.</td></tr>
+<tr><td>HPA</td><td>Horizontal Pod Autoscaler – a Kubernetes automatikus vízszintes skálázója.</td></tr>
+<tr><td>LTS</td><td>Long-Term Support – hosszú támogatású kiadási ág.</td></tr>
+<tr><td>PVC</td><td>PersistentVolumeClaim – tartós kötet igénylése Kubernetesben.</td></tr>
+<tr><td>RPO / RTO</td><td>Recovery Point Objective / Recovery Time Objective – megengedett adatvesztés és helyreállítási idő.</td></tr>
+<tr><td>SBOM</td><td>Software Bill of Materials – az image összetevőinek jegyzéke.</td></tr>
+<tr><td>SemVer</td><td>Semantic Versioning – szemantikus verziózás (fő.al.javító).</td></tr>
+</tbody></table></div>
+
+<div class="foot">OpenHDID üzemeltetési kézikönyv 1.0 · 2026. szeptember 23. · OpenHDID 1.0.0</div>
+</div>
+
+</body>
+</html>

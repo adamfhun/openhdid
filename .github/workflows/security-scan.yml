@@ -1,0 +1,34 @@
+# Weekly vulnerability scan of the published image. It only reports: a failed
+# run notifies the maintainer, who then updates the platform and releases a
+# new patch version (platform.sh, release.sh). Published tags never change.
+name: Security scan
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  IMAGE: ghcr.io/adamfhun/openhdid:latest
+  TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+
+jobs:
+  scan:
+    name: Trivy
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - name: Scan the latest release
+        run: |
+          docker run --rm "$TRIVY_IMAGE" image --platform "$PLATFORM" \
+            --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$IMAGE"
+        env:
+          PLATFORM: ${{ matrix.platform }}

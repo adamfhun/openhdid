@@ -1,0 +1,158 @@
+# OpenHDID – Docker Compose telepítés.
+#
+# A mappában ez a fájl, a .env (alkalmazás, a .env.example mintájára) és a db.env
+# (adatbázis-rendszergazda és migrációs fiók, a db.env.example mintájára) kell;
+# a saját tanúsítvány a ./tls, a belső CA-k a ./ca mappába kerülnek.
+#
+#   docker compose run --rm --no-deps web key     # egyszer: új APP_KEY a .env-be
+#   docker compose up -d                          # indítás és frissítés
+#   docker compose logs -f web                    # napló
+#
+# Részletek: docs/openhdid-telepitesi-utmutato.pdf és docs/openhdid-uzemeltetesi-kezikonyv.pdf.
+
+name: openhdid
+
+x-logging: &logging
+  driver: local
+  options:
+    max-size: 20m
+    max-file: "10"
+
+x-app: &app
+  image: ghcr.io/adamfhun/openhdid:${OPENHDID_VERSION:?Set OPENHDID_VERSION in .env}
+  env_file: [.env]
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m,mode=1777
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  volumes:
+    - storage:/app/storage
+    - ./ca:/etc/openhdid/ca:ro
+  logging: *logging
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  # Egyszeri: megvárja az adatbázist, lefuttatja a migrációkat, majd kilép.
+  # A db.env migrációs fiókjával dolgozik; a többi szolgáltatás csak utána indul.
+  migrate:
+    <<: *app
+    command: migrate
+    restart: "no"
+    env_file: [.env, db.env]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+        required: false
+
+  # Portál, munkatársi panel és gépi API-k: nginx + PHP-FPM.
+  web:
+    <<: *app
+    command: web
+    volumes:
+      - storage:/app/storage
+      - ./ca:/etc/openhdid/ca:ro
+      - ./tls:/etc/openhdid/tls:ro
+    ports:
+      - target: 8443
+        published: "${OPENHDID_HTTPS_PORT:-443}"
+        host_ip: "${OPENHDID_BIND_IP:-0.0.0.0}"
+        protocol: tcp
+      - target: 8080
+        published: "${OPENHDID_HTTP_PORT:-80}"
+        host_ip: "${OPENHDID_BIND_IP:-0.0.0.0}"
+        protocol: tcp
+
+  # E-mail, SMS és életjel.
+  worker:
+    <<: *app
+    command: [worker, default]
+
+  # A panelről indított ügyféltörzs-átvétel külön soron (EMD_SYNC_QUEUE=sync).
+  sync-worker:
+    <<: *app
+    command: [worker, sync]
+
+  # Az ütemező (a cron helyett); pontosan egy példány fusson.
+  scheduler:
+    <<: *app
+    command: scheduler
+
+  # Beépített adatbázis: COMPOSE_PROFILES=db. Külső MariaDB esetén a profil kimarad.
+  mariadb:
+    image: mariadb:12.3.3@sha256:805c8e104bd563d5bfa24fadd3f31cd419ea859cb5277f32b5dbf2db714f9ed1
+    profiles: [db]
+    restart: unless-stopped
+    env_file: [db.env]
+    environment:
+      MARIADB_DATABASE: ${DB_DATABASE:-openhdid}
+      OPENHDID_RUNTIME_USER: ${DB_USERNAME:-openhdid}
+      OPENHDID_RUNTIME_PASSWORD: ${DB_PASSWORD:-}
+    configs:
+      - source: mariadb-server
+        target: /etc/mysql/conf.d/openhdid.cnf
+      - source: mariadb-accounts
+        target: /docker-entrypoint-initdb.d/10-openhdid-accounts.sh
+    volumes:
+      - db:/var/lib/mysql
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # Megosztott gyorsítótár, munkamenet és sor több példányhoz: COMPOSE_PROFILES=db,redis.
+  valkey:
+    image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
+    profiles: [redis]
+    restart: unless-stopped
+    command: [valkey-server, /etc/valkey/valkey.conf]
+    configs:
+      - source: valkey
+        target: /etc/valkey/valkey.conf
+    volumes:
+      - valkey:/data
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+volumes:
+  storage:
+  db:
+  valkey:
+
+configs:
+  mariadb-server:
+    content: |
+      [mariadbd]
+      character-set-server = utf8mb4
+      collation-server = utf8mb4_unicode_ci
+      skip-name-resolve
+      innodb_buffer_pool_size = ${OPENHDID_DB_BUFFER_POOL:-512M}
+      max_connections = ${OPENHDID_DB_MAX_CONNECTIONS:-200}
+
+  # First start only: the migration account may change the schema, the runtime
+  # account used by web, worker and scheduler may only read and write rows.
+  mariadb-accounts:
+    content: |
+      migrate_user="$$(docker_sql_escape_string_literal "$${DB_USERNAME}")"
+      migrate_pass="$$(docker_sql_escape_string_literal "$${DB_PASSWORD}")"
+      runtime_user="$$(docker_sql_escape_string_literal "$${OPENHDID_RUNTIME_USER}")"
+      runtime_pass="$$(docker_sql_escape_string_literal "$${OPENHDID_RUNTIME_PASSWORD}")"
+      docker_process_sql --database=mysql <<EOSQL
+      CREATE USER IF NOT EXISTS '$${migrate_user}'@'%' IDENTIFIED BY '$${migrate_pass}';
+      GRANT ALL PRIVILEGES ON \`$${MARIADB_DATABASE}\`.* TO '$${migrate_user}'@'%';
+      CREATE USER IF NOT EXISTS '$${runtime_user}'@'%' IDENTIFIED BY '$${runtime_pass}';
+      GRANT SELECT, INSERT, UPDATE, DELETE ON \`$${MARIADB_DATABASE}\`.* TO '$${runtime_user}'@'%';
+      EOSQL
+
+  valkey:
+    content: |
+      appendonly yes
+      save ""
+      requirepass "${REDIS_PASSWORD:-}"

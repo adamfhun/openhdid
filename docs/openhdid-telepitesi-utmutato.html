@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="hu" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenHDID telepítési útmutató</title>
+<style>
+:root { --ground: #f6f7f9; --paper: #ffffff; --ink: #1b2430; --muted: #5c6b7c; --rule: #d9dee5; --accent: #36495d; --accent-soft: #e8edf2; --gold: #a8841c; --gold-soft: #f7f0dc; --mono-bg: #eef1f5; --danger: #b42318; --danger-soft: #fde8e6; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ground: #10151c; --paper: #171d26; --ink: #e6eaf0; --muted: #9aa7b6; --rule: #2a3340; --accent: #a9bccf; --accent-soft: #1e2833; --gold: #d8b64a; --gold-soft: #2c2716; --mono-bg: #202834; --danger: #f28b82; --danger-soft: #3a1f1c; } }
+:root[data-theme="dark"] { --ground: #10151c; --paper: #171d26; --ink: #e6eaf0; --muted: #9aa7b6; --rule: #2a3340; --accent: #a9bccf; --accent-soft: #1e2833; --gold: #d8b64a; --gold-soft: #2c2716; --mono-bg: #202834; --danger: #f28b82; --danger-soft: #3a1f1c; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font-family: "Source Sans 3", "Segoe UI", system-ui, sans-serif; font-size: 16px; line-height: 1.55; }
+.page { max-width: 860px; margin: 0 auto; padding: 40px 24px 80px; }
+.eyebrow { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1, h2, h3 { font-family: "Source Serif 4", Georgia, serif; text-wrap: balance; line-height: 1.2; margin: 0; }
+h1 { font-size: 38px; font-weight: 600; margin-top: 8px; }
+h2 { font-size: 25px; font-weight: 600; margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--rule); display: flex; gap: 14px; align-items: baseline; }
+h2 .num { font-family: "JetBrains Mono", monospace; font-size: 14px; color: var(--accent); }
+h3 { font-size: 18px; font-weight: 600; margin-top: 28px; }
+p { margin: 12px 0; max-width: 74ch; }
+.lead { font-size: 18px; color: var(--muted); }
+.meta { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 20px; padding: 14px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); font-size: 14px; }
+.meta div span { display: block; }
+.meta .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+.toc { margin: 28px 0 8px; padding: 16px 20px; background: var(--paper); border: 1px solid var(--rule); border-radius: 6px; font-size: 14px; }
+.toc .eyebrow { margin-bottom: 10px; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 6px 20px; }
+.toc a { color: var(--muted); text-decoration: none; display: flex; gap: 8px; }
+.toc a:hover, .toc a:focus-visible { color: var(--accent); }
+.toc a span:first-child { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--accent); min-width: 1.6em; }
+ul, ol { padding-left: 22px; margin: 10px 0; max-width: 74ch; }
+li { margin: 6px 0; }
+ol.steps li::marker { font-weight: 600; color: var(--accent); }
+code { font-family: "JetBrains Mono", monospace; font-size: 0.86em; background: var(--mono-bg); padding: 1px 5px; border-radius: 3px; }
+pre { font-family: "JetBrains Mono", monospace; font-size: 13px; background: var(--mono-bg); padding: 12px 14px; border-radius: 6px; overflow-x: auto; line-height: 1.5; max-width: none; }
+pre code { background: none; padding: 0; font-size: inherit; }
+.callout { background: var(--accent-soft); border-left: 3px solid var(--accent); padding: 12px 16px; margin: 18px 0; border-radius: 0 6px 6px 0; }
+.callout.gold { background: var(--gold-soft); border-left-color: var(--gold); }
+.callout.danger { background: var(--danger-soft); border-left-color: var(--danger); }
+.callout p { margin: 0; max-width: none; }
+.callout strong:first-child { display: block; margin-bottom: 4px; }
+.tablewrap { overflow-x: auto; margin: 16px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+td code { white-space: nowrap; }
+.check { list-style: none; padding-left: 0; }
+.check li { padding-left: 28px; position: relative; }
+.check li::before { content: "☐"; position: absolute; left: 4px; color: var(--accent); }
+.foot { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+<style id="hdid-print-style">
+@page { size: A4; margin: 14mm 15mm 18mm; }
+@media print {
+    html, body { background: #fff; color: #1b2430; }
+    body { font-family: Arial, sans-serif; font-size: 11pt; line-height: 1.4; }
+    .page { max-width: none; width: auto; margin: 0; padding: 0; }
+    h1, h2, h3 { font-family: Georgia, serif; text-wrap: initial; }
+    h1 { font-size: 25pt; }
+    h2 { font-size: 17pt; margin-top: 8mm; padding-top: 3mm; }
+    h3 { font-size: 13pt; margin-top: 5mm; }
+    h2, h3, thead { break-after: avoid; }
+    p, ul, ol.steps { max-width: none; orphans: 3; widows: 3; }
+    .lead { font-size: 12pt; }
+    .toc { font-size: 10pt; margin: 5mm 0; }
+    .toc ol { display: block; }
+    .req, .dec, .uc { display: block; break-inside: auto; margin: 3mm 0; padding: 2mm 0; }
+    .req > .id, .dec > .id { break-after: avoid; margin-bottom: 2mm; font-weight: bold; }
+    .callout { break-inside: avoid; }
+    figure { break-inside: avoid; margin: 4mm 0; padding: 2mm; border-radius: 0; }
+    figure img { width: auto; height: auto; max-width: 100%; max-height: 180mm; object-fit: contain; margin: 0 auto; }
+    figcaption { font-size: 9pt; margin: 2mm 0 0; }
+    svg { max-width: 100%; height: auto; }
+    .tablewrap { overflow: visible; }
+    table { width: 100%; table-layout: fixed; font-size: 9pt; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; }
+    th, td, td.num { white-space: normal; overflow-wrap: anywhere; padding: 2mm; }
+    th code, td code { white-space: normal; }
+    #roviditesek + .tablewrap th:first-child { width: 20%; }
+    pre { white-space: pre-wrap; overflow: visible; overflow-wrap: anywhere; break-inside: auto; font-size: 9pt; }
+    code { overflow-wrap: anywhere; }
+    .foot { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="page">
+<div class="eyebrow">Telepítési útmutató</div>
+<h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
+<p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
+<div class="meta">
+    <div><span class="k">Verzió</span><span>1.0 · 2026. szeptember 23.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.0.0 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
+    <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.0, felhasználói kézikönyv 1.23</span></div>
+</div>
+
+<nav class="toc" aria-label="Tartalom">
+    <div class="eyebrow">Tartalom</div>
+    <ol>
+        <li><a href="#s1"><span>1</span><span>Áttekintés</span></a></li>
+        <li><a href="#s2"><span>2</span><span>Követelmények</span></a></li>
+        <li><a href="#s3"><span>3</span><span>Telepítés lépésről lépésre</span></a></li>
+        <li><a href="#s4"><span>4</span><span>A beállítások működése</span></a></li>
+        <li><a href="#s5"><span>5</span><span>Környezeti változók</span></a></li>
+        <li><a href="#s6"><span>6</span><span>Hálózat, kiszolgálónév, HTTPS</span></a></li>
+        <li><a href="#s7"><span>7</span><span>Adatbázis (MariaDB)</span></a></li>
+        <li><a href="#s8"><span>8</span><span>Háttérfolyamatok és ütemezés</span></a></li>
+        <li><a href="#s9"><span>9</span><span>Naplók</span></a></li>
+        <li><a href="#s10"><span>10</span><span>Első beállítás a felületen</span></a></li>
+        <li><a href="#s11"><span>11</span><span>Külső rendszerek bekötése</span></a></li>
+        <li><a href="#s12"><span>12</span><span>Ellenőrzés és biztonsági átvétel</span></a></li>
+        <li><a href="#s13"><span>13</span><span>Kipróbálás demóadatokkal</span></a></li>
+        <li><a href="#s14"><span>14</span><span>Frissítés új verzióra</span></a></li>
+        <li><a href="#roviditesek"><span>R</span><span>Rövidítésjegyzék</span></a></li>
+    </ol>
+</nav>
+
+<h2 id="s1"><span class="num">1</span>Áttekintés</h2>
+<p>Az OpenHDID egyetlen konténer-image-ként érkezik (<code>ghcr.io/adamfhun/openhdid</code>, <code>linux/amd64</code> és <code>linux/arm64</code>). Ugyanaz az image minden szerepet ellát, a Compose-fájl a parancs szerint indítja a szolgáltatásokat:</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Szolgáltatás</th><th>Parancs</th><th>Feladat</th></tr></thead>
+<tbody>
+<tr><td><code>web</code></td><td><code>web</code></td><td>nginx (mainline, headers-more, TLS 1.3) és PHP-FPM egy konténerben: ügyfélportál, munkatársi panel, gépi API-k. Az nginx és a PHP-FPM Unix-socketen beszél, FastCGI-port nem nyílik.</td></tr>
+<tr><td><code>worker</code></td><td><code>worker default</code></td><td>Üzenetsor-feldolgozó: e-mail, SMS, életjel.</td></tr>
+<tr><td><code>sync-worker</code></td><td><code>worker sync</code></td><td>A panelről indított ügyféltörzs-átvétel külön soron (legfeljebb 20 perc), hogy ne tartsa fel az üzeneteket.</td></tr>
+<tr><td><code>scheduler</code></td><td><code>scheduler</code></td><td>Az ütemező a cron helyett (<code>php artisan schedule:work</code>). Pontosan egy példány fusson.</td></tr>
+<tr><td><code>migrate</code></td><td><code>migrate</code></td><td>Minden indításkor egyszer lefut: megvárja az adatbázist, lefuttatja a migrációkat és a szerepkör-seedert, majd kilép. A többi szolgáltatás csak a sikeres lefutása után indul.</td></tr>
+<tr><td><code>mariadb</code></td><td>–</td><td>Beépített MariaDB 12.3 LTS a <code>db</code> profillal. Külső adatbázisnál elhagyható.</td></tr>
+<tr><td><code>valkey</code></td><td>–</td><td>Valkey (Redis-kompatibilis, BSD-licencű) a <code>redis</code> profillal: közös gyorsítótár, munkamenet és üzenetsor több webpéldányhoz.</td></tr>
+</tbody></table></div>
+<p>A telepítési mappa tartalma: <code>compose.yaml</code>; <code>.env</code> (alkalmazás); <code>db.env</code> (adatbázis-rendszergazda és migrációs fiók); <code>tls/</code> (saját tanúsítvány és kulcs); választhatóan <code>ca/</code> (belső tanúsítványkiadók). Az image nem tartalmaz beállítást, kulcsot, tanúsítványt és dokumentációt. A dokumentáció a forrásrepó <code>docs</code> mappájában és minden kiadás mellékleteként érhető el.</p>
+<p><strong>Az image tartalma:</strong></p>
+<ul>
+    <li>Alpine Linux 3.24, OpenSSL 3.5 (LTS);</li>
+    <li>PHP 8.5 FPM csak a szükséges kiterjesztésekkel: pdo_mysql, intl a teljes ICU-adattal, bcmath, zip, soap, pcntl, redis, OPcache;</li>
+    <li>forrásból fordított nginx mainline, csak a használt modulokkal és a beépített headers-more modullal;</li>
+    <li>az alkalmazás az éles függőségeivel.</li>
+</ul>
+<p><strong>Ami kimaradt:</strong> Composer, Node.js, git, fordítóeszközök, PHP-forrás, PEAR, curl-parancs, dokumentáció és tesztek. A konténer a <code>www-data</code> felhasználóval (uid 82) fut, csak olvasható gyökér-fájlrendszerrel; írni csak a <code>storage</code> kötetre és a memóriában lévő <code>/tmp</code>-re tud.</p>
+
+<h2 id="s2"><span class="num">2</span>Követelmények</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>Összetevő</th><th>Követelmény</th><th>Megjegyzés</th></tr></thead>
+<tbody>
+<tr><td>Kiszolgáló</td><td>Biztonsági támogatást kapó Linux, x86_64 vagy arm64</td><td>rendszeres OS-frissítéssel, szinkronizált órával (NTP): a HMAC-aláírás 300 mp-es időablaka és az SSO-tokenek ellenőrzése is erre épül</td></tr>
+<tr><td>Docker</td><td>Docker Engine 27+ és Docker Compose 2.24+</td><td>a Compose-fájl a beépített <code>configs.content</code> és a <code>depends_on.required</code> elemet használja; rootless Docker is megfelelő</td></tr>
+<tr><td>Erőforrás</td><td>2 vCPU, 4 GB RAM, 20 GB lemez</td><td>néhány ezer ügyfél és napi több ezer hívás mellett elegendő; a méretezést az üzemeltetési kézikönyv 9. fejezete írja le</td></tr>
+<tr><td>Név és tanúsítvány</td><td>DNS-név, hozzá tanúsítvány teljes lánccal és kulccsal (PEM)</td><td>ECDSA P-256 vagy legalább 2048 bites RSA; jelszóval védett kulcs nem használható</td></tr>
+<tr><td>Adatbázis</td><td>beépített MariaDB 12.3 LTS vagy külső MariaDB/MySQL</td><td>utf8mb4; külső kiszolgálóhoz TLS-kapcsolat ajánlott</td></tr>
+</tbody></table></div>
+<p><strong>Hálózat.</strong></p>
+<ul>
+    <li>Bejövő: 443 a böngészőknek, a telefonközpontnak és a mobil kiszolgálónak; 80 csak a böngészős HTTPS-átirányításhoz kell.</li>
+    <li>Kimenő, a konténerekből: Exchange (EWS) vagy SMTP, Ozeki SMS-átjáró, Microsoft Entra és ADFS, az ügyféltörzs gépi felülete, valamint a DNS.</li>
+    <li>Az image letöltéséhez a <code>ghcr.io</code> kell; zárt hálózatban saját registrybe tükrözhető.</li>
+</ul>
+<div class="callout gold"><p><strong>Kliens-IP a Docker mögött.</strong> Az IP-alapú forgalomkorlát és az auditnapló a kérés valódi forráscímére épül. IPv4-en a Docker megőrzi a kliens címét. IPv6-on, kikapcsolt <code>ip6tables</code> vagy a userland-proxy használata mellett viszont a konténer a Docker-átjáró címét látja. Telepítés után a <code>docker compose logs web</code> access logjában ellenőrizze, hogy az <code>ip</code> mező a valódi kliens címét mutatja-e. Ha nem, kapcsolja be a Docker IPv6-NAT-ját, vagy tegye a webet egy terheléselosztó mögé (<code>OPENHDID_TLS=off</code>, 6.5 pont).</p></div>
+
+<h2 id="s3"><span class="num">3</span>Telepítés lépésről lépésre</h2>
+<p>A példák a <code>/opt/openhdid</code> mappát használják. A parancsokat Docker-jogosultságú felhasználó futtatja; az alkalmazás maga nem root felhasználóként fut.</p>
+<ol class="steps">
+<li><strong>A telepítési fájlok letöltése</strong> a választott kiadásból. A <code>.env</code> és a <code>db.env</code> titkokat tartalmaz, ezért csak a tulajdonos olvashatja:
+<pre><code>sudo mkdir -p /opt/openhdid &amp;&amp; sudo chown "$USER" /opt/openhdid &amp;&amp; cd /opt/openhdid
+base=https://github.com/adamfhun/openhdid/releases/download/v1.0.0
+curl -fsSL -O "$base/compose.yaml"
+curl -fsSL -o .env "$base/env.example"
+curl -fsSL -o db.env "$base/db.env.example"
+chmod 600 .env db.env</code></pre></li>
+<li><strong>Kötelező értékek a <code>.env</code> fájlban:</strong>
+<ul>
+    <li><code>OPENHDID_VERSION</code> (például <code>1.0.0</code>);</li>
+    <li><code>APP_URL</code>: a webhely HTTPS-címe, ebből képződik a kiszolgálónév is;</li>
+    <li><code>DB_PASSWORD</code>: a futási adatbázis-fiók jelszava;</li>
+    <li>a levelezés, az SMS és az ügyféltörzs beállításai (5. fejezet).</li>
+</ul>
+A <code>db.env</code> fájlban a <code>MARIADB_ROOT_PASSWORD</code> és a migrációs fiók jelszava (<code>DB_PASSWORD</code>) kell. Mindhárom jelszó egyedi, hosszú és véletlenszerű legyen, például <code>openssl rand -base64 32</code>.</li>
+<li><strong>Alkalmazáskulcs.</strong> Egyszer kell létrehozni. A kimenetet írja a <code>.env</code> <code>APP_KEY</code> sorába, és őrizze meg a mentésektől elkülönített, védett helyen:
+<pre><code>docker compose run --rm --no-deps web key</code></pre>
+A kulccsal titkosított adatok (biztonsági válaszok, kódmásolatok, API-tokenek) nélküle nem olvashatók vissza. Meglévő telepítésen soha ne cserélje.</li>
+<li><strong>Tanúsítvány.</strong> A teljes lánc és a kulcs a <code>tls</code> mappába kerül. A konténer felhasználójának (uid 82) olvashatónak kell lennie:
+<pre><code>mkdir -p tls
+cp /utvonal/fullchain.pem /utvonal/privkey.pem tls/
+sudo chown 82:82 tls/fullchain.pem tls/privkey.pem
+sudo chmod 444 tls/fullchain.pem &amp;&amp; sudo chmod 400 tls/privkey.pem</code></pre></li>
+<li><strong>Belső tanúsítványkiadók</strong> (választható). Ha az Exchange, az ADFS, az ügyféltörzs vagy a külső adatbázis belső CA-val hitelesít, a CA-tanúsítványt tegye a <code>ca</code> mappába (<code>*.crt</code> vagy <code>*.pem</code>). Indításkor a rendszer tanúsítványtára mellé kerül; a TLS-ellenőrzés kikapcsolására nincs szükség.</li>
+<li><strong>Indítás:</strong>
+<pre><code>docker compose pull
+docker compose up -d
+docker compose ps</code></pre>
+Az első indításkor sorrendben:
+<ol>
+    <li>a MariaDB létrehozza az adatbázist és a két fiókot;</li>
+    <li>a <code>migrate</code> lefut, majd kilép (<code>exited (0)</code>);</li>
+    <li>a <code>web</code>, <code>worker</code>, <code>sync-worker</code> és <code>scheduler</code> elindul; a <code>web</code> állapota egy percen belül <code>healthy</code>.</li>
+</ol></li>
+<li><strong>Az első rendszergazda</strong> (jelszót kér, legalább 12 karakter):
+<pre><code>docker compose exec web php artisan hdid:make-admin admin@example.org --name="Rendszergazda"</code></pre>
+A parancs az ügyféltörzsbeli tételt is létrehozza, így a belépési szabály teljesül.</li>
+<li><strong>Első ellenőrzés és a telefonközpont kulcsa</strong> (a kulcs egyszer jelenik meg):
+<pre><code>docker compose exec web php artisan hdid:health
+docker compose exec web php artisan hdid:api-key:create "Prémium telefonközpont" callcenter</code></pre></li>
+<li>Belépés a <code>https://&lt;kiszolgáló&gt;/admin</code> címen, majd az első beállítás a 10. fejezet szerint, végül az átvételi ellenőrzés a 12. fejezet szerint.</li>
+</ol>
+
+<h2 id="s4"><span class="num">4</span>A beállítások működése a kész csomagban</h2>
+<p>A beállítások két rétegben élnek.</p>
+<ul>
+    <li><strong>Telepítési értékek:</strong> címek, jelszavak, illesztők, ütemezés, hálózat. Környezeti változók a <code>.env</code> fájlban.</li>
+    <li><strong>Üzleti paraméterek:</strong> csomaglisták, azonosítási határok, arculat, adatmegőrzés, belépési módok. A felületen, az <em>Adminisztráció › Rendszer › Beállítások</em> alatt szerkeszthetők, az adatbázisban tárolódnak.</li>
+</ul>
+<p>Ez a szétválasztás a konténerben is ugyanaz, mint a hagyományos telepítésnél.</p>
+<ol class="steps">
+<li><strong>Átadás.</strong> A Compose a <code>.env</code> minden sorát környezeti változóként adja át a konténereknek (<code>env_file</code>). Ugyanebből a fájlból olvassa a saját változóit is (<code>OPENHDID_VERSION</code>, portok, profilok). A <code>db.env</code>-t csak a <code>mariadb</code> és a <code>migrate</code> szolgáltatás kapja meg. A konténeren belül nincs <code>.env</code> fájl, a Laravel a folyamat környezetét olvassa.</li>
+<li><strong>Biztonságos alapértékek.</strong> Az image-ben beállított alapértékek: <code>APP_ENV=production</code>, <code>APP_DEBUG=false</code>, <code>LOG_CHANNEL=stderr</code>. Amit a <code>.env</code> nem ad meg, az ezekkel indul.</li>
+<li><strong>Titkok fájlból.</strong> Bármely változó megadható fájlként is: <code>NÉV_FILE=/run/secrets/…</code>. Indításkor a <code>NÉV</code> változó a fájl tartalmát kapja; ha a kettőt egyszerre adja meg, az hiba. Docker- és Kubernetes-titkokhoz ajánlott, mert a sima környezeti változót a <code>docker inspect</code> megmutatja.</li>
+<li><strong>Ellenőrzés induláskor.</strong> Minden szerepkör indulásakor az indítószkript megnézi a kötelező értékeket, és hibás beállítással a konténer érthető hibaüzenettel leáll (<code>docker compose logs</code>). Hibának számít:
+<ul>
+    <li>az érvénytelen <code>APP_KEY</code>;</li>
+    <li>ha az <code>APP_URL</code> nem https;</li>
+    <li>a hiányzó adatbázis-adat;</li>
+    <li>élesben (<code>APP_ENV=production</code>) az <code>APP_DEBUG=true</code>, a <code>TRUSTED_PROXIES=*</code> és a <code>SESSION_SECURE_COOKIE=false</code>.</li>
+</ul>
+Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, valamint az önaláírt tanúsítványért.</li>
+<li><strong>Gyorsítótár.</strong> Az ellenőrzés után a konfiguráció, az útvonalak és az események gyorsítótára a memóriában lévő <code>/tmp</code>-be épül. A titkokat is tartalmazó konfigurációs gyorsítótár így lemezre sem kerül. A PHP-FPM dolgozói ezt olvassák, a konténer környezetét nem látják (<code>clear_env</code>).</li>
+<li><strong>Módosítás:</strong> a <code>.env</code> szerkesztése után <code>docker compose up -d</code>. A Compose az érintett konténereket újraindítja, a gyorsítótár újraépül; a hagyományos <code>php artisan optimize</code> és <code>queue:restart</code> itt nem kell. A felületi beállítások azonnal élnek, újraindítás nélkül.</li>
+</ol>
+<div class="callout danger"><p><strong>APP_KEY</strong> Soha nem generálódik magától, és meglévő telepítésen nem cserélhető: cseréje a titkosított adatok, a kulcsolt keresőlenyomatok és az ügyféltörzs tokenjeinek elvesztésével jár. A mentés része legyen, a mentéstől elkülönített hozzáféréssel.</p></div>
+
+<h2 id="s5"><span class="num">5</span>Környezeti változók</h2>
+<p>A teljes lista magyar magyarázattal a kiadás <code>env.example</code> fájljában található. A legfontosabbak:</p>
+<h3>Kiadás, hálózat, konténer</h3>
+<div class="tablewrap"><table>
+<thead><tr><th>Kulcs</th><th>Alapérték</th><th>Jelentés</th></tr></thead>
+<tbody>
+<tr><td><code>OPENHDID_VERSION</code></td><td>–</td><td>A futtatott image verziója. Élesben mindig pontos verzió (<code>1.0.0</code>), ne <code>latest</code>.</td></tr>
+<tr><td><code>COMPOSE_PROFILES</code></td><td><code>db</code></td><td>Választható szolgáltatások: <code>db</code> beépített MariaDB, <code>redis</code> Valkey. Külső adatbázisnál üres.</td></tr>
+<tr><td><code>OPENHDID_BIND_IP</code></td><td><code>0.0.0.0</code></td><td>A gazdagép címe, amelyen a 80-as és 443-as port figyel (6.1 pont).</td></tr>
+<tr><td><code>OPENHDID_HTTPS_PORT</code>, <code>OPENHDID_HTTP_PORT</code></td><td><code>443</code>, <code>80</code></td><td>A gazdagép portjai; a konténerben mindig 8443 és 8080.</td></tr>
+<tr><td><code>OPENHDID_TLS</code></td><td><code>on</code></td><td><code>on</code> saját tanúsítvány, <code>off</code> terheléselosztó mögött, <code>selfsigned</code> csak kipróbáláshoz.</td></tr>
+<tr><td><code>OPENHDID_TLS_CERT</code>, <code>OPENHDID_TLS_KEY</code></td><td><code>/etc/openhdid/tls/…</code></td><td>A tanúsítvány és a kulcs helye a konténerben.</td></tr>
+<tr><td><code>OPENHDID_EXTRA_HOSTS</code></td><td>üres</td><td>További kiszolgálónevek az <code>APP_URL</code> mellett.</td></tr>
+<tr><td><code>OPENHDID_HTTP_REDIRECT</code></td><td><code>true</code></td><td>A 80-as porton a böngészős GET/HEAD 308-cal a HTTPS-címre megy; <code>false</code>: minden elutasítva.</td></tr>
+<tr><td><code>OPENHDID_MONITORING_ALLOW</code></td><td>üres</td><td>A <code>/health</code> és <code>/up</code> elérésére jogosult címek (IP vagy CIDR).</td></tr>
+<tr><td><code>OPENHDID_NGINX_WORKERS</code></td><td><code>auto</code></td><td>nginx-dolgozók száma.</td></tr>
+<tr><td><code>OPENHDID_FPM_*</code></td><td><code>dynamic</code>, 8, 2, 2, 4</td><td>PHP-FPM folyamatkezelés és a legtöbb/induló/tartalék folyamat webkonténerenként.</td></tr>
+<tr><td><code>OPENHDID_DB_BUFFER_POOL</code>, <code>OPENHDID_DB_MAX_CONNECTIONS</code></td><td><code>512M</code>, 200</td><td>A beépített MariaDB memóriája és kapcsolatszáma.</td></tr>
+<tr><td><code>OPENHDID_DEMO_DATA</code></td><td><code>false</code></td><td>Demóadatok betöltése (13. fejezet); élesben tilos.</td></tr>
+</tbody></table></div>
+<h3>Alkalmazás</h3>
+<div class="tablewrap"><table>
+<thead><tr><th>Kulcs</th><th>Érték élesben</th><th>Jelentés</th></tr></thead>
+<tbody>
+<tr><td><code>APP_ENV</code>, <code>APP_DEBUG</code></td><td><code>production</code>, <code>false</code></td><td>Hibaválaszban nincs belső részlet; más kombinációval élesben nem indul.</td></tr>
+<tr><td><code>APP_KEY</code></td><td>egyszer generált</td><td>Lásd 3. és 4. fejezet.</td></tr>
+<tr><td><code>APP_URL</code></td><td><code>https://hdid.example.org</code></td><td>A belépési hivatkozások, az átirányítás és a kiszolgálónév alapja.</td></tr>
+<tr><td><code>APP_LOCALE</code>, <code>APP_TIMEZONE</code></td><td><code>hu</code>, <code>Europe/Budapest</code></td><td>Alapnyelv; megjelenített idők és az ütemező időzónája.</td></tr>
+<tr><td><code>APP_MAINTENANCE_DRIVER</code></td><td><code>cache</code></td><td>A karbantartási mód minden példányra hat.</td></tr>
+<tr><td><code>LOG_CHANNEL</code>, <code>LOG_LEVEL</code></td><td><code>stderr</code>, <code>warning</code></td><td>Napló a konténer kimenetére (9. fejezet).</td></tr>
+<tr><td><code>DB_*</code></td><td>futási fiók</td><td><code>DB_HOST=mariadb</code> a beépített adatbázisnál; a <code>db.env</code> a migrációs fiókot adja.</td></tr>
+<tr><td><code>MYSQL_ATTR_SSL_CA</code></td><td>üres</td><td>Külső adatbázis TLS-kapcsolatához a CA-fájl a konténerben (például <code>/etc/openhdid/ca/db-ca.pem</code>).</td></tr>
+<tr><td><code>SESSION_*</code></td><td><code>database</code>, 120, titkosított, <code>__Host-openhdid_session</code>, Secure, HttpOnly, Lax</td><td>Munkamenet; 120 perc inaktivitás. Több webpéldánynál <code>redis</code>.</td></tr>
+<tr><td><code>CACHE_STORE</code>, <code>QUEUE_CONNECTION</code></td><td><code>database</code></td><td>Több webpéldánynál <code>redis</code> a Valkey-vel (<code>REDIS_HOST=valkey</code>, <code>REDIS_PASSWORD</code>).</td></tr>
+<tr><td><code>*_QUEUE_RETRY_AFTER</code></td><td>1260</td><td>Nagyobb legyen az átvétel 1200 mp-es korlátjánál.</td></tr>
+<tr><td><code>TRUSTED_PROXIES</code></td><td><code>127.0.0.1</code></td><td>Csak <code>OPENHDID_TLS=off</code> mellett: a terheléselosztó címei.</td></tr>
+<tr><td><code>SANCTUM_TOKEN_EXPIRATION</code></td><td>43200</td><td>A mobilalkalmazás bejelentkezésének lejárata percben.</td></tr>
+<tr><td><code>HDID_CSP_ENABLED</code>, <code>HDID_CSP_EXTRA_SOURCES</code></td><td><code>true</code>, üres</td><td>Tartalombiztonsági szabályzat; csak indokolt, pontos források vehetők fel.</td></tr>
+<tr><td><code>HDID_PHONE_REGION</code></td><td><code>HU</code></td><td>A hívószámok értelmezésének alapértelmezett országa.</td></tr>
+<tr><td><code>HDID_SOURCE_URL</code></td><td>az image kiadására mutat</td><td>A „Forráskód” hivatkozás a portál és a panel láblécében; módosított változatnál a módosított forrásra mutasson (AGPL-3.0, 13. pont).</td></tr>
+</tbody></table></div>
+<h3>Külső rendszerek</h3>
+<div class="tablewrap"><table>
+<thead><tr><th>Kulcsok</th><th>Jelentés</th></tr></thead>
+<tbody>
+<tr><td><code>MAIL_MAILER</code>, <code>MAIL_*</code>, <code>EWS_*</code></td><td><code>ews</code> (Exchange: URL, <code>basic</code>/<code>ntlm</code>/<code>oauth</code>, hozzáférés) vagy <code>smtp</code>. A <code>log</code> csak naplóba ír, élesben a rendszerállapot jelzi. <code>EWS_VERIFY_TLS=true</code> maradjon; belső CA a <code>ca</code> mappába.</td></tr>
+<tr><td><code>SMS_DRIVER</code>, <code>OZEKI_*</code></td><td><code>ozeki</code>: az átjáró HTTPS-címe és hozzáférése; <code>log</code> élesben hiba.</td></tr>
+<tr><td><code>EMD_SYNC_*</code></td><td>Ügyféltörzs-átvétel: illesztő (<code>spreadsheet</code> vagy <code>json</code>), export-, belépési és tokenfrissítési cím, hozzáférés, időkorlátok, formátum, ütemezés (<code>EMD_SYNC_CRON</code>), tokenfrissentartás, és a panelről indított átvétel sora (<code>EMD_SYNC_QUEUE=sync</code>).</td></tr>
+<tr><td><code>CALLCENTER_*</code></td><td>Örökölt, rögzített telefonközponti kulcs és aláírás. Új partnerhez a felületen kezelt API-kulcs ajánlott; a <code>CALLCENTER_SIGNATURE_TTL</code> (300) az aláírt kérés időbélyegének megengedett eltérése.</td></tr>
+<tr><td><code>USER_*</code>, <code>CLIENT_*</code> (<code>ADFS</code>, <code>ENTRA</code>)</td><td>Négy alkalmazás-regisztráció az egyszeri bejelentkezéshez; az Entra-bérlő csak GUID lehet.</td></tr>
+</tbody></table></div>
+
+<h2 id="s6"><span class="num">6</span>Hálózat, kiszolgálónév és HTTPS</h2>
+<h3>6.1 Figyelő cím és portok</h3>
+<p>A konténerben az nginx mindig ugyanazokon a nem privilegizált portokon figyel: 8080 (HTTP) és 8443 (HTTPS), minden konténercímen. Ezekhez nem kell hozzányúlni.</p>
+<p>Hogy a gazdagép melyik címén és portján érhető el a szolgáltatás, azt a Compose port-leképezése dönti el a <code>.env</code> alapján:</p>
+<pre><code>OPENHDID_BIND_IP=192.0.2.10    # egyetlen hálózati kártya címe; 0.0.0.0 = minden IPv4-cím
+OPENHDID_HTTPS_PORT=443
+OPENHDID_HTTP_PORT=80</code></pre>
+<p>Ha a 80-as portra egyáltalán nincs szükség, a <code>compose.yaml</code> <code>web</code> szolgáltatásából törölheti a 8080-as leképezést, vagy az <code>OPENHDID_HTTP_REDIRECT=false</code> minden HTTP-kérést elutasít. A 443-as porton a tűzfal engedje a klienseket, a telefonközpontot és a mobil kiszolgálót; az adatbázis és a Valkey portja nincs kivezetve a gazdagépre.</p>
+<h3>6.2 Kiszolgálónév (domain)</h3>
+<ul>
+    <li><strong>A kiszolgálónév</strong> az <code>APP_URL</code> hostjából képződik; ez az egyetlen hely, ahol meg kell adni. További nevek az <code>OPENHDID_EXTRA_HOSTS</code> változóban adhatók meg (a tanúsítványnak ezeket is le kell fednie).</li>
+    <li><strong>Ismeretlen Host fejléc vagy SNI:</strong> a TLS-kézfogás elutasítva, HTTP-n kapcsolatbontás (444). Idegen név alatt az alkalmazás nem szolgálható ki.</li>
+    <li><strong>A 80-as porton</strong> csak a böngészős GET/HEAD kérés kap 308-as átirányítást az <code>APP_URL</code> címére. A gépi (<code>/api/</code>) és hitelesítési (<code>/auth/</code>) útvonalak, illetve minden más metódus kapcsolatbontást kap.</li>
+    <li><strong>Az nginx-konfigurációt</strong> az indítószkript minden induláskor a környezetből állítja elő, csak ellenőrzött értékekkel, majd <code>nginx -t</code> próbát futtat. Kézi szerkesztésre nincs szükség.</li>
+</ul>
+<h3>6.3 HTTPS saját tanúsítvánnyal (TLS 1.3)</h3>
+<p>Alapértelmezés (<code>OPENHDID_TLS=on</code>): a <code>tls/fullchain.pem</code> (a kiszolgáló tanúsítványa, utána a köztes tanúsítványok) és a <code>tls/privkey.pem</code>. Induláskor a rendszer ellenőrzi:</p>
+<ul>
+    <li>a kulcs a tanúsítványhoz tartozik-e;</li>
+    <li>a tanúsítvány lefedi-e az <code>APP_URL</code> és az extra neveket (a SAN-ban, helyettesítő névvel is);</li>
+    <li>a tanúsítvány érvényes-e már, és nem járt-e le; 30 napon belüli lejáratnál figyelmeztet;</li>
+    <li>a kulcs típusát és méretét (RSA legalább 2048 bit);</li>
+    <li>van-e köztes tanúsítvány a fájlban.</li>
+</ul>
+<p>Hibánál a web nem indul, és a napló megmondja az okot. Kézi próba a futó rendszeren:</p>
+<pre><code>docker compose exec web openhdid tls-check</code></pre>
+<p>A beállítás kizárólag TLS 1.3-at fogad (<code>TLS_AES_256_GCM_SHA384</code>, <code>TLS_CHACHA20_POLY1305_SHA256</code>, <code>TLS_AES_128_GCM_SHA256</code>). Early data és session ticket nincs. A kulcscsere elsődlegesen az X25519MLKEM768 poszt-kvantum hibrid eljárás, ezt a friss böngészők és az OpenSSL 3.5 támogatja, a régebbi kliensek az X25519-re esnek vissza. Minden HTTPS-válasz HSTS-fejlécet kap (1 év, aldomainekkel). A TLS 1.2 engedélyezése csak dokumentált döntéssel és klienspróbával jöhet szóba, régi partner miatt sem kerülhet vissza a TLS 1.0/1.1.</p>
+<p><strong>Tanúsítványcsere:</strong> a fájlok cseréje után kapcsolatbontás nélküli újratöltés, amely előtte ellenőriz:</p>
+<pre><code>docker compose exec web openhdid reload</code></pre>
+<p>Automatikus megújításnál (például ACME DNS-01 a gazdagépen) ezt a parancsot kösse a megújítás utáni lépéshez. A konténer nem nyit ACME HTTP-01 útvonalat.</p>
+<h3>6.4 Fejlécek és a kiszolgáló azonosítóinak elrejtése</h3>
+<p>Az nginx forrásból, csak a szükséges modulokkal készül; a headers-more modul be van fordítva.</p>
+<ul>
+    <li><strong>Server és X-Powered-By:</strong> egyik válaszban sincs, a hibaválaszokban sem (<code>server_tokens off</code>, <code>more_clear_headers</code>, <code>expose_php=Off</code>, <code>fastcgi_hide_header</code>).</li>
+    <li><strong>Biztonsági fejlécek minden válaszon egyszer:</strong> HSTS, <code>nosniff</code>, <code>X-Frame-Options DENY</code>, <code>Referrer-Policy</code>, <code>Permissions-Policy</code>, <code>Cross-Origin-Opener-Policy</code>, CSP és <code>X-Robots-Tag</code>.</li>
+    <li><strong>Gyorsítótár:</strong> a dinamikus válaszokon <code>Cache-Control: no-store</code>; a tartalomhash-elt statikus fájlok egy évig gyorsítótárazhatók, előtömörítve.</li>
+    <li><strong>Hibák és tiltások:</strong> saját, termék- és verziómentes hibaoldal; csak az <code>index.php</code> futtatható, a pontos nevű fájlok nem érhetők el, a TRACE 405.</li>
+    <li><strong>Access log:</strong> nem tárol URL-t, lekérdezést, Referert, sütit és kéréstörzset.</li>
+</ul>
+<h3>6.5 Terheléselosztó vagy fordított proxy mögött</h3>
+<p><code>OPENHDID_TLS=off</code> esetén a konténer csak a 8080-as porton, HTTP-n szolgál ki. A TLS-t ekkor a terheléselosztó zárja le, és ott is TLS 1.3 legyen.</p>
+<ul>
+    <li><strong><code>TRUSTED_PROXIES</code>:</strong> a terheléselosztó címei vagy CIDR-tartománya; a <code>*</code> nem használható. Az nginx csak ezektől fogadja el az <code>X-Forwarded-For</code> kliens-IP-t; a PHP felé minden kérés HTTPS-ként megy, mert a nyilvános cím HTTPS.</li>
+    <li><strong>A 8080-as port</strong> csak a terheléselosztó felől legyen elérhető (tűzfal vagy belső hálózat).</li>
+    <li><strong>Kulcsok:</strong> a tanúsítvány és a kulcs a terheléselosztón él. Ha a belső szakaszt is titkosítani kell, maradjon <code>OPENHDID_TLS=on</code> a konténerben is (újratitkosítás vagy TLS-átengedés).</li>
+</ul>
+<h3>6.6 Felügyeleti végpontok</h3>
+<p>A <code>/health</code> (az összes ellenőrzés állapota, 200 vagy 503) és a <code>/up</code> csak a helyi gépről és az <code>OPENHDID_MONITORING_ALLOW</code> címeiről érhető el, mások 404-et kapnak. A konténer saját egészség-ellenőrzése egy csak a konténeren belül elérhető porton fut, és nem függ ettől a listától.</p>
+
+<h2 id="s7"><span class="num">7</span>Adatbázis (MariaDB)</h2>
+<h3>7.1 Beépített adatbázis</h3>
+<p><strong>Indítás és kötet.</strong> A <code>COMPOSE_PROFILES=db</code> a <code>mariadb:12.3</code> LTS image-et indítja digesttel rögzítve, a <code>db</code> nevű kötettel. A port a gazdagépre nincs kivezetve.</p>
+<p><strong>Első induláskor a MariaDB létrehozza:</strong></p>
+<ul>
+    <li>a <code>DB_DATABASE</code> adatbázist <code>utf8mb4_unicode_ci</code> rendezéssel;</li>
+    <li>a migrációs fiókot (a <code>db.env</code> <code>DB_USERNAME</code>/<code>DB_PASSWORD</code> értéke), minden joggal az adatbázison;</li>
+    <li>a futási fiókot (a <code>.env</code> <code>DB_USERNAME</code>/<code>DB_PASSWORD</code> értéke), csak <code>SELECT, INSERT, UPDATE, DELETE</code> joggal.</li>
+</ul>
+<p><strong>Ki melyik fiókot használja.</strong> A web, a worker és a scheduler csak a futási fiókot látja, sémát nem módosíthat. A migrációk a migrációs fiókkal futnak.</p>
+<p><strong>Kiszolgálóbeállítás.</strong> Karakterkészlet, <code>skip-name-resolve</code>, puffer (<code>OPENHDID_DB_BUFFER_POOL</code>, a gép memóriájának 25–50%-a) és kapcsolatszám (<code>OPENHDID_DB_MAX_CONNECTIONS</code>).</p>
+<div class="callout"><p><strong>Csak az első induláskor.</strong> A fiókokat és az adatbázist a MariaDB az üres kötet első indításakor hozza létre. Jelszócseréhez később a <code>mariadb</code> konténerben <code>ALTER USER</code> kell, és a <code>.env</code>/<code>db.env</code> ezzel egyezzen.</p></div>
+<h3>7.2 Külső adatbázis</h3>
+<p>A <code>COMPOSE_PROFILES</code> üres (vagy csak <code>redis</code>). A <code>DB_HOST</code> a kiszolgáló neve. Az adatbázist és a két fiókot előre kell létrehozni:</p>
+<pre><code>CREATE DATABASE openhdid CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'openhdid'@'10.0.0.%' IDENTIFIED BY '…futási jelszó…';
+GRANT SELECT, INSERT, UPDATE, DELETE ON openhdid.* TO 'openhdid'@'10.0.0.%';
+CREATE USER 'openhdid_migrate'@'10.0.0.%' IDENTIFIED BY '…migrációs jelszó…';
+GRANT ALL PRIVILEGES ON openhdid.* TO 'openhdid_migrate'@'10.0.0.%';</code></pre>
+<p>A hálózaton át a kapcsolat legyen TLS-es: kényszerítse a kiszolgálón (<code>REQUIRE SSL</code> vagy <code>require_secure_transport</code>), a CA-fájlt tegye a <code>ca</code> mappába, és adja meg a <code>MYSQL_ATTR_SSL_CA=/etc/openhdid/ca/&lt;fájl&gt;</code> értéket. A <code>db.env</code> ekkor is kell a migrációs fiókhoz; a <code>MARIADB_ROOT_PASSWORD</code> üresen maradhat.</p>
+<h3>7.3 Migrációk</h3>
+<ul>
+    <li><strong>Mikor fut:</strong> a <code>migrate</code> szolgáltatás minden <code>docker compose up</code> alkalmával lefut. Ha nincs új migráció, nem változtat semmin.</li>
+    <li><strong>Mit csinál:</strong> legfeljebb 120 másodpercig vár az adatbázisra (<code>OPENHDID_DB_WAIT_SECONDS</code>), futtatja a migrációkat, összehangolja az alap szerepkörök jogosultságait, és a <code>db.env</code> migrációs fiókjával dolgozik.</li>
+    <li><strong>Sikertelen migráció:</strong> ha a <code>migrate</code> nem 0-val lép ki, a web és a háttérfolyamatok nem indulnak (<code>docker compose logs migrate</code>).</li>
+    <li><strong>Csak előre:</strong> a migrációk csak előre futnak; visszalépéshez a frissítés előtti mentés kell.</li>
+    <li><strong>Egyszerre egy:</strong> egyszerre csak egy <code>migrate</code> fusson; Kubernetesben egyetlen Job, nem a webpodok indulása.</li>
+</ul>
+
+<h2 id="s8"><span class="num">8</span>Háttérfolyamatok és ütemezés (a cron helyett)</h2>
+<p>A konténerekben nincs cron-démon, és a gazdagépen sem kell crontab-bejegyzés. Az ütemezett feladatokat a <code>scheduler</code> szolgáltatás futtatja (<code>php artisan schedule:work</code>): percenként végrehajtja az alkalmazás ütemezését.</p>
+<p><strong>Aktiválás:</strong> a feladatok maguktól élnek, amíg a <code>scheduler</code> fut; ez az alap Compose-telepítés része. Környezeti változóból csak két feladat állítható, a többi időzítése rögzített:</p>
+<ul>
+    <li><code>EMD_SYNC_CRON</code>: a teljes átvétel cron-kifejezése; üresen csak kézi átvétel van;</li>
+    <li><code>EMD_SYNC_TOKEN_KEEP_ALIVE</code>: a tokenfrissítés be- és kikapcsolása.</li>
+</ul>
+<p>Az időpontok az <code>APP_TIMEZONE</code> szerint értendők.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Gyakoriság</th><th>Feladat</th></tr></thead>
+<tbody>
+<tr><td>percenként</td><td>lejárt azonosítási munkamenetek zárása; ütemező- és sor-életjel; elakadt kimenő üzenetek újrasorolása</td></tr>
+<tr><td>15 percenként</td><td><code>hdid:emd-sync-token</code> az ügyféltörzs API-tokenjének frissentartása (fájlos illesztő és bekapcsolt <code>EMD_SYNC_TOKEN_KEEP_ALIVE</code> mellett)</td></tr>
+<tr><td>óránként</td><td>lejárt csomag-felülírások zárása; befejezett hívások tisztítása; végesemény nélkül maradt hívások lezárása</td></tr>
+<tr><td>naponta 03:30</td><td><code>hdid:prune</code> adatmegőrzési tisztítás</td></tr>
+<tr><td><code>EMD_SYNC_CRON</code> szerint</td><td><code>hdid:emd-sync</code> teljes ügyféltörzs-átvétel (alapból 3 óránként)</td></tr>
+</tbody></table></div>
+<p>Ellenőrzés: <code>docker compose exec scheduler php artisan schedule:list</code>, valamint a <em>Rendszerállapot</em> oldal „Ütemező” és „Feladatsor” kártyája, amely a percenkénti életjelből dolgozik.</p>
+<p><strong>Az ütemezőből mindig pontosan egy példány fusson.</strong> A kritikus feladatok a közös gyorsítótár záraival védettek (<code>withoutOverlapping</code>, <code>onOneServer</code>), így egy véletlen második példány sem futtatja őket kétszer, de ettől még nem kívánatos.</p>
+<p><strong>A <code>worker</code> és a <code>sync-worker</code>:</strong></p>
+<ul>
+    <li>óránként szabályosan kilépnek (<code>--max-time=3600</code>), és a Compose újraindítja őket; így a memória nem nő korlátlanul;</li>
+    <li>minden feladat előtt újraolvassák a felületi beállításokat;</li>
+    <li>a panelről indított ügyféltörzs-átvétel csak akkor fut, ha a <code>sync-worker</code> fut, és az <code>EMD_SYNC_QUEUE</code> értéke <code>sync</code>; különben a rendszerállapot 5 perc várakozás után figyelmeztet.</li>
+</ul>
+
+<h2 id="s9"><span class="num">9</span>Naplók</h2>
+<p>Minden folyamat a konténer szabványos kimenetére ír, fájlba nem. A Docker gyűjti és forgatja a naplókat: a <code>compose.yaml</code> <code>local</code> naplózó-meghajtót használ, szolgáltatásonként legfeljebb 10 × 20 MB-tal. A Docker alapértelmezett <code>json-file</code> meghajtója korlátlanul nőne.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Forrás</th><th>Formátum</th><th>Olvasás</th></tr></thead>
+<tbody>
+<tr><td>nginx access log</td><td>soronként JSON: idő, kliens-IP, kérésazonosító, metódus, státusz, méret, időtartam</td><td><code>docker compose logs -f web</code></td></tr>
+<tr><td>nginx hibák, PHP-FPM, alkalmazás</td><td>szöveges sorok; az alkalmazás JSON-ra is állítható (<code>LOG_STDERR_FORMATTER=Monolog\Formatter\JsonFormatter</code>)</td><td><code>docker compose logs web</code></td></tr>
+<tr><td>üzenetsor-feldolgozók</td><td>szöveges sorok</td><td><code>docker compose logs -f worker sync-worker</code></td></tr>
+<tr><td>ütemező</td><td>szöveges sorok</td><td><code>docker compose logs scheduler</code></td></tr>
+<tr><td>migráció, adatbázis</td><td>szöveges sorok</td><td><code>docker compose logs migrate mariadb</code></td></tr>
+<tr><td>auditnapló</td><td>adatbázis</td><td>felület: <em>Rendszer › Auditnapló</em></td></tr>
+</tbody></table></div>
+<p>Hasznos szűrések:</p>
+<pre><code>docker compose logs --since 1h web                   # az utolsó óra
+docker compose logs --no-log-prefix web | grep '"status":5'   # szerverhibák
+docker compose logs --no-log-prefix web | grep -v '^{' # minden, ami nem access log (hibák, figyelmeztetések)
+docker compose logs -f --tail=100 worker            # élő követés</code></pre>
+<p><strong>Központi naplógyűjtés.</strong> Az ASVS V16 elkülönített, módosítás ellen védett tárolást vár. A <code>compose.yaml</code> <code>x-logging</code> blokkjában a meghajtó cserélhető, például <code>journald</code>, <code>syslog</code> (TLS-sel), <code>gelf</code> vagy <code>fluentd</code>; a Docker-démon szintjén is beállítható. Az access log nem tartalmaz URL-t és titkot. Az nginx hibasorai és az alkalmazás hibaszövegei viszont tartalmazhatnak URL-t vagy személyes adatot, ezért a továbbításuk korlátozott hozzáféréssel történjen.</p>
+<p><strong>Fájlnapló</strong> (ha a szervezet ezt kéri): <code>LOG_STACK=stderr,daily</code> és <code>LOG_CHANNEL=stack</code>. A napi fájlok ekkor a <code>storage</code> köteten keletkeznek (<code>storage/logs</code>), 30 napos megőrzéssel.</p>
+
+<h2 id="s10"><span class="num">10</span>Első beállítás a felületen</h2>
+<p>Belépés a <code>/admin</code> címen az első rendszergazdával, majd az <em>Adminisztráció › Rendszer › Beállítások</em> alatt, ebben a sorrendben:</p>
+<ol class="steps">
+    <li><strong>Csomagok:</strong> a prémium (és ha van, a normál) csomagnevek listája. Csomaglista nélkül egyetlen ügyfél sem tud belépni.</li>
+    <li><strong>Ügyfélszolgálat:</strong> szintenként e-mail-cím, telefonszám, nyitvatartás.</li>
+    <li><strong>Arculat és Prémium:</strong> alkalmazásnév, embléma, böngészőikon, színek, háttérképek. Az alapértelmezés semleges színséma; a levelek és a kimutatások is a beállított színeket használják.</li>
+    <li><strong>Portál:</strong> jogi név, lábléc, adatkezelési és felhasználási hivatkozások.</li>
+    <li><strong>Ügyfél belépés és SSO:</strong> mely belépési módok élnek. Az SSO bekapcsolása előtt a környezeti változók legyenek kitöltve.</li>
+    <li><strong>Ügyféltörzs (EMD):</strong> munkatársi és ügyfél-domainlista, oszlopmegfeleltetés, védőkorlátok, CSV-kódolás, és az export kéréstörzse (csak főrendszergazda).</li>
+    <li><strong>Azonosítás, Hívások, Adatmegőrzés:</strong> az alapértékek a próbaüzemre megfelelnek. Az ügyintézői sikertelen ellenőrzések korlátja alapból 50 óránként.</li>
+</ol>
+<p>Ezután: <em>Tartalom › Üzenetsablonok</em> (próbaküldés), <em>Rendszer › API-kulcsok</em>, <em>Fiókok</em> (munkatársak, szerepkörök), <em>Azonosítás › Kérdések</em>. A felület részletes leírása a felhasználói kézikönyvben található.</p>
+
+<h2 id="s11"><span class="num">11</span>Külső rendszerek bekötése</h2>
+<p>A konténerben futó parancsok előtagja <code>docker compose exec web php artisan</code>.</p>
+<h3>Ügyféltörzs (Enterprise Master Data, EMD)</h3>
+<ol class="steps">
+    <li>Töltse ki az <code>EMD_SYNC_*</code> értékeket, majd <code>docker compose up -d</code>.</li>
+    <li>A belépés ellenőrzése: <code>docker compose exec web php artisan hdid:emd-sync-token</code>.</li>
+    <li>Próbafuttatás: <code>docker compose exec web php artisan hdid:emd-sync --dry-run</code>, vagy a panel <em>Próbafuttatás az API-ból</em> gombja; utóbbi a <code>sync-worker</code>-en fut.</li>
+    <li>Megfelelő eredmény után az éles átvétel.</li>
+</ol>
+<p>A védőkorlátok, a domainszűrés és a hibakezelés az üzemeltetési kézikönyv 6. fejezetében olvashatók.</p>
+<h3>Levelezés</h3>
+<p><code>MAIL_MAILER=ews</code> az <code>EWS_*</code> értékekkel, vagy <code>smtp</code> a <code>MAIL_HOST</code>, <code>MAIL_PORT</code>, <code>MAIL_USERNAME</code>, <code>MAIL_PASSWORD</code> és <code>MAIL_SCHEME</code> értékekkel. A feladó a <code>MAIL_FROM_ADDRESS</code>. Próba az ügyfelek érintése nélkül:</p>
+<pre><code>docker compose exec web php artisan hdid:test-mail sajat@example.org --now</code></pre>
+<h3>SMS (Ozeki NG)</h3>
+<p><code>SMS_DRIVER=ozeki</code>, az átjáró HTTPS-címe, felhasználó és jelszó. Próba: <code>docker compose exec web php artisan hdid:test-sms +36301234567 --now</code>. Az átjáró felé POST-kérés megy, a hozzáférés nem kerül a címsorba.</p>
+<h3>Egyszeri bejelentkezés (Entra ID, ADFS)</h3>
+<p><strong>Négy alkalmazás-regisztráció kell:</strong> Entra és ADFS, munkatársaknak és ügyfeleknek külön. A mobilalkalmazás saját nyilvános ügyfélazonosítót kap.</p>
+<p><strong>Visszatérési cím:</strong> <code>https://&lt;kiszolgáló&gt;/auth/{user|client}/{entra|adfs}/callback</code>.</p>
+<p><strong>Entra-bérlő:</strong></p>
+<ul>
+    <li>a saját címtár GUID-ja kell (domain, <code>common</code> vagy <code>organizations</code> nem jó);</li>
+    <li>a regisztráció legyen egybérlős;</li>
+    <li>az <code>email</code> igény csak ellenőrzött állapotban számít, különben a felhasználónév (UPN) dönt.</li>
+</ul>
+<h3>Telefonközpont és automata menü</h3>
+<p><strong>Kulcs.</strong> A panelen <em>Rendszer › API-kulcsok</em>, „Call center / IVR” hatókörrel; vagy parancssorból: <code>docker compose exec web php artisan hdid:api-key:create "Telefonközpont" callcenter</code>. A kulcs egyszer jelenik meg.</p>
+<p><strong>Küldés.</strong> A kulcs az <code>X-Api-Key</code> fejlécben küldendő. Az <code>api_key</code> lekérdezési paraméter csak örökölt partnernek használható, mert webszerver-naplóba kerülhet; az access log itt nem rögzíti.</p>
+<p><strong>Aláírás.</strong> Választható HMAC-aláírás: <code>X-Timestamp</code> és <code>X-Signature</code> fejléc. Az aláírandó szöveg: időbélyeg, metódus, kéréscím a lekérdezéssel, törzs.</p>
+<p><strong>Leírás.</strong> A teljes gépi felület rendszergazdával belépve a <code>/docs/ivr</code> címen olvasható, a mobil kiszolgálóé a <code>/docs/mobile</code> címen.</p>
+
+<h2 id="s12"><span class="num">12</span>Ellenőrzés és biztonsági átvétel</h2>
+<h3>12.1 Működés</h3>
+<ul class="check">
+    <li><code>docker compose ps</code>: a <code>web</code> <code>healthy</code>, a <code>worker</code>, <code>sync-worker</code>, <code>scheduler</code> és <code>mariadb</code> fut, a <code>migrate</code> <code>exited (0)</code>.</li>
+    <li><code>docker compose exec web php artisan hdid:health</code> kilépési kódja 0; a Rendszerállapot oldalon az adatbázis, gyorsítótár, üzenetsor és ütemező zöld (az ütemező az első percben még piros lehet).</li>
+    <li>A <em>Rendszerállapot</em> fejlécében a futó verzió látszik (például „Verzió: 1.0.0”).</li>
+    <li>Próbalevél és próba-SMS megérkezik; a <em>Kimenő üzenetek</em> listában „elküldve”.</li>
+    <li>Az ügyféltörzs próbafuttatása hihető számokat ad, az éles átvétel sikeres.</li>
+    <li>Egy ügyfélnek küldött belépési hivatkozás beléptet a portálra; bekapcsolt SSO-nál a belépés végigmegy.</li>
+    <li>Telefonközponti próbahívás megjelenik a vezérlőpulton.</li>
+    <li>A <code>docker compose logs web</code> access logjában a kliensek valódi IP-címe látszik (2. fejezet).</li>
+</ul>
+<h3>12.2 Biztonsági próbák a gazdagépről</h3>
+<pre><code>H=hdid.example.org
+curl -sS -D - -o /dev/null https://$H/login          # 200, Cache-Control: no-store
+curl -sS -D - -o /dev/null https://$H/favicon.ico    # 200
+curl -sS -D - -o /dev/null https://$H/nincs.css      # 404, saját hibaoldal
+curl -sS -o /dev/null -w '%{http_code}\n' -X TRACE https://$H/   # 405
+curl -sS -o /dev/null -w '%{http_code}\n' https://$H/.env        # 404
+curl -sS -D - -o /dev/null http://$H/login           # 308 https://$H/login
+openssl s_client -connect $H:443 -servername $H -tls1_3 -verify_return_error -brief &lt;/dev/null   # siker
+openssl s_client -connect $H:443 -servername $H -tls1_2 -brief &lt;/dev/null                        # elutasítva</code></pre>
+<p>Elvárás: egyetlen válaszban sincs <code>Server</code> vagy <code>X-Powered-By</code> fejléc; a HSTS és a többi biztonsági fejléc pontosan egyszer szerepel; ismeretlen kiszolgálónévre a kézfogás elutasított. Belső CA esetén a CA-fájlt adja át (<code>--cacert</code>, <code>-CAfile</code>); a <code>-k</code> nem elfogadható bizonyíték.</p>
+<h3>12.3 OWASP-megfeleltetés</h3>
+<p>Alap: OWASP ASVS 5.0.0, Top 10:2025, OWASP Docker Security Cheat Sheet. A táblázat a konténeres telepítés védelmeit sorolja fel; teljes ASVS-megfelelőséget nem állít.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Terület</th><th>Védelem</th></tr></thead>
+<tbody>
+<tr><td>A02 hibás konfiguráció, ASVS V13</td><td>Nem root (uid 82), csak olvasható gyökér-fájlrendszer, minden Linux-képesség elvéve, <code>no-new-privileges</code>, setuid-bitek nélkül. Nincs Server/X-Powered-By fejléc, saját hibaoldal, csak az <code>index.php</code> fut. Hibás éles beállítással (debug, <code>*</code> proxy, nem biztonságos süti) a konténer nem indul.</td></tr>
+<tr><td>A03 ellátási lánc, A08 integritás, ASVS V15</td><td>Minden alapimage digesttel, minden letöltés SHA-256-tal rögzítve; az nginx-forrás PGP-aláírással ellenőrzött; lockfájlos build, <code>npm ci --ignore-scripts</code>. Kiadás előtt: gitleaks, <code>composer audit</code>, <code>npm audit</code>, Hadolint, Trivy (javítható HIGH/CRITICAL leletnél a kiadás megáll). Aláírt image (cosign), build provenance és SBOM-igazolás; a CI action-jei commit-SHA-ra rögzítve.</td></tr>
+<tr><td>A04 kriptográfia, ASVS V12</td><td>Kizárólag TLS 1.3, ML-KEM hibrid kulcscsere, HSTS, indításkori tanúsítvány-ellenőrzés; belső CA a tanúsítványtár mellé, a TLS-ellenőrzés nem kapcsolható ki.</td></tr>
+<tr><td>Titkok, ASVS V13.3</td><td>Az image-ben nincs titok (gitleaks és Trivy titokkeresés). Titok fájlból (<code>*_FILE</code>); konfigurációs gyorsítótár csak memóriában; a migrációs adatbázisfiók jelszava csak a <code>mariadb</code> és a <code>migrate</code> szolgáltatásnál.</td></tr>
+<tr><td>A09 naplózás, ASVS V16</td><td>Adatminimalizált JSON access log, forgatás, központi gyűjtés naplózó-meghajtóval, auditnapló az adatbázisban.</td></tr>
+<tr><td>Nyitott tételek</td><td>A CSP-ben a Livewire/Alpine miatt <code>unsafe-inline</code> és <code>unsafe-eval</code> van. Egyéb nyitott tételek: az alternatív belépési utak és az MFA (az SSO-szolgáltatónál írható elő), az abszolút munkamenetkorlát, az örökölt IVR URL-es kulcsa és módosító GET-hívásai. Ezek értékelése telepítésenként, felelőssel és határidővel történjen.</td></tr>
+</tbody></table></div>
+
+<h2 id="s13"><span class="num">13</span>Kipróbálás demóadatokkal</h2>
+<p>Tanúsítvány és külső rendszerek nélküli kipróbáláshoz a <code>.env</code> értékei:</p>
+<pre><code>APP_ENV=demo
+APP_URL=https://localhost
+OPENHDID_TLS=selfsigned
+OPENHDID_DEMO_DATA=true
+MAIL_MAILER=log
+SMS_DRIVER=log</code></pre>
+<p>Az indítás után a migráció egyszer betölti a demóadatokat:</p>
+<ul>
+    <li>ügyintéző: <code>agent@example.test</code>, jelszó <code>password-agent-1</code>;</li>
+    <li>prémium ügyfél: <code>anna@example.test</code>, PIN 123456;</li>
+    <li>normál ügyfél: <code>bela@example.test</code>;</li>
+    <li>két hét hívástörténet.</li>
+</ul>
+<p>Rendszergazdát a 3. fejezet 7. lépése szerint hozzon létre. A böngésző figyelmeztet az önaláírt tanúsítványra. A kimenő e-mailek és SMS-ek a <code>docker compose logs worker</code> kimenetében olvashatók.</p>
+<div class="callout danger"><p><strong>Csak kipróbáláshoz.</strong> A demófiókok jelszava nyilvános; <code>APP_ENV=production</code> mellett a demóadatok betöltése hibával leáll. Éles telepítéshez új, üres adatbázissal kezdjen.</p></div>
+
+<h2 id="s14"><span class="num">14</span>Frissítés új verzióra</h2>
+<ol class="steps">
+    <li>Olvassa el a kiadási jegyzetet (<a href="https://github.com/adamfhun/openhdid/releases">GitHub Releases</a>, <code>CHANGELOG.md</code>). Választhatóan ellenőrizze az image aláírását (üzemeltetési kézikönyv 8. fejezet).</li>
+    <li>Mentés: adatbázis, <code>storage</code> kötet, <code>.env</code>, <code>db.env</code>, <code>tls</code> (üzemeltetési kézikönyv 7. fejezet).</li>
+    <li>Az <code>OPENHDID_VERSION</code> átírása az új verzióra, majd:
+<pre><code>docker compose pull
+docker compose up -d
+docker compose ps</code></pre>
+    A <code>migrate</code> lefuttatja az új migrációkat, utána a szolgáltatások az új image-dzsel indulnak újra. Egyetlen webpéldánynál ez néhány másodperces kiesés; kiesés nélküli frissítéshez több példány kell terheléselosztó mögött.</li>
+    <li>Ellenőrzés a 12.1 pont szerint.</li>
+</ol>
+<p>A platform frissítése (PHP, nginx, OpenSSL, Alpine) új javítóverzióként jelenik meg, a frissítés menete ugyanez. A kiadott címkék (például <code>1.0.0</code>) soha nem változnak, ezért egy telepítés mindig pontosan reprodukálható.</p>
+
+<h2 id="roviditesek">Rövidítésjegyzék</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>Rövidítés</th><th>Jelentés</th></tr></thead>
+<tbody>
+<tr><td>EMD</td><td>Enterprise Master Data; magyarul ügyféltörzs. A munkatársi és ügyféladatok közös külső törzsadatforrása; a parancsok (<code>hdid:emd-sync</code>) és a telepítési kulcsok (<code>EMD_SYNC_*</code>) viselik a rövidítést.</td></tr>
+<tr><td>ACME</td><td>Automatic Certificate Management Environment – automatikus tanúsítványkiadási protokoll.</td></tr>
+<tr><td>API</td><td>Application Programming Interface – gépi alkalmazási felület.</td></tr>
+<tr><td>ASVS</td><td>Application Security Verification Standard – tételes alkalmazásbiztonsági ellenőrzési követelmények (OWASP).</td></tr>
+<tr><td>CA</td><td>Certificate Authority – tanúsítványkiadó.</td></tr>
+<tr><td>CSP</td><td>Content Security Policy – a böngészőben betölthető és futtatható tartalom szabályzata.</td></tr>
+<tr><td>FPM</td><td>FastCGI Process Manager – a PHP folyamatkezelője.</td></tr>
+<tr><td>GHCR</td><td>GitHub Container Registry – a GitHub konténer-image tára.</td></tr>
+<tr><td>HSTS</td><td>HTTP Strict Transport Security – a böngészőt HTTPS használatára kötelező szabály.</td></tr>
+<tr><td>ML-KEM</td><td>Module-Lattice Key Encapsulation Mechanism – poszt-kvantum kulcscsere-eljárás (FIPS 203).</td></tr>
+<tr><td>OIDC, SSO</td><td>OpenID Connect; Single Sign-On – egyszeri, vállalati bejelentkezés.</td></tr>
+<tr><td>OWASP</td><td>Open Worldwide Application Security Project – nyílt alkalmazásbiztonsági közösség és útmutatók.</td></tr>
+<tr><td>SAN</td><td>Subject Alternative Name – a tanúsítványban felsorolt nevek.</td></tr>
+<tr><td>SBOM</td><td>Software Bill of Materials – az image összetevőinek jegyzéke.</td></tr>
+<tr><td>SNI</td><td>Server Name Indication – a kért kiszolgálónév a TLS-kézfogásban.</td></tr>
+<tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
+</tbody></table></div>
+
+<div class="foot">OpenHDID telepítési útmutató 1.0 · 2026. szeptember 23. · OpenHDID 1.0.0</div>
+</div>
+
+</body>
+</html>

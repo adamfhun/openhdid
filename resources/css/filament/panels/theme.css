@@ -1,0 +1,237 @@
+@import '../../../../vendor/filament/filament/resources/css/theme.css';
+
+/* One theme for the single staff panel: scans every custom view and page we ship. */
+@source '../../../../app/Filament/**/*';
+@source '../../../../resources/views/filament/**/*';
+
+/*
+ * The colour scheme comes from Settings → Branding as CSS variables
+ * (--brand-primary, --brand-accent, --brand-background, --brand-surface,
+ * --brand-text, --brand-muted), injected into <head> by BrandedPanel.
+ * Filament's own primary palette is generated from the same primary colour.
+ */
+:root {
+    --hdid-radius: 0.9rem;
+}
+
+/* Dark mode keeps the brand primary/accent but swaps the neutral surfaces. */
+:root.dark {
+    --brand-background: #0f1115;
+    --brand-surface: #171a1f;
+    --brand-text: #e5e7eb;
+    --brand-muted: #9aa3ad;
+}
+
+.fi-body,
+.fi-layout,
+.fi-main-ctn {
+    background-color: var(--brand-background, #f4f5f6);
+    color: var(--brand-text, #1e252d);
+}
+
+.fi-sidebar {
+    background: var(--brand-surface, #fff);
+    border-right: 1px solid color-mix(in oklab, var(--brand-primary) 14%, transparent);
+}
+
+.dark .fi-sidebar {
+    border-right-color: rgb(255 255 255 / 0.06);
+}
+
+.dark .fi-section,
+.dark .fi-ta-ctn,
+.dark .fi-wi-stats-overview-stat,
+.dark .fi-wi-chart,
+.dark .fi-fo-tabs {
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+    border: 1px solid rgb(255 255 255 / 0.06);
+}
+
+.fi-sidebar-header {
+    background: var(--brand-primary);
+}
+
+.fi-sidebar-header .fi-logo {
+    color: #fff;
+}
+
+.fi-sidebar-group-label {
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 0.68rem;
+    color: var(--brand-muted);
+}
+
+.fi-sidebar-item-btn {
+    border-radius: 0.6rem;
+}
+
+.fi-sidebar-item-active .fi-sidebar-item-btn {
+    background: color-mix(in oklab, var(--brand-primary) 10%, transparent);
+}
+
+.fi-topbar {
+    background: var(--brand-primary);
+    border-bottom: 0;
+}
+
+.fi-topbar .fi-logo,
+.fi-topbar .fi-icon-btn,
+.fi-topbar .fi-topbar-nav-item,
+.fi-topbar .fi-breadcrumbs-item {
+    color: #fff;
+}
+
+.fi-topbar .fi-icon-btn:hover {
+    background: rgb(255 255 255 / 0.12);
+}
+
+.fi-section,
+.fi-ta-ctn,
+.fi-wi-stats-overview-stat,
+.fi-wi-chart,
+.fi-fo-tabs {
+    background: var(--brand-surface, #fff);
+    border-radius: var(--hdid-radius);
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.05), 0 8px 24px -16px rgb(15 23 42 / 0.15);
+}
+
+.fi-wi-stats-overview-stat {
+    border-left: 4px solid var(--brand-accent);
+}
+
+.fi-fo-field.hdid-dashboard-period {
+    @apply flex flex-wrap items-center justify-center gap-x-4 gap-y-2;
+}
+
+.hdid-dashboard-period > .fi-fo-field-content-col {
+    @apply w-48 max-w-full flex-none;
+}
+
+.fi-header-heading {
+    letter-spacing: -0.02em;
+    color: var(--brand-text);
+}
+
+.fi-simple-page .fi-simple-main {
+    background: var(--brand-surface, #fff);
+    border-radius: 1.25rem;
+    box-shadow: 0 24px 60px -30px rgb(15 23 42 / 0.4);
+}
+
+.fi-simple-layout {
+    background:
+        radial-gradient(ellipse at 20% 0%, color-mix(in oklab, var(--brand-primary) 26%, transparent), transparent 55%),
+        radial-gradient(ellipse at 100% 100%, color-mix(in oklab, var(--brand-accent) 22%, transparent), transparent 50%),
+        var(--brand-background, #f4f5f6);
+}
+
+/*
+ * Page header actions must never push the page wider than the screen: the
+ * Hungarian labels are long and a client page carries up to seven buttons.
+ * Filament pins the action container to its content width (shrink-0); here it
+ * may shrink, wrap its buttons, and drop under the heading when there is no room.
+ */
+.fi-header {
+    flex-wrap: wrap;
+}
+
+.fi-header-actions-ctn {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.fi-header-actions-ctn > .fi-ac:not(.fi-width-full) {
+    flex-wrap: wrap;
+    row-gap: 0.5rem;
+}
+
+.fi-header-actions-ctn .fi-btn {
+    max-width: 100%;
+}
+
+/* Identification page building blocks */
+.hdid-answer-card {
+    border-radius: var(--hdid-radius);
+    background: color-mix(in oklab, var(--brand-primary) 8%, transparent);
+    border: 1px dashed color-mix(in oklab, var(--brand-primary) 45%, transparent);
+}
+
+/* Dictated identification code: one box per digit, visually grouped in pairs. */
+.hdid-dictation-code.fi-one-time-code-input-ctn > .fi-one-time-code-input-digit:nth-child(2n):not(:last-child) {
+    margin-inline-end: 1.25rem;
+}
+
+/* On a phone the eight boxes do not fit in one row: two rows of two pairs. */
+@media (max-width: 640px) {
+    .hdid-dictation-code.fi-one-time-code-input-ctn {
+        display: grid;
+        grid-template-columns: repeat(4, max-content);
+        row-gap: 0.75rem;
+        max-width: 100%;
+    }
+
+    .hdid-dictation-code.fi-one-time-code-input-ctn > .fi-one-time-code-input-digit:nth-child(4n) {
+        margin-inline-end: 0;
+    }
+}
+
+/* Level switch in the top bar: what the agent is looking at right now. */
+.hdid-tier-switch { position: relative; margin-inline-end: 1rem; }
+.hdid-tier-pill {
+    display: inline-flex; align-items: center; gap: 0.6rem;
+    padding: 0.3rem 0.85rem 0.3rem 0.6rem; border-radius: 999px;
+    border: 1px solid transparent; cursor: pointer; line-height: 1.1; text-align: left;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.hdid-tier-pill:not(:disabled):hover { transform: translateY(-1px); }
+.hdid-tier-pill:disabled { cursor: default; }
+.hdid-tier-eyebrow { display: block; font-size: 0.6rem; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.8; }
+.hdid-tier-name { display: block; font-size: 0.95rem; font-weight: 700; letter-spacing: 0.01em; }
+.hdid-tier-dot { width: 0.6rem; height: 0.6rem; border-radius: 999px; background: currentColor; box-shadow: 0 0 0 0 currentColor; flex: none; }
+.hdid-tier-chevron { width: 1rem; height: 1rem; opacity: 0.8; }
+.hdid-tier-pill-premium {
+    color: #3b2c00;
+    background: linear-gradient(135deg, #fff2b8 0%, #e6c04b 45%, #c9a227 100%);
+    border-color: #b8901a;
+    box-shadow: 0 0 0 3px rgb(201 162 39 / 0.25), 0 6px 18px -8px rgb(201 162 39 / 0.9);
+}
+.hdid-tier-pill-premium .hdid-tier-dot { animation: hdid-tier-pulse 1.8s ease-out infinite; }
+.hdid-tier-pill-standard {
+    color: #fff; background: var(--brand-primary); border-color: color-mix(in oklab, var(--brand-primary) 70%, black);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--brand-primary) 22%, transparent);
+}
+.hdid-tier-pill-all {
+    color: #fff;
+    background: linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-primary) 55%, #c9a227 100%);
+    border-color: color-mix(in oklab, var(--brand-primary) 70%, black);
+    box-shadow: 0 0 0 3px rgb(201 162 39 / 0.22);
+}
+.hdid-tier-menu {
+    position: absolute; z-index: 40; inset-inline-end: 0; top: calc(100% + 0.4rem); min-width: 13rem;
+    padding: 0.35rem; border-radius: 0.75rem; background: var(--brand-surface, #fff);
+    border: 1px solid color-mix(in oklab, var(--brand-primary) 18%, transparent);
+    box-shadow: 0 12px 32px -12px rgb(0 0 0 / 0.35);
+}
+.hdid-tier-option {
+    display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.7rem; border-radius: 0.5rem;
+    font-size: 0.9rem; font-weight: 600; color: var(--brand-text, #1e252d); text-decoration: none;
+    width: 100%; background: none; border: 0; text-align: start; cursor: pointer; font-family: inherit;
+}
+.hdid-tier-option:hover { background: color-mix(in oklab, var(--brand-primary) 8%, transparent); }
+.hdid-tier-option.is-current { background: color-mix(in oklab, var(--brand-primary) 12%, transparent); }
+.hdid-tier-option .hdid-tier-dot { color: var(--brand-primary); }
+.hdid-tier-option.is-premium .hdid-tier-dot { color: #c9a227; }
+.hdid-tier-check { width: 1rem; height: 1rem; margin-inline-start: auto; color: var(--brand-primary); }
+@keyframes hdid-tier-pulse {
+    0% { box-shadow: 0 0 0 0 rgb(59 44 0 / 0.45); }
+    70% { box-shadow: 0 0 0 7px rgb(59 44 0 / 0); }
+    100% { box-shadow: 0 0 0 0 rgb(59 44 0 / 0); }
+}
+@media (prefers-reduced-motion: reduce) { .hdid-tier-pill-premium .hdid-tier-dot { animation: none; } }
+
+/* Footer link to the published source of the running build (only when HDID_SOURCE_URL is set). */
+.hdid-source-link { padding: 1rem 0 1.25rem; text-align: center; font-size: 0.75rem; }
+.hdid-source-link a { color: var(--brand-muted, #5e6975); text-decoration: none; }
+.hdid-source-link a:hover { color: var(--brand-primary); text-decoration: underline; }

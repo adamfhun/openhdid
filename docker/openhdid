@@ -1,0 +1,158 @@
+#!/bin/sh
+# OpenHDID container entrypoint. Prepares the runtime from the environment and
+# starts one role:
+#
+#   web                 nginx + PHP-FPM (portal, staff panel, APIs)
+#   worker [queues]     queue worker; queues default to "default"
+#   scheduler           Laravel scheduler (replaces cron), exactly one per installation
+#   migrate             waits for the database, runs migrations and the role seeder
+#   artisan <args>      any artisan command, e.g. artisan hdid:make-admin admin@example.org
+#   key                 prints a new APP_KEY for a new installation (never replace a live key)
+#   reload              re-checks the TLS files and reloads nginx without dropping connections
+#   tls-check           validates the mounted certificate and key, prints a summary
+#   healthcheck         used by the image HEALTHCHECK
+#   version             prints the release version
+set -eu
+
+APP_DIR=/app
+SHARE=/usr/local/share/openhdid
+RUNTIME=/tmp/openhdid
+
+log() { printf '%s openhdid: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; }
+die() { log "ERROR: $*"; exit 64; }
+
+# NAME_FILE=/run/secrets/x becomes NAME=<file content> (Docker and Kubernetes secrets).
+load_file_secrets() {
+    for name in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)_FILE=.*/\1/p'); do
+        file=$(printenv "${name}_FILE")
+        [ -r "$file" ] || die "${name}_FILE points to a file that cannot be read: $file"
+        if [ -n "$(printenv "$name" 2>/dev/null || true)" ]; then
+            die "both $name and ${name}_FILE are set; keep only one"
+        fi
+        value=$(cat "$file")
+        export "$name=$value"
+        unset "${name}_FILE"
+    done
+}
+
+prepare_dirs() {
+    mkdir -p "$RUNTIME/cache" "$RUNTIME/views" "$RUNTIME/run" "$RUNTIME/php" \
+        "$RUNTIME/nginx/body" "$RUNTIME/nginx/fastcgi" "$RUNTIME/tls"
+    for dir in app/public app/private framework/cache/data framework/sessions framework/views logs; do
+        mkdir -p "$APP_DIR/storage/$dir" 2>/dev/null || die "storage volume is not writable by uid $(id -u) ($APP_DIR/storage/$dir)"
+    done
+    [ -w "$APP_DIR/storage/app" ] || die "storage volume is not writable by uid $(id -u) ($APP_DIR/storage/app)"
+}
+
+# Extra CA certificates (internal Exchange, SSO, EMD or database CA) mounted as *.crt / *.pem.
+prepare_ca_bundle() {
+    extra=$(find /etc/openhdid/ca -maxdepth 1 -type f \( -name '*.crt' -o -name '*.pem' \) 2>/dev/null | sort)
+    [ -n "$extra" ] || return 0
+    # shellcheck disable=SC2086
+    cat /etc/ssl/certs/ca-certificates.crt $extra > "$RUNTIME/ca-bundle.pem"
+    printf 'openssl.cafile = %s\ncurl.cainfo = %s\n' "$RUNTIME/ca-bundle.pem" "$RUNTIME/ca-bundle.pem" > "$RUNTIME/php/zz-ca.ini"
+    log "trusting $(printf '%s\n' "$extra" | wc -l | tr -d ' ') extra CA file(s) from /etc/openhdid/ca"
+}
+
+warm_caches() {
+    cd "$APP_DIR"
+    php artisan config:cache --no-interaction >/dev/null
+    php artisan route:cache --no-interaction >/dev/null
+    php artisan event:cache --no-interaction >/dev/null
+    if [ "$1" = web ]; then
+        php artisan view:cache --no-interaction >/dev/null
+    fi
+}
+
+prepare() {
+    role=$1
+    load_file_secrets
+    prepare_dirs
+    prepare_ca_bundle
+    printf '%s\n' "$role" > "$RUNTIME/role"
+    php "$SHARE/runtime.php" check-env "$role"
+    warm_caches "$role"
+}
+
+render_nginx() {
+    php "$SHARE/runtime.php" nginx-config > "$RUNTIME/nginx/nginx.conf.new"
+    nginx -t -q -e stderr -c "$RUNTIME/nginx/nginx.conf.new"
+    mv "$RUNTIME/nginx/nginx.conf.new" "$RUNTIME/nginx/nginx.conf"
+}
+
+run_web() {
+    render_nginx
+    php-fpm -F -y /usr/local/etc/php-fpm.conf &
+    fpm=$!
+    nginx -e stderr -c "$RUNTIME/nginx/nginx.conf" -g 'daemon off;' &
+    ngx=$!
+    stopping=0
+    # Graceful stop: nginx finishes open requests, PHP-FPM its running scripts.
+    trap 'stopping=1; kill -QUIT "$ngx" "$fpm" 2>/dev/null || true' TERM INT QUIT
+    log "web started (nginx $ngx, php-fpm $fpm)"
+    while kill -0 "$fpm" 2>/dev/null && kill -0 "$ngx" 2>/dev/null; do
+        sleep 1 &
+        wait $! || true
+    done
+    [ "$stopping" = 1 ] || log "a web process exited unexpectedly; stopping the container"
+    kill -QUIT "$ngx" "$fpm" 2>/dev/null || true
+    wait "$ngx" 2>/dev/null || true
+    wait "$fpm" 2>/dev/null || true
+    [ "$stopping" = 1 ] && exit 0
+    exit 1
+}
+
+cmd=${1:-web}
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+    web)
+        prepare web
+        run_web
+        ;;
+    worker)
+        queues=${1:-${OPENHDID_WORKER_QUEUES:-default}}
+        prepare worker
+        log "worker listening on queue(s): $queues"
+        exec php artisan queue:work --queue="$queues" --sleep=3 --tries=1 --max-time=3600 --memory=256 --no-interaction
+        ;;
+    scheduler)
+        prepare scheduler
+        log "scheduler started"
+        exec php artisan schedule:work --no-interaction
+        ;;
+    migrate)
+        prepare migrate
+        php "$SHARE/runtime.php" wait-db
+        php artisan migrate --force --no-interaction
+        php artisan db:seed --class='Database\Seeders\RolesAndPermissionsSeeder' --force --no-interaction
+        php "$SHARE/runtime.php" demo-data
+        log "database is up to date"
+        ;;
+    artisan)
+        prepare artisan
+        exec php artisan "$@"
+        ;;
+    key)
+        php -r 'echo "base64:", base64_encode(random_bytes(32)), PHP_EOL;'
+        ;;
+    reload)
+        load_file_secrets
+        render_nginx
+        nginx -e stderr -c "$RUNTIME/nginx/nginx.conf" -s reload
+        log "nginx reloaded"
+        ;;
+    tls-check)
+        load_file_secrets
+        exec php "$SHARE/runtime.php" tls-check
+        ;;
+    healthcheck)
+        exec php "$SHARE/runtime.php" healthcheck
+        ;;
+    version)
+        printf '%s\n' "${HDID_VERSION:-unknown}"
+        ;;
+    *)
+        die "unknown command '$cmd' (web, worker, scheduler, migrate, artisan, key, reload, tls-check, healthcheck, version)"
+        ;;
+esac

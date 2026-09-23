@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Helpdesk ID">
+    <title>Helpdesk ID</title>
+    <defs>
+        <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#4A6178"/>
+            <stop offset="1" stop-color="#36495D"/>
+        </linearGradient>
+    </defs>
+
+    <rect width="64" height="64" rx="15" fill="url(#tile)"/>
+
+    <!-- The caller: head and shoulders, the one shape that still reads at 16 px. -->
+    <g fill="#FFFFFF">
+        <circle cx="29" cy="22.5" r="9.5"/>
+        <path d="M11.5 52 a17.5 17.5 0 0 1 35 0 z"/>
+    </g>
+
+    <!-- Identified: the premium gold check, ringed against the tile. -->
+    <circle cx="47" cy="46.5" r="13.5" fill="#36495D"/>
+    <circle cx="47" cy="46.5" r="11" fill="#C9A227"/>
+    <path d="M42 46.9 L45.6 50.5 L52 43.7" fill="none" stroke="#36495D" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

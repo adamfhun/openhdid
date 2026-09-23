@@ -1,0 +1,21 @@
+{
+    "name": "openhdid",
+    "private": true,
+    "license": "AGPL-3.0-or-later",
+    "$schema": "https://www.schemastore.org/package.json",
+    "type": "module",
+    "scripts": {
+        "build": "vite build",
+        "dev": "vite"
+    },
+    "devDependencies": {
+        "@tailwindcss/vite": "^4.3.3",
+        "@vitejs/plugin-vue": "^6.0.8",
+        "fontaine": "^0.8.2",
+        "laravel-vite-plugin": "^3.1",
+        "tailwindcss": "^4.3.3",
+        "vite": "^8.0.0",
+        "vue": "^3.5.42",
+        "vue-router": "^5.3.1"
+    }
+}

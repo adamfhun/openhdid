@@ -1,0 +1,41 @@
+# Helyi beállítások, titkok, tanúsítványok: soha nem kerülnek a repóba.
+/.env
+/.env.*
+!/.env.example
+/db.env
+/tls/
+/ca/
+
+# Függőségek és build-kimenet.
+/node_modules/
+/vendor/
+/public/build/
+/public/hot
+/public/storage
+/public/css/filament/
+/public/js/filament/
+/public/fonts/filament/
+/database/*.sqlite*
+/storage/*.key
+/.phpunit.cache/
+.phpunit.result.cache
+
+# Szerkesztők, IDE-k és AI-eszközök helyi fájljai.
+.idea/
+.vscode/
+.fleet/
+.zed/
+.nova/
+.cursor/
+.windsurf/
+.claude/
+.junie/
+.codex/
+.agents/
+.ai/
+.aider*
+.continue/
+.mcp.json
+*.swp
+.DS_Store
+Thumbs.db
