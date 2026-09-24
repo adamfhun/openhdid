@@ -68,11 +68,53 @@ class Messenger
         return $message;
     }
 
+    /**
+     * Queue a failed message again. A message whose secret body was wiped
+     * after the final failure cannot go out again (it would be empty); the
+     * caller issues a new PIN, code or link instead.
+     *
+     * @throws MessageNotRetryableException
+     */
     public function retry(OutboundMessage $message): void
     {
-        OutboundMessage::query()->whereKey($message->id)->update(['status' => OutboundMessageStatus::Queued, 'attempts' => 0, 'error' => null, 'updated_at' => now()]);
+        if ($message->isRedacted()) {
+            throw new MessageNotRetryableException($message);
+        }
+
+        $changed = OutboundMessage::query()
+            ->whereKey($message->id)
+            ->where('status', OutboundMessageStatus::Failed)
+            ->whereNull('redacted_at')
+            ->update(['status' => OutboundMessageStatus::Queued, 'attempts' => 0, 'error' => null, 'updated_at' => now()]);
+
+        if ($changed !== 1) {
+            throw new MessageNotRetryableException($message->fresh() ?? $message);
+        }
+
         $message->refresh();
         $this->dispatch($message);
+    }
+
+    /**
+     * Withdraw a message that is still waiting in the queue and wipe its
+     * secret. False when a worker already picked it up: that send finishes
+     * on its own and the worker redacts the row.
+     */
+    public function cancel(OutboundMessage $message): bool
+    {
+        $changed = OutboundMessage::query()
+            ->whereKey($message->id)
+            ->where('status', OutboundMessageStatus::Queued)
+            ->update(['status' => OutboundMessageStatus::Cancelled, 'updated_at' => now()]);
+
+        if ($changed !== 1) {
+            return false;
+        }
+
+        $message->refresh();
+        $message->redactSecret();
+
+        return true;
     }
 
     public function dispatch(OutboundMessage $message): void

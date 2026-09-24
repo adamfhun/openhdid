@@ -190,16 +190,21 @@ class CallCenterService
 
     /**
      * The agent lets go of a call they hold (wrong pick-up, hand-back to the
-     * queue); the call stays ongoing without an agent.
-     */
-    /**
-     * @throws ValidationException when the caller has already been identified on this call
+     * queue); the call stays ongoing without an agent. Ownership is decided
+     * on the row re-read inside the lock: a release that started before a
+     * colleague's take-over must not free the colleague's call.
+     *
+     * @throws ValidationException when another agent holds the call by now, or the caller has already been identified on it
      */
     public function release(Call $call, User $agent): Call
     {
         return $this->underCallLock($call, function (Call $call) use ($agent): Call {
             if ($call->agent_user_id === null) {
                 return $call;
+            }
+
+            if (! $call->isHeldBy($agent)) {
+                throw ValidationException::withMessages(['call' => __('This call is no longer yours: a colleague has taken it over, so you cannot hand it back to the queue.')]);
             }
 
             if ($call->isIdentified()) {
@@ -226,16 +231,17 @@ class CallCenterService
     }
 
     /**
-     * A supplied call must be held by this agent and belong to a handled tier.
-     * A missing or forbidden id must never silently become a call-free check.
+     * A supplied call must be attachable by this agent (held by them, or a
+     * missed call nobody handled yet) and belong to a handled tier. A missing
+     * or forbidden id must never silently become a call-free check.
      */
-    public function heldCallForAgent(string $callId, User $agent, bool $lock = false): Call
+    public function attachableCallForAgent(string $callId, User $agent, bool $lock = false): Call
     {
         $call = Call::query()->whereKey($callId)
             ->when($lock, fn ($query) => $query->lockForUpdate())
             ->first();
 
-        if ($call === null || ! $call->isHeldBy($agent)
+        if ($call === null || ! $call->isAttachableBy($agent)
             || ! in_array($call->tier, $agent->handledTiers(), true)) {
             throw new AuthorizationException;
         }
@@ -246,7 +252,7 @@ class CallCenterService
     public function verifyCodeForAgent(string $code, User $agent, ?string $callId = null): ?IdSession
     {
         return DB::transaction(function () use ($code, $agent, $callId): ?IdSession {
-            $call = $callId === null ? null : $this->heldCallForAgent($callId, $agent, lock: true);
+            $call = $callId === null ? null : $this->attachableCallForAgent($callId, $agent, lock: true);
             $session = $this->mobileOtp->verifyCode($code, IdChannel::Manual, $agent, $call);
 
             if ($session !== null && $call !== null && $call->client_id !== $session->client_id) {

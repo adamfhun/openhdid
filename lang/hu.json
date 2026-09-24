@@ -1169,5 +1169,15 @@
     "EMD_SYNC_API_URL is not configured.": "Az EMD_SYNC_API_URL nincs beállítva: adja meg az ügyféltörzs-export címét.",
     "An EMD sync has been waiting on the \":queue\" queue for :minutes minutes; no worker seems to listen on it.": "Egy ügyféltörzs-átvétel :minutes perce vár a(z) „:queue” soron; úgy tűnik, egyetlen feldolgozó sem figyeli ezt a sort.",
     "Version :version": "Verzió: :version",
-    "Source code": "Forráskód"
+    "Source code": "Forráskód",
+    "Only a SuperAdmin can grant the SuperAdmin role.": "A főrendszergazda (SuperAdmin) szerepkört csak főrendszergazda adhatja ki.",
+    "The SuperAdmin role can only be granted by a SuperAdmin.": "A főrendszergazda (SuperAdmin) szerepkört csak főrendszergazda adhatja meg.",
+    "Repeated external ids": "Ismételt külső azonosítók",
+    "sync-skip.duplicate": "ismételt külső azonosító (az első előfordulás számít)",
+    "This message cannot be retried: its confidential content was wiped after the final failure. Issue a new PIN, code or login link instead.": "Ez az üzenet nem küldhető újra: a bizalmas tartalmát a végleges hiba után a rendszer törölte. Adjon ki helyette új PIN-kódot, kódot vagy belépési hivatkozást.",
+    "Only a failed message can be retried.": "Csak sikertelen üzenet küldhető újra.",
+    "The confidential content was wiped after the final failure; send a new message instead.": "A bizalmas tartalom a végleges hiba után törlődött; küldjön helyette új üzenetet.",
+    "The message was already picked up for sending and cannot be cancelled.": "Az üzenetet a küldő már felvette, ezért nem vonható vissza.",
+    "This call is no longer yours: a colleague has taken it over, so you cannot hand it back to the queue.": "Ez a hívás már nem az Öné: egy kollégája átvette, ezért nem adhatja vissza a hívósorba.",
+    "A closed client cannot get new linked clients. Reopen it first.": "Lezárt ügyfélhez nem kapcsolható új ügyfél. Előbb nyissa újra."
 }

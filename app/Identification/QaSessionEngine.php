@@ -15,6 +15,7 @@ use App\Models\IdSessionStep;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -49,35 +50,39 @@ class QaSessionEngine
             throw new IdentificationException(__('The client has not answered enough questions (:n required).', ['n' => $this->answers->requiredCount()]));
         }
 
-        // Only another question-and-answer session blocks a new one: a PIN or
-        // a manual session is decided in the same request, and a row left
-        // open by a failure must not lock the client out for good.
-        $open = IdSession::query()->open()->where('client_id', $client->id)->where('method', IdMethod::QuestionAnswer)->with('agent')->latest('id')->first();
-        if ($open !== null && $open->agent_user_id === $agent->id) {
-            return $open;
-        }
+        // The open-session check and the insert share the client's lock, so
+        // two agents starting at the same moment cannot both open a session.
+        return Cache::lock('hdid:qa:'.$client->id, 10)->block(5, function () use ($client, $agent, $call, $channel): IdSession {
+            // Only another question-and-answer session blocks a new one: a PIN or
+            // a manual session is decided in the same request, and a row left
+            // open by a failure must not lock the client out for good.
+            $open = IdSession::query()->open()->where('client_id', $client->id)->where('method', IdMethod::QuestionAnswer)->with('agent')->latest('id')->first();
+            if ($open !== null && $open->agent_user_id === $agent->id) {
+                return $open;
+            }
 
-        if ($open !== null) {
-            throw new IdentificationException(__('Another agent (:name) is already identifying this client.', ['name' => $open->agent?->name ?? '?']));
-        }
+            if ($open !== null) {
+                throw new IdentificationException(__('Another agent (:name) is already identifying this client.', ['name' => $open->agent?->name ?? '?']));
+            }
 
-        $session = IdSession::query()->create([
-            'client_id' => $client->id,
-            'agent_user_id' => $agent->id,
-            'call_id' => $call?->id,
-            'channel' => $channel,
-            'method' => IdMethod::QuestionAnswer,
-            'status' => IdSessionStatus::Open,
-            'required_accepted' => $this->settings->int(SettingKey::QaMinAcceptedToPass),
-            'max_questions' => $this->settings->int(SettingKey::QaMaxQuestionsPerSession),
-            'max_rejected' => $this->settings->int(SettingKey::QaMaxRejectedToFail),
-            'started_at' => now(),
-            'expires_at' => now()->addMinutes($this->settings->int(SettingKey::QaSessionTtlMinutes)),
-        ]);
+            $session = IdSession::query()->create([
+                'client_id' => $client->id,
+                'agent_user_id' => $agent->id,
+                'call_id' => $call?->id,
+                'channel' => $channel,
+                'method' => IdMethod::QuestionAnswer,
+                'status' => IdSessionStatus::Open,
+                'required_accepted' => $this->settings->int(SettingKey::QaMinAcceptedToPass),
+                'max_questions' => $this->settings->int(SettingKey::QaMaxQuestionsPerSession),
+                'max_rejected' => $this->settings->int(SettingKey::QaMaxRejectedToFail),
+                'started_at' => now(),
+                'expires_at' => now()->addMinutes($this->settings->int(SettingKey::QaSessionTtlMinutes)),
+            ]);
 
-        $this->auditor->record('id_session.started', $session, ['client_id' => $client->id, 'call_id' => $call?->id], $agent);
+            $this->auditor->record('id_session.started', $session, ['client_id' => $client->id, 'call_id' => $call?->id], $agent);
 
-        return $session;
+            return $session;
+        });
     }
 
     /**
@@ -224,12 +229,16 @@ class QaSessionEngine
     {
         $count = 0;
 
+        // chunkById pages on the key: the finished rows leave the filter, so
+        // an offset-paged walk would skip every row beyond the first page.
         IdSession::query()->open()
             ->where('client_id', $client->id)
             ->when($agent !== null, fn ($query) => $query->where('agent_user_id', $agent->id))
-            ->each(function (IdSession $session) use ($reason, &$count): void {
-                $this->finish($session, IdSessionStatus::Cancelled, $reason);
-                $count++;
+            ->chunkById(200, function ($sessions) use ($reason, &$count): void {
+                foreach ($sessions as $session) {
+                    $this->finish($session, IdSessionStatus::Cancelled, $reason);
+                    $count++;
+                }
             });
 
         return $count;
@@ -243,13 +252,17 @@ class QaSessionEngine
         $count = 0;
 
         // Sessions without a deadline (PIN, manual) are decided in the same
-        // request; one left open by a failure is closed by age.
+        // request; one left open by a failure is closed by age. chunkById
+        // pages on the key without an extra orderBy, because the expired
+        // rows leave the filter and an offset walk would skip the rest.
         IdSession::query()->open()
             ->where(fn ($query) => $query->where('expires_at', '<', now())
                 ->orWhere(fn ($stale) => $stale->whereNull('expires_at')->where('started_at', '<', now()->subMinutes($this->settings->int(SettingKey::QaSessionTtlMinutes)))))
-            ->each(function (IdSession $session) use (&$count): void {
-                $this->finish($session, IdSessionStatus::Expired, 'timeout');
-                $count++;
+            ->chunkById(200, function ($sessions) use (&$count): void {
+                foreach ($sessions as $session) {
+                    $this->finish($session, IdSessionStatus::Expired, 'timeout');
+                    $count++;
+                }
             });
 
         return $count;

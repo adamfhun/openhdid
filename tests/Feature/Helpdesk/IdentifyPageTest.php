@@ -106,6 +106,80 @@ it('lists missed calls with an identify link and lets the agent mark them handle
     Livewire::test(MissedCallsWidget::class)->assertCountTableRecords(0);
 });
 
+it('links a manual identification started from the missed-calls list to that call', function (): void {
+    $missed = Call::factory()->create(['status' => CallStatus::Missed, 'client_id' => $this->client->id, 'ended_at' => now()]);
+
+    Livewire::test(MissedCallsWidget::class)
+        ->assertCanSeeTableRecords([$missed])
+        ->assertTableActionHasUrl('identify', Identify::getUrl(['client' => $this->client->id, 'call' => $missed->id]), $missed);
+
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $missed->id])
+        ->assertSee(__('Call'))
+        ->callAction('manualIdentify', data: ['reason' => 'Visszahívtam a rögzített számon, egyeztettük.'])
+        ->assertHasNoActionErrors();
+
+    $session = IdSession::query()->where('method', IdMethod::Manual)->first();
+
+    expect($session)->not->toBeNull()
+        ->and($session->status)->toBe(IdSessionStatus::Passed)
+        ->and($session->call_id)->toBe($missed->id)
+        ->and($missed->fresh()->isIdentified())->toBeTrue();
+});
+
+it('links a pin verification started from the missed-calls list to that call', function (): void {
+    $missed = Call::factory()->create(['status' => CallStatus::Missed, 'client_id' => $this->client->id, 'ended_at' => now()]);
+    app(Settings::class)->set(SettingKey::PinAgentVerificationEnabled, true);
+    app(PinService::class)->setPin($this->client, '123456');
+
+    $page = Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $missed->id])
+        ->call('chooseMethod', 'pin')
+        ->set('pin', '123456')
+        ->call('verifyPin');
+
+    $session = IdSession::query()->where('method', IdMethod::Pin)->first();
+
+    expect($session)->not->toBeNull()
+        ->and($session->status)->toBe(IdSessionStatus::Passed)
+        ->and($session->call_id)->toBe($missed->id)
+        ->and($missed->fresh()->isIdentified())->toBeTrue();
+
+    // The page reads the outcome "by call", so without the link it would not
+    // even show the agent that the caller has just been identified.
+    $page->assertSee(__('Identified'));
+});
+
+it('links a question-answer session started from the missed-calls list to that call', function (): void {
+    $missed = Call::factory()->create(['status' => CallStatus::Missed, 'client_id' => $this->client->id, 'ended_at' => now()]);
+
+    $page = Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $missed->id])
+        ->call('startQa');
+
+    $session = IdSession::query()->where('method', IdMethod::QuestionAnswer)->first();
+    expect($session)->not->toBeNull()
+        ->and($session->call_id)->toBe($missed->id);
+
+    $page->call('judge', 'accepted')->call('judge', 'accepted');
+
+    expect($session->fresh()->status)->toBe(IdSessionStatus::Passed)
+        ->and($missed->fresh()->isIdentified())->toBeTrue();
+});
+
+it('does not attach an identification to a missed call that has already been handled', function (): void {
+    $handled = Call::factory()->create(['status' => CallStatus::Missed, 'client_id' => $this->client->id, 'ended_at' => now()]);
+    $handled->markHandled($this->agent);
+
+    expect($handled->fresh()->isAttachableBy($this->agent))->toBeFalse();
+
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $handled->id])
+        ->assertActionHidden('wrapUpNote')
+        ->call('startQa');
+
+    $session = IdSession::query()->where('method', IdMethod::QuestionAnswer)->first();
+    expect($session)->not->toBeNull()
+        ->and($session->call_id)->toBeNull()
+        ->and($handled->fresh()->isIdentified())->toBeFalse();
+});
+
 it('shows the client in the helpdesk client list with an identify action', function (): void {
     Livewire::test(ListClients::class)
         ->assertSee('Kovács Anna')

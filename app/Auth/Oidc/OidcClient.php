@@ -4,7 +4,6 @@ namespace App\Auth\Oidc;
 
 use Firebase\JWT\JWK;
 use Firebase\JWT\JWT;
-use Firebase\JWT\Key;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as Http;
@@ -101,12 +100,19 @@ class OidcClient
 
         $discovery = $this->discovery($config);
 
+        // The key set is fetched outside the guarded decode so a JWKS outage
+        // stays an OidcUnavailableException instead of an invalid token; an
+        // unusable document still fails inside it, like a stale key.
+        $jwks = $this->jwks($discovery['jwks_uri']);
+
         try {
-            $claims = (array) JWT::decode($idToken, $this->keys($config, $discovery['jwks_uri']));
+            $claims = (array) JWT::decode($idToken, JWK::parseKeySet($jwks, 'RS256'));
         } catch (Throwable $e) {
             // A rotated key may not be in the cached set yet: refresh once.
+            $jwks = $this->jwks($discovery['jwks_uri'], refresh: true);
+
             try {
-                $claims = (array) JWT::decode($idToken, $this->keys($config, $discovery['jwks_uri'], refresh: true));
+                $claims = (array) JWT::decode($idToken, JWK::parseKeySet($jwks, 'RS256'));
             } catch (Throwable $e) {
                 throw new OidcException('ID token invalid: '.$e->getMessage(), previous: $e);
             }
@@ -182,9 +188,12 @@ class OidcClient
     }
 
     /**
-     * @return array<string, Key>
+     * The provider's raw JWKS document. Only reaching the endpoint can fail
+     * here; whether the document holds a usable key is the caller's concern.
+     *
+     * @return array<string, mixed>
      */
-    private function keys(OidcProviderConfig $config, string $jwksUri, bool $refresh = false): array
+    private function jwks(string $jwksUri, bool $refresh = false): array
     {
         $cacheKey = 'oidc.jwks.'.md5($jwksUri);
 
@@ -192,9 +201,7 @@ class OidcClient
             $this->cache->forget($cacheKey);
         }
 
-        $jwks = $this->cache->remember($cacheKey, self::DISCOVERY_TTL, fn (): array => $this->reach(fn (): Response => $this->http->timeout(10)->get($jwksUri)->throw())->json());
-
-        return JWK::parseKeySet($jwks, 'RS256');
+        return $this->cache->remember($cacheKey, self::DISCOVERY_TTL, fn (): array => (array) $this->reach(fn (): Response => $this->http->timeout(10)->get($jwksUri)->throw())->json());
     }
 
     /**

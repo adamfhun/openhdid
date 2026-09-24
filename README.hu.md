@@ -89,8 +89,8 @@ Nem privilegizált felhasználóként (uid 82) fut, csak olvasható gyökér-fá
 Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz:
 
 ```sh
-gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.0.0 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.0.0 \
+gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.0.1 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.0.1 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```

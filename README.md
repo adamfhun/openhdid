@@ -83,8 +83,8 @@ The image contains only what runs the application: Alpine Linux, PHP-FPM with th
 Every image is signed and carries a build provenance and an SBOM attestation:
 
 ```sh
-gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.0.0 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.0.0 \
+gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.0.1 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.0.1 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```

@@ -1,11 +1,20 @@
 import { reactive } from 'vue';
 import { get, post, ApiError } from './api';
+import { t } from './i18n';
 
 const EMPTY_TIER = { background_image: null, login_background_image: null, badge_label: null, support: { email: null, phone: null, hours: null } };
 
 let toastId = 0;
 
 let booting = null;
+
+/**
+ * The server already has no session for us: 401 (the api.js hook has just
+ * forgotten the user) or 403 with an entitlement reason (handled the same way).
+ * Only then may a failed sign-out request still count as signed out.
+ */
+const isSignedOutError = (error) => error instanceof ApiError
+    && (error.status === 401 || (error.status === 403 && ['not_entitled', 'account_closed'].includes(error.reason)));
 
 export const store = reactive({
     branding: window.__BRANDING__ ?? { app_name: 'Helpdesk ID', primary_color: '#36495d', palette: {}, tiers: {} },
@@ -113,25 +122,37 @@ export const store = reactive({
         this.applyTheme();
     },
 
-    async logout() {
+    /**
+     * Ends the session on the server, then locally. The local state is cleared
+     * only when the server has no session for us any more (success, 401, or a
+     * 403 for lost entitlement): a failed request (offline, 5xx, 419 after the
+     * CSRF retry) would leave the cookie and, for logout-all, every token valid,
+     * so the client stays signed in, sees an error toast and can try again.
+     * Returns whether the client is signed out.
+     */
+    async endSession(path) {
         try {
-            await post('/client/logout');
-        } catch {
-            /* the local state is cleared either way */
-        } finally {
-            this.forgetUser();
+            await post(path);
+        } catch (e) {
+            if (!isSignedOutError(e)) {
+                this.toast(e instanceof ApiError && e.isNetwork ? e.message : t('Signing out did not succeed. Please try again.'), 'error');
+                return false;
+            }
+            // A deliberate sign-out that met an already-dead session is not a
+            // "session expired" event; the entitlement notices stay informative.
+            if (e.status === 401) this.notice = null;
         }
+        this.forgetUser();
+        return true;
+    },
+
+    async logout() {
+        return this.endSession('/client/logout');
     },
 
     /** Ends this session and every other one: mobile tokens and browser sessions alike. */
     async logoutAll() {
-        try {
-            await post('/client/logout-all');
-        } catch {
-            /* the local state is cleared either way */
-        } finally {
-            this.forgetUser();
-        }
+        return this.endSession('/client/logout-all');
     },
 
     /** Push palette, tier and background onto <html> so that CSS can theme by them. */

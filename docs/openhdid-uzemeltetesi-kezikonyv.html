@@ -92,7 +92,7 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">A konténeres OpenHDID napi üzemeltetése: ellenőrzés, szolgáltatások kezelése, naplók és felügyelet, ütemezett feladatok, a leggyakoribb helyzetek, mentés és visszaállítás, frissítés, skálázás és biztonsági karbantartás.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.0 · 2026. szeptember 23.</span></div>
+    <div><span class="k">Verzió</span><span>1.1 · 2026. szeptember 24.</span></div>
     <div><span class="k">Kiadás</span><span>OpenHDID 1.0.0</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>telepítési útmutató 1.0, felhasználói kézikönyv 1.23</span></div>
@@ -396,7 +396,7 @@ cosign verify ghcr.io/adamfhun/openhdid:1.0.1 \
     <li><strong>általános megőrzés</strong> (alapból 5 év): auditnapló, azonosítási munkamenetek, hívások, kimenő üzenetek, átvételek;</li>
     <li><strong>rövid életű tételek</strong> (alapból 2 év): lejárt egyszeri kódok, feltöltött állományok.</li>
 </ul>
-<p>A napi 03:30-as tisztítás véglegesen töröl; az eredmény <code>retention.pruned</code> eseményként az auditnaplóban áll. A titkot hordozó üzenetek törzse már a kiküldés után törlődik. A mentések megőrzését a mentési rend külön szabályozza: az alkalmazás nem törli őket.</p>
+<p>A napi 03:30-as tisztítás véglegesen töröl; az eredmény <code>retention.pruned</code> eseményként az auditnaplóban áll. A titkot hordozó üzenetek törzse már a kiküldés, a végleges hiba vagy a visszavonás után törlődik. A mentések megőrzését a mentési rend külön szabályozza: az alkalmazás nem törli őket.</p>
 
 <h2 id="s12"><span class="num">12</span>Parancsreferencia</h2>
 <p>Az alkalmazásparancsok (<code>hdid:*</code>) a <code>docker compose exec web php artisan</code> előtaggal futnak.</p>
@@ -433,7 +433,7 @@ cosign verify ghcr.io/adamfhun/openhdid:1.0.1 \
 <tr><td>SemVer</td><td>Semantic Versioning – szemantikus verziózás (fő.al.javító).</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID üzemeltetési kézikönyv 1.0 · 2026. szeptember 23. · OpenHDID 1.0.0</div>
+<div class="foot">OpenHDID üzemeltetési kézikönyv 1.1 · 2026. szeptember 24. · OpenHDID 1.0.1</div>
 </div>
 
 </body>

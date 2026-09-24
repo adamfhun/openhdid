@@ -53,6 +53,23 @@ class LinkedClientsRelationManager extends RelationManager
         return '<div class="py-0.5"><div class="font-semibold">'.e($client->name).'</div><div class="text-xs text-gray-500">'.e(implode(' · ', $details)).'</div></div>';
     }
 
+    /**
+     * Why the "Link a client" button is greyed out right now, or null when
+     * usable. The button stays on the tab so nobody has to guess where it went.
+     */
+    public static function linkBlocker(Client $sponsor, ClientLinks $links): ?string
+    {
+        if ($sponsor->isClosed()) {
+            return __('The account is closed; reopen it first.');
+        }
+
+        if (! $links->canSponsor($sponsor)) {
+            return __('Only a client with an implicit premium package can have linked clients.');
+        }
+
+        return null;
+    }
+
     public function table(Table $table): Table
     {
         $links = app(ClientLinks::class);
@@ -79,7 +96,9 @@ class LinkedClientsRelationManager extends RelationManager
                 Action::make('link')
                     ->label(__('Link a client'))
                     ->icon('heroicon-o-link')
-                    ->visible(fn () => auth()->user()?->can(Permission::ClientsManage->value) && $links->canSponsor($this->getOwnerRecord()))
+                    ->authorize(fn () => auth()->user()?->can(Permission::ClientsManage->value) ?? false)
+                    ->disabled(fn () => ! $links->canSponsor($this->getOwnerRecord()))
+                    ->tooltip(fn () => static::linkBlocker($this->getOwnerRecord(), $links))
                     ->schema([
                         Select::make('client_id')->label(__('Client'))->required()->searchable()->allowHtml()
                             ->getSearchResultsUsing(fn (string $search) => Client::query()
@@ -106,7 +125,8 @@ class LinkedClientsRelationManager extends RelationManager
             ->recordActions([
                 Action::make('unlink')->label(__('End link'))->icon('heroicon-o-x-mark')->color('danger')->requiresConfirmation()
                     ->modalDescription(__('The link ends now and stays in the list with its end date. The linked account is not closed by this.'))
-                    ->visible(fn (ClientLink $record) => $record->isActive() && auth()->user()?->can(Permission::ClientsManage->value))
+                    ->authorize(fn () => auth()->user()?->can(Permission::ClientsManage->value) ?? false)
+                    ->visible(fn (ClientLink $record) => $record->isActive())
                     ->action(fn (ClientLink $record) => $links->unlink($record, auth()->user())),
             ])
             ->defaultSort('created_at', 'desc');

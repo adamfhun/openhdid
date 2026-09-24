@@ -93,10 +93,15 @@ class PackageOverrides
     {
         $count = 0;
 
-        Client::query()->whereNotNull('package_override')->where('package_override_until', '<', now())->each(function (Client $client) use (&$count): void {
-            $this->end($client, 'expired');
-            $count++;
-        });
+        // chunkById pages on the key: the ended rows leave the filter, so an
+        // offset-paged walk would skip every row beyond the first page.
+        Client::query()->whereNotNull('package_override')->where('package_override_until', '<', now())
+            ->chunkById(200, function ($clients) use (&$count): void {
+                foreach ($clients as $client) {
+                    $this->end($client, 'expired');
+                    $count++;
+                }
+            });
 
         return $count;
     }

@@ -10,6 +10,7 @@ use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Http\Client\Events\RequestSending;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Tests\Support\FakeOidc;
@@ -93,6 +94,70 @@ it('answers 503 with a reason when Entra cannot be reached', function (): void {
 
     $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => 'x', 'device_name' => 'x'])
         ->assertServiceUnavailable()->assertJsonPath('reason', 'provider_unavailable');
+    $this->assertDatabaseCount('personal_access_tokens', 0);
+});
+
+it('answers 503 provider_unavailable when the Entra JWKS endpoint is down during a token exchange', function (string $failure): void {
+    Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    Http::fake([
+        ENTRA_DISCOVERY => Http::response([
+            'issuer' => ENTRA_ISSUER,
+            'authorization_endpoint' => 'https://idp.test/authorize',
+            'token_endpoint' => 'https://idp.test/token',
+            'jwks_uri' => 'https://idp.test/jwks',
+        ]),
+        'https://idp.test/jwks' => $failure === 'jwks unreachable' ? Http::failedConnection() : Http::response('down', 503),
+    ]);
+    $idToken = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu'], ENTRA_ISSUER);
+
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'iPhone'])
+        ->assertServiceUnavailable()->assertJsonPath('reason', 'provider_unavailable');
+
+    // An outage is reported after the first JWKS request; no pointless refresh retry.
+    Http::assertSentCount(2);
+    $this->assertDatabaseCount('personal_access_tokens', 0);
+})->with(['jwks error', 'jwks unreachable']);
+
+it('refreshes a stale cached key set once when the token was signed with a rotated key', function (): void {
+    Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    FakeOidc::fake([], ENTRA_ISSUER, ENTRA_DISCOVERY);
+    $stale = openssl_pkey_get_details(openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]));
+    Cache::put('oidc.jwks.'.md5('https://idp.test/jwks'), ['keys' => [[
+        'kty' => 'RSA',
+        'kid' => 'stale-kid',
+        'use' => 'sig',
+        'alg' => 'RS256',
+        'n' => rtrim(strtr(base64_encode($stale['rsa']['n']), '+/', '-_'), '='),
+        'e' => rtrim(strtr(base64_encode($stale['rsa']['e']), '+/', '-_'), '='),
+    ]]], 3600);
+    $idToken = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu'], ENTRA_ISSUER);
+
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'iPhone'])
+        ->assertOk()->assertJsonPath('email', 'c@x.hu');
+
+    // Discovery plus exactly one JWKS refresh after the cached set failed.
+    Http::assertSentCount(2);
+    $this->assertDatabaseCount('personal_access_tokens', 1);
+});
+
+it('rejects the token when the JWKS endpoint answers with an unusable document, without a server error', function (): void {
+    Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    Http::fake([
+        ENTRA_DISCOVERY => Http::response([
+            'issuer' => ENTRA_ISSUER,
+            'authorization_endpoint' => 'https://idp.test/authorize',
+            'token_endpoint' => 'https://idp.test/token',
+            'jwks_uri' => 'https://idp.test/jwks',
+        ]),
+        'https://idp.test/jwks' => Http::response('<html>maintenance</html>', 200),
+    ]);
+    $idToken = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu'], ENTRA_ISSUER);
+
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'iPhone'])
+        ->assertUnprocessable()->assertJsonPath('errors.id_token.0', fn (string $message): bool => str_starts_with($message, 'ID token invalid: '));
+
+    // The unusable set is refreshed once, like a stale key, before giving up.
+    Http::assertSentCount(3);
     $this->assertDatabaseCount('personal_access_tokens', 0);
 });
 

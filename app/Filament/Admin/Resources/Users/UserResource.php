@@ -2,6 +2,7 @@
 
 namespace App\Filament\Admin\Resources\Users;
 
+use App\Auth\RoleAssignment;
 use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
 use App\Filament\Admin\Clusters\Accounts;
@@ -11,6 +12,7 @@ use App\Filament\Admin\Resources\Users\Pages\EditUser;
 use App\Filament\Admin\Resources\Users\Pages\ListUsers;
 use App\Models\User;
 use BackedEnum;
+use Closure;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\DeleteAction;
@@ -28,8 +30,10 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Filters\TrashedFilter;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use Spatie\Permission\Models\Role as RoleModel;
 
 class UserResource extends BaseResource
 {
@@ -67,7 +71,18 @@ class UserResource extends BaseResource
                     ->dehydrated(fn ($state) => filled($state))
                     ->required(fn (string $operation) => $operation === 'create')
                     ->helperText(__('Only needed for password login; leave empty for SSO-only accounts.')),
-                Select::make('roles')->label(__('Roles'))->relationship('roles', 'name')->multiple()->preload()->required(),
+                Select::make('roles')->label(__('Roles'))->relationship('roles', 'name')->multiple()->preload()->required()
+                    ->disableOptionWhen(fn (string $label) => ! app(RoleAssignment::class)->canGrant(auth()->user(), $label))
+                    ->helperText(fn () => app(RoleAssignment::class)->isSuperAdmin(auth()->user()) ? null : __('The SuperAdmin role can only be granted by a SuperAdmin.'))
+                    ->rule(fn (?User $record): Closure => function (string $attribute, mixed $value, Closure $fail) use ($record): void {
+                        $names = RoleModel::query()->whereKey((array) $value)->pluck('name');
+
+                        try {
+                            app(RoleAssignment::class)->assertAssignable(auth()->user(), $names, $record);
+                        } catch (AuthorizationException $e) {
+                            $fail($e->getMessage());
+                        }
+                    }),
                 CheckboxList::make('handles_tiers')->label(__('Handles calls of'))
                     ->options(collect(app(ClientTiers::class)->activeTiers())->mapWithKeys(fn (ClientTier $t) => [$t->value => $t->label()])->all())
                     ->default(array_map(fn (ClientTier $t) => $t->value, app(ClientTiers::class)->activeTiers()))
@@ -117,9 +132,11 @@ class UserResource extends BaseResource
                 EditAction::make(),
                 ActionGroup::make([
                     Action::make('close')->label(__('Close account'))->icon('heroicon-o-lock-closed')->color('danger')->requiresConfirmation()
+                        ->authorize(fn (User $record) => static::canEdit($record))
                         ->visible(fn (User $record) => ! $record->isClosed())
                         ->action(fn (User $record) => $record->close('admin')),
                     Action::make('reopen')->label(__('Reopen'))->icon('heroicon-o-lock-open')->color('success')->requiresConfirmation()
+                        ->authorize(fn (User $record) => static::canEdit($record))
                         ->visible(fn (User $record) => $record->isClosed())
                         ->action(fn (User $record) => $record->reopen()),
                     DeleteAction::make(),

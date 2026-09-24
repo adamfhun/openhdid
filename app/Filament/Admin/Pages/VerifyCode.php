@@ -141,7 +141,7 @@ class VerifyCode extends Page
 
     public function getCall(): ?Call
     {
-        return $this->call === null ? null : app(CallCenterService::class)->heldCallForAgent($this->call, auth()->user());
+        return $this->call === null ? null : app(CallCenterService::class)->attachableCallForAgent($this->call, auth()->user());
     }
 
     public function tierOf(Client $client): ?ClientTier

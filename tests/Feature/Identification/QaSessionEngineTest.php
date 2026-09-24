@@ -15,6 +15,16 @@ use App\Models\Question;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+
+const QA_START_LOCK_PREFIX = 'hdid:qa:';
+
+/**
+ * More rows than one offset page of the default 1000, to prove keyset paging.
+ */
+const SESSIONS_BEYOND_ONE_PAGE = 1001;
 
 /**
  * A client with `$answered` usable answers in an active pool of `$poolSize` questions.
@@ -31,9 +41,51 @@ function clientWithAnswers(int $answered, int $poolSize = 6): Client
     return $client;
 }
 
+function openQaSessionsFor(Client $client): int
+{
+    return IdSession::query()->open()->where('client_id', $client->id)->where('method', IdMethod::QuestionAnswer)->count();
+}
+
+/**
+ * Bulk-insert open, already expired sessions for one client and agent with
+ * time-ordered ids exactly like the model would generate (factories would
+ * be far too slow at this row count).
+ */
+function insertExpiredOpenSessions(Client $client, User $agent, int $count, ?string $expiresAt): void
+{
+    $now = now();
+    $rows = [];
+
+    for ($i = 0; $i < $count; $i++) {
+        $rows[] = [
+            'id' => (string) Str::orderedUuid(),
+            'client_id' => $client->id,
+            'agent_user_id' => $agent->id,
+            'channel' => 'manual',
+            'method' => 'qa',
+            'status' => IdSessionStatus::Open->value,
+            'required_accepted' => 2,
+            'max_questions' => 4,
+            'max_rejected' => 2,
+            'started_at' => $now->copy()->subHours(3),
+            'expires_at' => $expiresAt,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ];
+    }
+
+    foreach (array_chunk($rows, 250) as $chunk) {
+        DB::table('id_sessions')->insert($chunk);
+    }
+}
+
 beforeEach(function (): void {
     $this->agent = User::factory()->create();
     $this->engine = app(QaSessionEngine::class);
+});
+
+afterEach(function (): void {
+    IdSession::flushEventListeners();
 });
 
 it('refuses to start when the client has too few answers', function (): void {
@@ -157,6 +209,96 @@ it('returns the same open session for the same client and agent', function (): v
     $client = clientWithAnswers(5);
 
     expect($this->engine->start($client, $this->agent)->id)->toBe($this->engine->start($client, $this->agent)->id);
+});
+
+it('holds a per-client lock while a question-and-answer session is being opened', function (): void {
+    $client = clientWithAnswers(5);
+    $lockWasFree = null;
+
+    IdSession::creating(function (IdSession $session) use (&$lockWasFree): void {
+        if ($lockWasFree !== null) {
+            return;
+        }
+
+        $lock = Cache::lock(QA_START_LOCK_PREFIX.$session->client_id, 10);
+        $lockWasFree = $lock->get();
+
+        if ($lockWasFree) {
+            $lock->release();
+        }
+    });
+
+    $this->engine->start($client, $this->agent);
+
+    expect($lockWasFree)->toBeFalse('the open-session check and the insert must run inside Cache::lock(\'hdid:qa:<client>\')');
+});
+
+it('keeps a single open question-and-answer session when two agents start at the same moment', function (): void {
+    $client = clientWithAnswers(5);
+    $first = User::factory()->create(['name' => 'First Agent']);
+    $second = User::factory()->create(['name' => 'Second Agent']);
+    $interleaved = false;
+    $interleavedResult = null;
+
+    // Simulate the race: a second agent's start() runs between the first
+    // agent's open-session check and its insert. It can only interleave when
+    // the engine does not hold the client's lock at that moment.
+    IdSession::creating(function (IdSession $session) use ($client, $second, &$interleaved, &$interleavedResult): void {
+        if ($interleaved) {
+            return;
+        }
+        $interleaved = true;
+
+        $lock = Cache::lock(QA_START_LOCK_PREFIX.$session->client_id, 10);
+        if (! $lock->get()) {
+            $interleavedResult = 'blocked by lock';
+
+            return;
+        }
+        $lock->release();
+
+        try {
+            $interleavedResult = $this->engine->start($client, $second);
+        } catch (Throwable $exception) {
+            $interleavedResult = $exception;
+        }
+    });
+
+    $session = $this->engine->start($client, $first);
+
+    expect($interleaved)->toBeTrue()
+        ->and(openQaSessionsFor($client))->toBe(1, 'exactly one open question-and-answer session may exist per client')
+        ->and($interleavedResult)->not->toBeInstanceOf(IdSession::class, 'the interleaved second start must not open a session of its own')
+        ->and($session->agent_user_id)->toBe($first->id);
+
+    // Once the first agent's session exists, the sequential path still refuses the colleague by name.
+    expect(fn () => $this->engine->start($client, $second))
+        ->toThrow(IdentificationException::class, 'First Agent');
+    expect(openQaSessionsFor($client))->toBe(1);
+});
+
+it('expires every stale session in one sweep even when there are more than one page of them', function (): void {
+    $client = Client::factory()->synced()->create();
+    insertExpiredOpenSessions($client, $this->agent, SESSIONS_BEYOND_ONE_PAGE, now()->subMinutes(5)->toDateTimeString());
+
+    expect(IdSession::query()->open()->count())->toBe(SESSIONS_BEYOND_ONE_PAGE);
+
+    $expired = $this->engine->expireStale();
+
+    expect($expired)->toBe(SESSIONS_BEYOND_ONE_PAGE, 'the sweeper must report every stale session it found')
+        ->and(IdSession::query()->open()->count())->toBe(0, 'no stale session may survive a single sweep')
+        ->and(IdSession::query()->where('status', IdSessionStatus::Expired)->where('outcome_reason', 'timeout')->count())->toBe(SESSIONS_BEYOND_ONE_PAGE)
+        ->and(AuditLog::query()->where('event', 'id_session.finished')->count())->toBe(SESSIONS_BEYOND_ONE_PAGE, 'every closed session leaves an audit trace');
+});
+
+it('cancels every open session of a client in one call even beyond one page', function (): void {
+    $client = Client::factory()->synced()->create();
+    insertExpiredOpenSessions($client, $this->agent, SESSIONS_BEYOND_ONE_PAGE, null);
+
+    $cancelled = $this->engine->cancelOpenSessions($client, null, 'account_closed');
+
+    expect($cancelled)->toBe(SESSIONS_BEYOND_ONE_PAGE)
+        ->and(IdSession::query()->open()->where('client_id', $client->id)->count())->toBe(0, 'closing the account must not leave a session open');
 });
 
 it('refuses to start for a closed or unentitled client', function (): void {

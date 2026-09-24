@@ -9,12 +9,14 @@ use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\OutboundMessages\Pages\ManageOutboundMessages;
 use App\Messaging\Channel;
 use App\Messaging\MessageKey;
+use App\Messaging\MessageNotRetryableException;
 use App\Messaging\Messenger;
 use App\Models\OutboundMessage;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
@@ -98,11 +100,25 @@ class OutboundMessageResource extends BaseResource
             ->recordActions([
                 ViewAction::make()->iconButton(),
                 Action::make('retry')->label(__('Retry'))->icon('heroicon-o-arrow-path')->color('warning')->requiresConfirmation()
-                    ->visible(fn (OutboundMessage $record) => $record->status === OutboundMessageStatus::Failed && (auth()->user()?->can(Permission::SettingsManage->value) ?? false))
-                    ->action(fn (OutboundMessage $record) => app(Messenger::class)->retry($record)),
+                    ->authorize(fn () => auth()->user()?->can(Permission::SettingsManage->value) ?? false)
+                    ->visible(fn (OutboundMessage $record) => $record->status === OutboundMessageStatus::Failed)
+                    ->disabled(fn (OutboundMessage $record) => $record->isRedacted())
+                    ->tooltip(fn (OutboundMessage $record) => $record->isRedacted() ? __('The confidential content was wiped after the final failure; send a new message instead.') : null)
+                    ->action(function (OutboundMessage $record): void {
+                        try {
+                            app(Messenger::class)->retry($record);
+                        } catch (MessageNotRetryableException $e) {
+                            Notification::make()->title($e->getMessage())->danger()->send();
+                        }
+                    }),
                 Action::make('cancel')->label(__('Cancel'))->icon('heroicon-o-x-mark')->color('gray')->requiresConfirmation()
-                    ->visible(fn (OutboundMessage $record) => $record->status === OutboundMessageStatus::Queued && (auth()->user()?->can(Permission::SettingsManage->value) ?? false))
-                    ->action(fn (OutboundMessage $record) => $record->forceFill(['status' => OutboundMessageStatus::Cancelled])->save()),
+                    ->authorize(fn () => auth()->user()?->can(Permission::SettingsManage->value) ?? false)
+                    ->visible(fn (OutboundMessage $record) => $record->status === OutboundMessageStatus::Queued)
+                    ->action(function (OutboundMessage $record): void {
+                        if (! app(Messenger::class)->cancel($record)) {
+                            Notification::make()->title(__('The message was already picked up for sending and cannot be cancelled.'))->warning()->send();
+                        }
+                    }),
             ])
             ->defaultSort('created_at', 'desc')
             ->poll('30s');

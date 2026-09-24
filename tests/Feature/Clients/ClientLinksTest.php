@@ -1,11 +1,20 @@
 <?php
 
+use App\Auth\Role;
 use App\Clients\ClientLinks;
 use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
+use App\Filament\Admin\Resources\Clients\RelationManagers\LinkedClientsRelationManager;
+use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\ClientLink;
+use App\Models\User;
 use App\Sync\AccountProvisioner;
+use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Actions\Testing\TestAction;
+use Filament\Facades\Filament;
 use Illuminate\Validation\ValidationException;
+use Livewire\Livewire;
 
 it('links explicit-premium clients to an implicit-premium sponsor only', function (): void {
     $links = app(ClientLinks::class);
@@ -25,6 +34,41 @@ it('links explicit-premium clients to an implicit-premium sponsor only', functio
 
     $links->unlink($link);
     expect($link->fresh()->ended_at)->not->toBeNull()->and($dependent->fresh()->sponsor())->toBeNull();
+});
+
+it('refuses to link an open client to a closed sponsor', function (): void {
+    $links = app(ClientLinks::class);
+    $closedSponsor = Client::factory()->synced()->closed('admin')->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $client = Client::factory()->synced()->create(['implicit_package' => null, 'explicit_package' => 'Premium']);
+
+    expect($links->canSponsor($closedSponsor))->toBeFalse('a closed client is not an open, implicit-premium sponsor');
+    expect(fn () => $links->link($closedSponsor, $client))->toThrow(ValidationException::class, 'Reopen it first');
+
+    expect(ClientLink::query()->count())->toBe(0, 'no link row may be created under a closed sponsor')
+        ->and($client->fresh()->isClosed())->toBeFalse('the client must not be silently closed either')
+        ->and($client->fresh()->sponsor())->toBeNull()
+        ->and(AuditLog::query()->where('event', 'client.linked')->count())->toBe(0);
+});
+
+it('keeps the link action visible but disabled with a reason on a closed sponsor in the panel', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    Filament::setCurrentPanel('admin');
+
+    $openSponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $closedSponsor = Client::factory()->synced()->closed('admin')->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+
+    Livewire::test(LinkedClientsRelationManager::class, ['ownerRecord' => $openSponsor, 'pageClass' => ViewClient::class])
+        ->assertActionVisible(TestAction::make('link')->table())
+        ->assertActionEnabled(TestAction::make('link')->table());
+
+    // The button stays visible for the permission holder but is disabled with the reason on a closed sponsor.
+    Livewire::test(LinkedClientsRelationManager::class, ['ownerRecord' => $closedSponsor, 'pageClass' => ViewClient::class])
+        ->assertActionVisible(TestAction::make('link')->table())
+        ->assertActionDisabled(TestAction::make('link')->table());
+
+    expect(LinkedClientsRelationManager::linkBlocker($closedSponsor, app(ClientLinks::class)))->toContain('reopen it first')
+        ->and(LinkedClientsRelationManager::linkBlocker($openSponsor, app(ClientLinks::class)))->toBeNull();
 });
 
 it('closes and reopens linked clients together with their sponsor', function (): void {

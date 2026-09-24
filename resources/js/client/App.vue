@@ -24,11 +24,19 @@ const otherLocale = () => (i18n.locale === 'hu' ? 'en' : 'hu');
 
 const premiumLabel = computed(() => store.premiumBadgeLabel || t('Premium client'));
 
+const signingOut = ref(false);
+
 async function logout() {
-    await store.logout();
-    // store.logout() keeps the last known level as the entrance, so a premium
-    // client lands on the premium login page even after a magic-link login.
-    router.push(store.entry === 'premium' ? '/premium/login' : '/login');
+    signingOut.value = true;
+    try {
+        // On failure the store shows the error and keeps the client signed in,
+        // so the button stays usable for another try. On success the store keeps
+        // the last known level as the entrance, so a premium client lands on the
+        // premium login page even after a magic-link login.
+        if (await store.logout()) router.push(store.entry === 'premium' ? '/premium/login' : '/login');
+    } finally {
+        signingOut.value = false;
+    }
 }
 
 const retrying = ref(false);
@@ -65,7 +73,7 @@ async function retry() {
                     <button class="rounded-lg px-2 py-1 text-xs font-semibold uppercase tracking-wide text-ink-muted hover:bg-slate-100 hover:text-brand-deep" :aria-label="t('Switch language')" @click="i18n.set(otherLocale())">{{ otherLocale() }}</button>
                     <template v-if="store.user">
                         <span class="hidden rounded-full bg-slate-100 px-3 py-1 text-slate-600 sm:inline">{{ store.user.name }}</span>
-                        <button class="btn-secondary !px-3" :title="t('Sign out')" :aria-label="t('Sign out')" @click="logout"><Icon name="logout" class="h-4 w-4" /><span class="hidden sm:inline">{{ t('Sign out') }}</span></button>
+                        <button class="btn-secondary !px-3" :title="t('Sign out')" :aria-label="t('Sign out')" :disabled="signingOut" @click="logout"><Icon name="logout" class="h-4 w-4" /><span class="hidden sm:inline">{{ t('Sign out') }}</span></button>
                     </template>
                 </div>
             </div>

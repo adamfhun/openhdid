@@ -17,6 +17,7 @@ const dictionaries = {
         'Sign out on every device?': 'Kijelentkezik minden eszközről?',
         'Every browser session and mobile app login of yours ends now. You can sign in again any time.': 'Minden böngészős munkamenete és mobilalkalmazásos bejelentkezése most megszűnik. Bármikor újra bejelentkezhet.',
         'Sign out everywhere': 'Kijelentkezés mindenhol',
+        'Signing out did not succeed. Please try again.': 'A kijelentkezés nem sikerült. Kérjük, próbálja újra.',
         'Sign in': 'Bejelentkezés',
         'Manage how the helpdesk recognises you when you call.': 'Állítsa be, hogyan ismerje fel az ügyfélszolgálat, amikor telefonál.',
         'E-mail link': 'E-mail link',

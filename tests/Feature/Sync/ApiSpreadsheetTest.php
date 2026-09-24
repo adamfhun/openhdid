@@ -115,7 +115,7 @@ it('reports current accounts and domain-filtered incoming counts without changin
 
     expect($run->stats['current'])->toBe(['users' => 1, 'clients' => 2])
         ->and($run->stats['read'])->toBe(5)
-        ->and($run->stats['incoming'])->toBe(['users' => 1, 'clients' => 1, 'unclassified' => 2, 'invalid_row' => 1])
+        ->and($run->stats['incoming'])->toBe(['users' => 1, 'clients' => 1, 'unclassified' => 2, 'invalid_row' => 1, 'duplicate' => 0])
         ->and($run->stats['preview'])->toHaveCount(2)
         ->and($run->stats['preview'][0]['email'])->toBe('existing@staff.hu')
         ->and(Client::withTrashed()->get()->toJson())->toBe($beforeClients)

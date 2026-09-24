@@ -186,14 +186,15 @@ class Identify extends Page
     }
 
     /**
-     * The current call when this agent is the one handling it; only such a
-     * call may be changed or attached to an identification.
+     * The current call when this agent may work on it: the call they hold,
+     * or a missed call nobody handled yet (reached from the missed-calls
+     * list); only such a call may be changed or attached to an identification.
      */
     public function getHeldCall(): ?Call
     {
         $call = $this->getCall();
 
-        return $call !== null && $call->isHeldBy($this->agent()) ? $call : null;
+        return $call !== null && $call->isAttachableBy($this->agent()) ? $call : null;
     }
 
     public function getSession(): ?IdSession

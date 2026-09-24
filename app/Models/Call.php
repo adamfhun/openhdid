@@ -103,6 +103,18 @@ class Call extends Model
         return $this->status->isOver() && $this->agent_user_id === null;
     }
 
+    /**
+     * Whether this agent may attach an identification (or a note) to the
+     * call: the call they hold, or a missed call nobody handled yet, which
+     * is being called back and can no longer be claimed. A ringing call
+     * nobody holds still has to be claimed from the dashboard first, and a
+     * handled missed call is closed for good.
+     */
+    public function isAttachableBy(User $user): bool
+    {
+        return $this->isHeldBy($user) || ($this->isMissed() && $this->handled_at === null);
+    }
+
     /** The supplied number is still useful for display when normalization fails. */
     public function callerNumber(): ?string
     {

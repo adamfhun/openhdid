@@ -234,7 +234,15 @@ it('reports an unreachable identity provider as unavailable, not as an error pag
             'discovery error' => Http::response('down', 502),
             default => $discovery,
         },
-        'https://idp.test/token' => $failure === 'token endpoint unreachable' ? Http::failedConnection() : Http::response(['error' => 'temporarily_unavailable'], 503),
+        'https://idp.test/token' => match ($failure) {
+            'token endpoint unreachable' => Http::failedConnection(),
+            'token endpoint error' => Http::response(['error' => 'temporarily_unavailable'], 503),
+            default => fn () => Http::response([
+                'id_token' => FakeOidc::idToken(['aud' => 'client-app', 'email' => 'c@x.hu', 'nonce' => session('oidc.pending.nonce')], FakeOidc::ISSUER),
+                'access_token' => 'x',
+            ]),
+        },
+        'https://idp.test/jwks' => $failure === 'jwks unreachable' ? Http::failedConnection() : Http::response('down', 503),
     ]);
 
     $redirect = $this->get('/auth/client/adfs/redirect');
@@ -247,4 +255,4 @@ it('reports an unreachable identity provider as unavailable, not as an error pag
 
     $this->get('/auth/client/adfs/callback?code=abc&state='.$query['state'])->assertRedirect('/login?error=provider_unavailable');
     $this->assertGuest('client');
-})->with(['discovery unreachable', 'discovery error', 'token endpoint unreachable', 'token endpoint error']);
+})->with(['discovery unreachable', 'discovery error', 'token endpoint unreachable', 'token endpoint error', 'jwks unreachable', 'jwks error']);

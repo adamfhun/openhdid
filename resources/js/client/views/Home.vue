@@ -13,8 +13,9 @@ const logoutAllConfirm = ref(false);
 
 async function logoutEverywhere() {
     logoutAllConfirm.value = false;
-    await store.logoutAll();
-    router.push(store.entry === 'premium' ? '/premium/login' : '/login');
+    // On failure the store shows the error and the client stays here, where the
+    // "Sign out on every device" link is still available for another try.
+    if (await store.logoutAll()) router.push(store.entry === 'premium' ? '/premium/login' : '/login');
 }
 
 const id = computed(() => store.user?.identification ?? {});

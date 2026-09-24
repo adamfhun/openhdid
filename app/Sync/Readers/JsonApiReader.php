@@ -14,7 +14,10 @@ use Illuminate\Support\Arr;
  * Generic reader for a JSON endpoint. Supports a static header set, an
  * optional data path inside the response and page-based pagination. A
  * response without the data path is an error, not an empty page; paging
- * stops on an empty page, a repeated page or the page cap.
+ * stops on an empty page. A repeated page (the endpoint ignores the page
+ * parameter) and the page cap are errors, because silently stopping would
+ * present a truncated read as the whole directory. An endpoint that returns
+ * everything in one response must be configured without a page parameter.
  */
 class JsonApiReader implements SourceReader
 {
@@ -74,10 +77,12 @@ class JsonApiReader implements SourceReader
                 throw new SourceFormatException(sprintf('The API response rows are not a list (page %d).', $page));
             }
 
-            $fingerprint = $rows === [] ? null : md5(json_encode(array_slice($rows, 0, 1)).count($rows));
+            $fingerprint = $rows === [] ? null : md5((string) json_encode($rows));
             if ($fingerprint !== null && $fingerprint === $previousFingerprint) {
-                // The endpoint ignores the page parameter: stop instead of re-importing forever.
-                break;
+                throw new SourceFormatException(sprintf(
+                    'The API returned the same rows for page %d as for page %d; the "%s" page parameter is probably ignored by the endpoint. Leave the page parameter empty if the endpoint returns everything in one response.',
+                    $page, $page - 1, $this->pageParam,
+                ));
             }
             $previousFingerprint = $fingerprint;
 

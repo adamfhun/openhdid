@@ -14,6 +14,8 @@ final readonly class SkippedRow
 
     public const REASON_UNCLASSIFIED = 'unclassified';
 
+    public const REASON_DUPLICATE = 'duplicate';
+
     /**
      * @param  array<string, mixed>  $sample  a few identifying columns of the row, never the whole row
      */

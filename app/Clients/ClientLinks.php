@@ -27,12 +27,13 @@ class ClientLinks
     ) {}
 
     /**
-     * Whether the client's own implicit package is a premium one, i.e. it
-     * may sponsor others.
+     * Whether the client may sponsor others: open, with an implicit premium
+     * package of its own. A closed sponsor would never propagate its closure
+     * to a client linked afterwards, so it cannot take new links.
      */
     public function canSponsor(Client $client): bool
     {
-        return $this->tiers->hasImplicitPremium($client);
+        return ! $client->isClosed() && $this->tiers->hasImplicitPremium($client);
     }
 
     /**
@@ -51,6 +52,10 @@ class ClientLinks
     {
         if ($sponsor->is($client)) {
             throw ValidationException::withMessages(['client' => __('A client cannot be linked to itself.')]);
+        }
+
+        if ($sponsor->isClosed()) {
+            throw ValidationException::withMessages(['client' => __('A closed client cannot get new linked clients. Reopen it first.')]);
         }
 
         if (! $this->canSponsor($sponsor)) {

@@ -20,6 +20,7 @@ use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 
 beforeEach(function (): void {
@@ -126,6 +127,37 @@ it('lets an agent take, hand over and release a call', function (): void {
     expect($released->agent_user_id)->toBeNull()
         ->and($released->status)->toBe(CallStatus::Ringing)
         ->and(AuditLog::query()->where('event', 'call.released')->where('subject_id', $call->id)->exists())->toBeTrue();
+});
+
+it('refuses to release a call on behalf of an agent who no longer holds it', function (): void {
+    $service = app(CallCenterService::class);
+    $first = User::factory()->create();
+    $second = User::factory()->create();
+    $call = Call::factory()->create();
+
+    $service->claim($call, $first);
+    $service->claim($call->fresh(), $second, takeOver: true);
+    expect($call->fresh()->agent_user_id)->toBe($second->id);
+
+    // The first agent's stale "release" request arrives after the take-over.
+    expect(fn () => $service->release($call->fresh(), $first))->toThrow(ValidationException::class);
+
+    $held = $call->fresh();
+    expect($held->agent_user_id)->toBe($second->id, 'the take-over must survive the previous holder\'s release')
+        ->and($held->status)->toBe(CallStatus::Active)
+        ->and(AuditLog::query()->where('event', 'call.released')->where('subject_id', $call->id)->exists())->toBeFalse();
+});
+
+it('refuses to release a call the agent never held', function (): void {
+    $service = app(CallCenterService::class);
+    $holder = User::factory()->create();
+    $stranger = User::factory()->create();
+    $call = Call::factory()->create();
+
+    $service->claim($call, $holder);
+
+    expect(fn () => $service->release($call->fresh(), $stranger))->toThrow(ValidationException::class);
+    expect($call->fresh()->agent_user_id)->toBe($holder->id);
 });
 
 it('asks for confirmation on the dashboard before taking over a colleague\'s call', function (): void {

@@ -23,6 +23,7 @@ use App\Sync\SourceFormatException;
 use App\Sync\SuspiciousSourceException;
 use App\Sync\SyncExternalRecords;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 
 /**
@@ -51,9 +52,9 @@ function readerOf(array $rows): SourceReader
     };
 }
 
-function row(string $id, string $email, string $company = 'Acme', array $phones = []): ExternalRecordDto
+function row(string $id, string $email, string $company = 'Acme', array $phones = [], ?string $name = null): ExternalRecordDto
 {
-    return new ExternalRecordDto((int) $id, 'Name '.$id, $email, $company, $phones, ['dept' => 'x'], 'Basic', null);
+    return new ExternalRecordDto((int) $id, $name ?? 'Name '.$id, $email, $company, $phones, ['dept' => 'x'], 'Basic', null);
 }
 
 beforeEach(function (): void {
@@ -239,6 +240,41 @@ it('refuses a run whose rows survive but stop classifying, so a domain change ca
         ->and(SyncRun::query()->latest('id')->first()->status)->toBe(SyncRunStatus::Failed);
 });
 
+it('refuses a source whose distinct identifiers shrank even when duplicated rows keep the row count', function (): void {
+    app(Settings::class)->set(SettingKey::SyncMissedRunsBeforeClose, 1);
+    app(Settings::class)->set(SettingKey::SyncMinRowsRatioPercent, 50);
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([row('1', 'a@x.hu'), row('2', 'b@x.hu'), row('3', 'c@x.hu'), row('4', 'd@x.hu')]));
+
+    // A broken export repeats the same person four times: four rows, one identifier.
+    expect(fn () => $sync->run(readerOf([row('1', 'a@x.hu'), row('1', 'a@x.hu'), row('1', 'a@x.hu'), row('1', 'a@x.hu')])))
+        ->toThrow(SuspiciousSourceException::class);
+
+    expect(SyncRun::query()->latest('id')->first()->status)->toBe(SyncRunStatus::Failed)
+        ->and(Client::query()->where('email', 'b@x.hu')->first()->isClosed())->toBeFalse()
+        ->and(Client::query()->where('email', 'c@x.hu')->first()->isClosed())->toBeFalse()
+        ->and(Client::query()->where('email', 'd@x.hu')->first()->isClosed())->toBeFalse();
+});
+
+it('counts a repeated identifier once in the usable rows and reports the repeats as skipped', function (): void {
+    $run = app(SyncExternalRecords::class)->run(readerOf([
+        row('1', 'a@x.hu', name: 'First occurrence'),
+        row('1', 'a@x.hu', name: 'Second occurrence'),
+        row('2', 'b@x.hu'),
+    ]));
+
+    expect($run->status)->toBe(SyncRunStatus::Completed)
+        ->and($run->stats['incoming']['clients'])->toBe(2)
+        ->and($run->stats['incoming']['duplicate'])->toBe(1)
+        ->and($run->stats['created'])->toBe(2)
+        ->and($run->stats['updated'])->toBe(0, 'the repeat is not written over the first occurrence')
+        ->and($run->stats['skipped'])->toBe(1)
+        ->and($run->stats['preview'])->toHaveCount(2, 'a skipped duplicate is not previewed')
+        ->and(collect($run->skipped_rows)->pluck('reason')->all())->toBe([SkippedRow::REASON_DUPLICATE])
+        ->and($run->skipped_rows[0]['sample']['name'])->toBe('Second occurrence')
+        ->and(Client::query()->where('email', 'a@x.hu')->first()->name)->toBe('First occurrence');
+});
+
 it('adopts the client behind an e-mail when the directory reissues the record', function (): void {
     $sync = app(SyncExternalRecords::class);
     $sync->run(readerOf([row('1', 'a@x.hu')]));
@@ -334,16 +370,60 @@ it('converts a csv from the configured character set', function (): void {
     expect(ExternalRecord::query()->where('external_id', 8)->first()->name)->toBe('Kovács Árpád');
 });
 
-it('treats a missing data path in the api response as an error and stops on a repeated page', function (): void {
+it('treats a missing data path and a repeated page in the api response as errors', function (): void {
     $mapping = ['external_id' => 'external_id', 'name' => 'name', 'email' => 'email', 'company' => 'company', 'phones' => 'phone'];
 
     Http::fake(['https://dir.test/broken*' => Http::response(['unexpected' => []])]);
     $broken = new JsonApiReader(app(Factory::class), 'https://dir.test/broken', [], $mapping, 'data', 'page');
-    expect(fn () => iterator_to_array($broken->read()))->toThrow(SourceFormatException::class);
+    expect(fn () => iterator_to_array($broken->read()))->toThrow(SourceFormatException::class, 'no "data" element');
 
+    // The endpoint ignores the page parameter and serves page 1 forever.
     Http::fake(['https://dir.test/loop*' => Http::response(['data' => [['external_id' => 1, 'name' => 'A', 'email' => 'a@x.hu']]])]);
     $looping = new JsonApiReader(app(Factory::class), 'https://dir.test/loop', [], $mapping, 'data', 'page');
-    expect(iterator_to_array($looping->read(), false))->toHaveCount(1);
+    expect(fn () => iterator_to_array($looping->read(), false))->toThrow(SourceFormatException::class, 'same rows for page 2 as for page 1');
+
+    // Without a page parameter a single response is the whole directory.
+    $single = new JsonApiReader(app(Factory::class), 'https://dir.test/loop', [], $mapping, 'data', null);
+    expect(iterator_to_array($single->read(), false))->toHaveCount(1);
+});
+
+it('fails the sync instead of closing accounts when the api returns the same page for every page number', function (): void {
+    config()->set('hdid.sync.driver', 'json');
+    config()->set('hdid.sync.api_url', 'https://dir.test/people');
+    $settings = app(Settings::class);
+    $settings->set(SettingKey::SyncColumnMapping, ['external_id' => 'external_id', 'name' => 'name', 'email' => 'email']);
+    $settings->set(SettingKey::SyncApiDataPath, 'data');
+    $settings->set(SettingKey::SyncApiPageParam, 'page');
+    $settings->set(SettingKey::SyncMissedRunsBeforeClose, 1);
+
+    $firstPage = [
+        ['external_id' => 1, 'name' => 'Anna', 'email' => 'anna@x.hu'],
+        ['external_id' => 2, 'name' => 'Béla', 'email' => 'bela@x.hu'],
+    ];
+    $thirdPage = [['external_id' => 3, 'name' => 'Csaba', 'email' => 'csaba@x.hu']];
+
+    $requestedPages = [];
+    Http::fake(function (Request $request) use (&$requestedPages, $firstPage, $thirdPage) {
+        $page = (int) ($request->data()['page'] ?? 0);
+        $requestedPages[] = $page;
+
+        // The endpoint ignores the page parameter for pages 1 and 2 and would
+        // only hand out Csaba on page 3, which the reader never asks for.
+        return Http::response(['data' => $page === 3 ? $thirdPage : $firstPage]);
+    });
+
+    $csaba = Client::factory()->synced()->create(['email' => 'csaba@x.hu']);
+    $csaba->externalRecord->update(['external_id' => 3]);
+
+    expect(fn () => app(SyncExternalRecords::class)->run(app(ReaderFactory::class)->forApi()))
+        ->toThrow(SourceFormatException::class);
+
+    expect($requestedPages)->toBe([1, 2], 'the reader stopped at the repeated second page');
+
+    $run = SyncRun::query()->latest('started_at')->firstOrFail();
+    expect($run->status)->toBe(SyncRunStatus::Failed)
+        ->and($run->stats['closed'] ?? 0)->toBe(0)
+        ->and($csaba->fresh()->isClosed())->toBeFalse('an account missing only from a truncated read must not be closed');
 });
 
 it('loads the directory identifier, job title and department as fixed fields, with the identifier limited to seven digits', function (): void {

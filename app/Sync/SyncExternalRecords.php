@@ -24,8 +24,11 @@ use Throwable;
  *
  * Safety nets before anything is closed: an empty source is refused, and
  * so is a source that shrank below the configured share of the previous
- * successful run (a truncated export). A dry run does all the work inside
- * a transaction that is rolled back, and keeps only the report.
+ * successful run (a truncated export). The share is measured on distinct
+ * classified identifiers: a repeated external id counts once, the first
+ * occurrence wins and the repeats are reported as skipped rows. A dry run
+ * does all the work inside a transaction that is rolled back, and keeps
+ * only the report.
  */
 class SyncExternalRecords
 {
@@ -71,12 +74,14 @@ class SyncExternalRecords
 
         $stats = ['read' => 0, 'skipped' => 0, 'created' => 0, 'updated' => 0, 'missing' => 0, 'closed' => 0, 'provisioned' => 0];
         $stats['current'] = ['users' => User::query()->open()->count(), 'clients' => Client::query()->open()->count()];
-        $stats['incoming'] = ['users' => 0, 'clients' => 0, 'unclassified' => 0, 'invalid_row' => 0];
+        $stats['incoming'] = ['users' => 0, 'clients' => 0, 'unclassified' => 0, 'invalid_row' => 0, 'duplicate' => 0];
         $stats['preview'] = [];
         $stats['invalid_phones'] = 0;
         $stats['phone_warnings'] = [];
         $skipped = [];
         $samples = ['created' => [], 'closed' => []];
+        /** @var array<int, true> $seen external identifiers already imported in this run */
+        $seen = [];
 
         try {
             $transactionStarted = false;
@@ -103,6 +108,17 @@ class SyncExternalRecords
 
                         continue;
                     }
+
+                    // A repeated identifier is one person, not one more usable row:
+                    // counting the repeats would let a broken export that echoes a
+                    // single record pass the shrink guard. The first occurrence wins
+                    // and the repeats are reported, never written or previewed.
+                    if (isset($seen[$item->externalId])) {
+                        $this->noteSkipped($stats, $skipped, SkippedRow::fromDto(SkippedRow::REASON_DUPLICATE, $item));
+
+                        continue;
+                    }
+                    $seen[$item->externalId] = true;
 
                     $stats['incoming'][$kind === PrincipalType::User ? 'users' : 'clients']++;
                     if (count($stats['preview']) < 10) {

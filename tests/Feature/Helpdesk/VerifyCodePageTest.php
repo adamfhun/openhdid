@@ -117,6 +117,16 @@ it('refuses code checks for unheld, unknown or unhandled-tier calls', function (
     expect(app(MobileOtpService::class)->current($client)['code'])->toBe($code);
 })->with(['unheld', 'unknown', 'tier']);
 
+it('opens the verify code page for a missed call reached from the identification page', function (): void {
+    $client = Client::factory()->synced()->create();
+    // The identification page links to "Verify code" with the same call id.
+    $missed = Call::factory()->create(['status' => CallStatus::Missed, 'client_id' => $client->id, 'agent_user_id' => null, 'ended_at' => now()]);
+
+    Livewire::test(VerifyCode::class, ['call' => $missed->id])
+        ->assertOk()
+        ->assertSee($missed->callerNumber());
+});
+
 it('does not let a browser replace the successful identification session', function (): void {
     $otherSession = IdSession::factory()->create();
 

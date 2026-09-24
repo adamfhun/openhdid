@@ -92,7 +92,7 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.0 · 2026. szeptember 23.</span></div>
+    <div><span class="k">Verzió</span><span>1.1 · 2026. szeptember 24.</span></div>
     <div><span class="k">Kiadás</span><span>OpenHDID 1.0.0 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.0, felhasználói kézikönyv 1.23</span></div>
@@ -128,7 +128,7 @@ a { color: var(--accent); }
 <tr><td><code>worker</code></td><td><code>worker default</code></td><td>Üzenetsor-feldolgozó: e-mail, SMS, életjel.</td></tr>
 <tr><td><code>sync-worker</code></td><td><code>worker sync</code></td><td>A panelről indított ügyféltörzs-átvétel külön soron (legfeljebb 20 perc), hogy ne tartsa fel az üzeneteket.</td></tr>
 <tr><td><code>scheduler</code></td><td><code>scheduler</code></td><td>Az ütemező a cron helyett (<code>php artisan schedule:work</code>). Pontosan egy példány fusson.</td></tr>
-<tr><td><code>migrate</code></td><td><code>migrate</code></td><td>Minden indításkor egyszer lefut: megvárja az adatbázist, lefuttatja a migrációkat és a szerepkör-seedert, majd kilép. A többi szolgáltatás csak a sikeres lefutása után indul.</td></tr>
+<tr><td><code>migrate</code></td><td><code>migrate</code></td><td>Minden indításkor egyszer lefut: megvárja az adatbázist, lefuttatja a migrációkat és a szerepkör-seedert (amely csak bővít: a szerepkörök kézi módosításait nem állítja vissza), majd kilép. A többi szolgáltatás csak a sikeres lefutása után indul.</td></tr>
 <tr><td><code>mariadb</code></td><td>–</td><td>Beépített MariaDB 12.3 LTS a <code>db</code> profillal. Külső adatbázisnál elhagyható.</td></tr>
 <tr><td><code>valkey</code></td><td>–</td><td>Valkey (Redis-kompatibilis, BSD-licencű) a <code>redis</code> profillal: közös gyorsítótár, munkamenet és üzenetsor több webpéldányhoz.</td></tr>
 </tbody></table></div>
@@ -354,7 +354,7 @@ GRANT ALL PRIVILEGES ON openhdid.* TO 'openhdid_migrate'@'10.0.0.%';</code></pre
 <h3>7.3 Migrációk</h3>
 <ul>
     <li><strong>Mikor fut:</strong> a <code>migrate</code> szolgáltatás minden <code>docker compose up</code> alkalmával lefut. Ha nincs új migráció, nem változtat semmin.</li>
-    <li><strong>Mit csinál:</strong> legfeljebb 120 másodpercig vár az adatbázisra (<code>OPENHDID_DB_WAIT_SECONDS</code>), futtatja a migrációkat, összehangolja az alap szerepkörök jogosultságait, és a <code>db.env</code> migrációs fiókjával dolgozik.</li>
+    <li><strong>Mit csinál:</strong> legfeljebb 120 másodpercig vár az adatbázisra (<code>OPENHDID_DB_WAIT_SECONDS</code>), futtatja a migrációkat, felveszi a hiányzó jogosultságokat és beépített szerepköröket (a kézi módosításokat megőrzi), és a <code>db.env</code> migrációs fiókjával dolgozik.</li>
     <li><strong>Sikertelen migráció:</strong> ha a <code>migrate</code> nem 0-val lép ki, a web és a háttérfolyamatok nem indulnak (<code>docker compose logs migrate</code>).</li>
     <li><strong>Csak előre:</strong> a migrációk csak előre futnak; visszalépéshez a frissítés előtti mentés kell.</li>
     <li><strong>Egyszerre egy:</strong> egyszerre csak egy <code>migrate</code> fusson; Kubernetesben egyetlen Job, nem a webpodok indulása.</li>
@@ -538,7 +538,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.0 · 2026. szeptember 23. · OpenHDID 1.0.0</div>
+<div class="foot">OpenHDID telepítési útmutató 1.1 · 2026. szeptember 24. · OpenHDID 1.0.1</div>
 </div>
 
 </body>
