@@ -21,7 +21,8 @@ class IvrCodeController extends Controller
      * Issue an IVR identification code for a client.
      *
      * Identify the client by `email` or by `external_id`. Any live IVR code
-     * of the client is replaced. The code is accepted by the IVR only, not by
+     * of the client is replaced. The code is meant to be sent by the app into
+     * the phone menu (DTMF); it is accepted by the IVR only, not by
      * the agent's verification page.
      *
      * @response array{code: string, formatted: string, expires_at: string, client_id: string}

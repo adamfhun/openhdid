@@ -8,6 +8,7 @@
     $passed = $this->getCurrentPassed();
     $outcome = $passed ?? $this->getLatestOutcome();
     $methods = $this->availableMethods();
+    $shared = $this->getSharedNumbers();
     $statusColor = fn ($status) => match ($status) {
         \App\Enums\IdSessionStatus::Passed => 'success',
         \App\Enums\IdSessionStatus::Failed => 'danger',
@@ -44,7 +45,13 @@
                         <dt class="{{ $muted }}">{{ __('Phone numbers') }}</dt>
                         <dd>
                             @forelse ($client->phoneNumbers as $phone)
-                                <div>{{ $phone->number_e164 }} <span class="text-xs {{ $faint }}">{{ $phone->source->label() }}@if ($phone->is_primary) · {{ __('primary') }}@endif</span></div>
+                                <div>
+                                    {{ $phone->number_e164 }}
+                                    <span class="text-xs {{ $faint }}">{{ $phone->source->label() }}@if ($phone->is_primary) · {{ __('primary') }}@endif · {{ $phone->verificationLabel() }}</span>
+                                    @if (in_array($phone->number_e164, $shared, true))
+                                        <x-filament::badge color="warning" size="sm" :tooltip="__('Also on file for another client: the phone menu cannot recognise the caller from this number, so no PIN was asked there.')">{{ __('shared') }}</x-filament::badge>
+                                    @endif
+                                </div>
                             @empty
                                 <span class="{{ $faint }}">-</span>
                             @endforelse
@@ -72,7 +79,11 @@
                         <x-filament::badge :color="$this->isEligibleForQa() ? 'success' : 'gray'">
                             {{ __(':n / :r answers', ['n' => $this->getUsableAnswerCount(), 'r' => $this->getRequiredAnswerCount()]) }}
                         </x-filament::badge>
-                        <x-filament::badge :color="$client->hasPin() ? 'success' : 'gray'">{{ $client->hasPin() ? __('PIN set') : __('No PIN') }}</x-filament::badge>
+                        @if ($client->hasPin() && $client->phoneNumbers->isEmpty())
+                            <x-filament::badge color="warning" :tooltip="__('The phone menu recognises the caller by a registered number before it asks for the PIN; without a number the PIN cannot be used there.')">{{ __('PIN set, no phone number') }}</x-filament::badge>
+                        @else
+                            <x-filament::badge :color="$client->hasPin() ? 'success' : 'gray'">{{ $client->hasPin() ? __('PIN set') : __('No PIN') }}</x-filament::badge>
+                        @endif
                     </div>
                 </dl>
             </x-filament::section>
@@ -135,7 +146,7 @@
                     <p class="mt-3 text-sm {{ $muted }}">{{ $methods[$this->method]['note'] }}</p>
                 @endif
                 @if (! $methods['qa']['enabled'] && ! $methods['pin']['enabled'] && $this->canIdentifyManually())
-                    <p class="mt-3 text-sm {{ $muted }}">{{ __('No automatic method is available for this client. Check a dictated code, or record a manual identification with a reason.') }}</p>
+                    <p class="mt-3 text-sm {{ $muted }}">{{ __('No automatic method is available for this client. Check a one-time identification code, or record a manual identification with a reason.') }}</p>
                 @endif
             </x-filament::section>
 
@@ -191,12 +202,13 @@
                         </x-filament::input.wrapper>
                         <x-filament::button type="submit" :disabled="! $methods['pin']['enabled']">{{ __('Verify') }}</x-filament::button>
                     </form>
+                    <p class="mt-3 text-xs {{ $faint }}">{{ __('The phone menu asks for the PIN only when it recognised the caller by a registered number; here you check the PIN the caller tells you, regardless of the number.') }}</p>
                 </x-filament::section>
             @endif
 
             <x-filament::section compact>
                 <p class="text-sm {{ $muted }}">
-                    {{ __('Did the caller generate a dictated code in the portal? Check it on the') }}
+                    {{ __('Did the caller generate a one-time identification code in the portal? Check it on the') }}
                     <a href="{{ \App\Filament\Admin\Pages\VerifyCode::getUrl(array_filter(['call' => $this->call])) }}" class="font-semibold text-primary-600 hover:underline dark:text-primary-400">{{ __('Verify code') }}</a>
                     {{ __('page; the code alone identifies the client.') }}
                 </p>

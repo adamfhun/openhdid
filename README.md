@@ -1,6 +1,6 @@
 # OpenHDID
 
-**Caller identification for customer service desks.** Agents identify callers by security questions, PIN, a dictated one-time code or an IVR code; clients manage their identification data on a self-service portal; the telephone system and a mobile back end talk to the application over a signed machine API.
+**Caller identification for customer service desks.** Agents identify callers by security questions, PIN (callers recognised by a registered number), a one-time identification code or an IVR code; clients manage their identification data on a self-service portal; the telephone system and a mobile back end talk to the application over a signed machine API.
 
 [Magyar leírás](README.hu.md) · [Documentation](#documentation) · [Releases](https://github.com/adamfhun/openhdid/releases) · [Container image](https://github.com/adamfhun/openhdid/pkgs/container/openhdid)
 
@@ -8,7 +8,7 @@ OpenHDID is published as a ready-to-run container image. This repository holds t
 
 ## Features
 
-- **Staff panel** (`/admin`): call dashboard with live queue, client search (Ctrl/Cmd+K), identification by questions, PIN, dictated code or manual override with justification, missed calls, reports (HTML, XLSX), audit log, system status. The menu and every action follow the user's permissions.
+- **Staff panel** (`/admin`): call dashboard with live queue, client search (Ctrl/Cmd+K), identification by questions, PIN, one-time identification code or manual override with justification, missed calls, reports (HTML, XLSX), audit log, system status. The menu and every action follow the user's permissions.
 - **Client portal** (`/`): passwordless login by e-mail link or SMS code, optional Entra ID / ADFS single sign-on, security answers, PIN, phone numbers, news. Premium and standard tiers with their own look.
 - **Machine APIs** (`/api/v1/...`): call events and IVR checks for the telephone system, one-time IVR codes for the mobile back end; per-partner keys, optional HMAC request signing with replay protection, rate limits, OpenAPI documents for administrators.
 - **Enterprise Master Data (EMD) sync**: staff and client accounts from an authenticated XLSX/CSV export, a JSON API or a file upload, with dry runs and guards against a truncated source.
@@ -83,8 +83,8 @@ The image contains only what runs the application: Alpine Linux, PHP-FPM with th
 Every image is signed and carries a build provenance and an SBOM attestation:
 
 ```sh
-gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.0.1 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.0.1 \
+gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.1.0 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.1.0 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```

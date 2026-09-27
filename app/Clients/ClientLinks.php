@@ -7,6 +7,7 @@ use App\Enums\ClientTier;
 use App\Models\Client;
 use App\Models\ClientLink;
 use App\Models\User;
+use App\Sync\AccountProvisioner;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -195,14 +196,23 @@ class ClientLinks
 
     /**
      * Sponsor reopened: reopen the linked clients that were closed only
-     * because of the sponsor.
+     * because of the sponsor. One the directory dropped in the meantime
+     * stays closed, now for the directory's reason, until the record returns
+     * and the sync reopens it.
      */
     public function reopenLinkedClients(Client $sponsor): int
     {
         $count = 0;
 
-        $sponsor->activeLinks()->with('linked')->get()->each(function (ClientLink $link) use (&$count): void {
+        $sponsor->activeLinks()->with('linked.externalRecord')->get()->each(function (ClientLink $link) use (&$count): void {
             if ($link->linked !== null && $link->linked->isClosed() && $link->linked->closed_reason === self::CLOSE_REASON_SPONSOR) {
+                if ($link->linked->externalRecord?->isMissing()) {
+                    $link->linked->forceFill(['closed_reason' => AccountProvisioner::CLOSE_REASON_MISSING])->save();
+                    $this->auditor->record('account.kept_closed', $link->linked, ['reason' => AccountProvisioner::CLOSE_REASON_MISSING, 'sponsor_id' => $link->sponsor_client_id]);
+
+                    return;
+                }
+
                 $link->linked->reopen();
                 $this->auditor->record('account.reopened', $link->linked, ['sponsor_id' => $link->sponsor_client_id]);
                 $count++;

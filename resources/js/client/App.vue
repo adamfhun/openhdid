@@ -14,7 +14,7 @@ const nav = [
     { to: '/questions', label: 'Security questions', icon: 'question' },
     { to: '/pin', label: 'PIN', icon: 'key' },
     { to: '/phones', label: 'Phone numbers', icon: 'phone' },
-    { to: '/mobile-code', label: 'Identification code', icon: 'code' },
+    { to: '/mobile-code', label: 'One-time identification code', icon: 'code' },
     { to: '/news', label: 'News / Information', icon: 'sparkle' },
 ];
 

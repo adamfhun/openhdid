@@ -114,7 +114,7 @@ it('refuses pins and live codes of accounts that were closed or lost access in t
 });
 
 it('revokes every live secret when the pin changes and frees the lookup of used codes', function (): void {
-    $client = Client::factory()->create();
+    $client = Client::factory()->withPhone()->create();
     $otp = app(MobileOtpService::class);
     $code = $otp->issue($client)['code'];
     $otp->issue($client, purpose: OneTimeCodePurpose::IvrCode);

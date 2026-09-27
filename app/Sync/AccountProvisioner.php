@@ -6,6 +6,7 @@ use App\Audit\Auditor;
 use App\Auth\Contracts\Principal;
 use App\Clients\PackageOverrides;
 use App\Enums\PhoneNumberSource;
+use App\Enums\PhoneVerificationSource;
 use App\Enums\PrincipalType;
 use App\Models\Client;
 use App\Models\ClientPhoneNumber;
@@ -141,16 +142,17 @@ class AccountProvisioner
         $live = $all->reject(fn (ClientPhoneNumber $phone) => $phone->trashed());
         $hadNone = $live->isEmpty();
 
-        foreach ($live->where('source', PhoneNumberSource::Sync) as $phone) {
-            if (! in_array($phone->number_e164, $wanted, true)) {
-                $phone->delete();
-            }
-        }
-
-        $known = $live->pluck('number_e164')->all();
-
         foreach ($wanted as $number) {
-            if (in_array($number, $known, true)) {
+            $existing = $live->firstWhere('number_e164', $number);
+
+            if ($existing !== null) {
+                if ($existing->source !== PhoneNumberSource::Sync) {
+                    // The directory now vouches for a number added by hand: it becomes
+                    // a verified directory number, which outranks unverified ones in
+                    // the caller lookup and can no longer be removed from the portal.
+                    $existing->forceFill(['source' => PhoneNumberSource::Sync, 'verified_at' => $existing->verified_at ?? now(), 'verified_via' => PhoneVerificationSource::Directory])->save();
+                }
+
                 continue;
             }
 
@@ -159,7 +161,7 @@ class AccountProvisioner
 
             if ($trashed !== null) {
                 $trashed->restore();
-                $trashed->forceFill(['source' => PhoneNumberSource::Sync, 'verified_at' => now(), 'is_primary' => $isPrimary || $trashed->is_primary])->save();
+                $trashed->forceFill(['source' => PhoneNumberSource::Sync, 'verified_at' => now(), 'verified_via' => PhoneVerificationSource::Directory, 'is_primary' => $isPrimary || $trashed->is_primary])->save();
 
                 continue;
             }
@@ -169,7 +171,17 @@ class AccountProvisioner
                 'source' => PhoneNumberSource::Sync,
                 'is_primary' => $isPrimary,
                 'verified_at' => now(),
+                'verified_via' => PhoneVerificationSource::Directory,
             ]);
+        }
+
+        // The numbers the directory dropped go last: a number change must not
+        // leave the client without a number for a moment, because the last
+        // number's removal also clears the PIN.
+        foreach ($live->where('source', PhoneNumberSource::Sync) as $phone) {
+            if (! in_array($phone->number_e164, $wanted, true)) {
+                $phone->delete();
+            }
         }
     }
 }

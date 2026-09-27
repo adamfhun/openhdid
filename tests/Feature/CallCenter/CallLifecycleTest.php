@@ -180,7 +180,7 @@ it('asks for confirmation on the dashboard before taking over a colleague\'s cal
 
     expect($mine->fresh()->agent_user_id)->toBeNull();
 
-    Livewire::test(OngoingCallsWidget::class)->callTableAction('take', $theirs);
+    Livewire::test(OngoingCallsWidget::class)->callTableAction('take', $theirs, arguments: ['from' => $colleague->id]);
     expect($theirs->fresh()->agent_user_id)->toBe($agent->id);
 });
 
@@ -234,7 +234,8 @@ it('does not take a colleagues call until the confirmation is submitted', functi
     $this->actingAs($agent);
     $call = Call::factory()->create(['agent_user_id' => $colleague->id]);
 
-    $page = Livewire::test(OngoingCallsWidget::class)->mountTableAction('take', $call)
+    $page = Livewire::test(OngoingCallsWidget::class)
+        ->mountAction(TestAction::make('take')->table($call)->arguments(['from' => $colleague->id]))
         ->assertActionMounted(TestAction::make('take')->table($call))
         ->assertNoRedirect();
     expect($call->fresh()->agent_user_id)->toBe($colleague->id);
@@ -315,4 +316,53 @@ it('offers a tab without a time window on the calls list', function (): void {
 
     Livewire::test(ManageCalls::class)->assertCanNotSeeTableRecords([$old]);
     Livewire::test(ManageCalls::class)->set('activeTab', 'all')->assertCanSeeTableRecords([$old]);
+});
+
+/**
+ * The "Identify" button was drawn while the call was free, so no confirmation
+ * was asked; by the time it is clicked a colleague holds the call. The click
+ * must not become a silent take-over: the agent gets the warning and the
+ * colleague keeps the call.
+ */
+it('does not take over a call a colleague claimed after the page was drawn', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    Filament::setCurrentPanel('admin');
+    $agent = User::factory()->withRole(Role::Agent)->create();
+    $colleague = User::factory()->withRole(Role::Agent)->create(['name' => 'Kiss Béla']);
+    $this->actingAs($agent);
+    $call = Call::factory()->create();
+
+    $page = Livewire::test(OngoingCallsWidget::class)->assertTableActionHasLabel('take', 'Identify', $call);
+
+    app(CallCenterService::class)->claim($call, $colleague);
+
+    $page->callTableAction('take', $call)->assertNotified()->assertNoRedirect();
+
+    expect($call->fresh()->agent_user_id)->toBe($colleague->id)
+        ->and(AuditLog::query()->where('event', 'call.taken_over')->exists())->toBeFalse();
+});
+
+/**
+ * A take-over confirmed for one colleague must not land on another: when the
+ * holder changed between drawing the modal and confirming it, the agent has
+ * to look again.
+ */
+it('does not take over from a different colleague than the one the confirmation named', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    Filament::setCurrentPanel('admin');
+    $agent = User::factory()->withRole(Role::Agent)->create();
+    $first = User::factory()->withRole(Role::Agent)->create(['name' => 'Első Elek']);
+    $second = User::factory()->withRole(Role::Agent)->create(['name' => 'Második Miklós']);
+    $this->actingAs($agent);
+    $call = Call::factory()->create(['agent_user_id' => $first->id, 'status' => CallStatus::Active]);
+
+    $page = Livewire::test(OngoingCallsWidget::class)
+        ->mountAction(TestAction::make('take')->table($call)->arguments(['from' => $first->id]))
+        ->assertNoRedirect();
+
+    app(CallCenterService::class)->claim($call->fresh(), $second, takeOver: true);
+
+    $page->callMountedTableAction()->assertNotified()->assertNoRedirect();
+
+    expect($call->fresh()->agent_user_id)->toBe($second->id);
 });

@@ -36,11 +36,14 @@ const circumference = 2 * Math.PI * 22;
 
 const recentlyGenerated = () => store.codeGeneratedAt !== null && Date.now() - store.codeGeneratedAt < LEAVE_GUARD_MS;
 
+/* The server reports any acceptance of the last quarter hour; only one made after the current code was generated belongs to it. */
+const belongsToCurrentCode = (info) => !store.codeGeneratedAt || new Date(info.at) >= new Date(store.codeGeneratedAt - 5000);
+
 function apply(r) {
     code.value = r.code; formatted.value = r.formatted; expiresAt.value = r.expires_at; ttlMinutes.value = r.ttl_minutes ?? 5;
     clearInterval(timer);
     if (code.value) { expired.value = false; identified.value = null; timer = setInterval(tick, 1000); tick(); startPolling(); }
-    else if (r.identified && (!store.codeGeneratedAt || new Date(r.identified.at) >= new Date(store.codeGeneratedAt - 5000))) { markIdentified(r.identified); }
+    else if (r.identified && belongsToCurrentCode(r.identified)) { markIdentified(r.identified); }
 }
 
 function markIdentified(info) {
@@ -57,8 +60,11 @@ function startPolling() {
     poll = setInterval(async () => {
         try {
             const r = await get('/client/mobile-code');
-            if (r.identified && !r.code) { code.value = null; formatted.value = null; markIdentified(r.identified); }
-            else if (!r.code) { stopPolling(); }
+            if (r.code) return;
+            // The code is gone: accepted by the helpdesk, or expired unused. An
+            // older acceptance must not be read as this code's success.
+            if (r.identified && belongsToCurrentCode(r.identified)) { code.value = null; formatted.value = null; markIdentified(r.identified); }
+            else { stopPolling(); }
         } catch { /* keep the local countdown */ }
     }, 4000);
 }
@@ -125,7 +131,7 @@ onUnmounted(() => { clearInterval(timer); stopPolling(); window.removeEventListe
 
 <template>
     <div class="space-y-6">
-        <PageHeader :title="t('Identification code')" :subtitle="t('Generate a one-time code while you are on the phone and read it to the agent or type it into the phone menu.')" icon="code" />
+        <PageHeader :title="t('One-time identification code')" :subtitle="t('Generate a one-time code while you are on the phone and read it to the agent or type it into the phone menu.')" icon="code" />
 
         <Skeleton v-if="!loaded" :lines="3" />
 

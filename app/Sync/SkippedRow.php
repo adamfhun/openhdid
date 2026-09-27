@@ -16,6 +16,8 @@ final readonly class SkippedRow
 
     public const REASON_DUPLICATE = 'duplicate';
 
+    public const REASON_DUPLICATE_EMAIL = 'duplicate_email';
+
     /**
      * @param  array<string, mixed>  $sample  a few identifying columns of the row, never the whole row
      */

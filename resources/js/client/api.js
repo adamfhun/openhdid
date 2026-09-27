@@ -33,8 +33,9 @@ export class ApiError extends Error {
  *  - onNotEntitled(error): the account lost portal access
  *  - onUnauthenticated(error): the session expired while signed in
  *  - networkErrorMessage(): translated text for a failed connection
+ *  - throttledMessage(): translated text for a rate-limited request (the framework's 429 body is English only)
  */
-export const hooks = { onNotEntitled: null, onUnauthenticated: null, networkErrorMessage: null };
+export const hooks = { onNotEntitled: null, onUnauthenticated: null, networkErrorMessage: null, throttledMessage: null };
 
 async function send(method, path, data) {
     const headers = { Accept: 'application/json' };
@@ -72,7 +73,9 @@ export async function api(method, path, data, { retried = false } = {}) {
         return api(method, path, data, { retried: true });
     }
 
-    const body = response.status === 204 ? null : await response.json().catch(() => null);
+    let body = response.status === 204 ? null : await response.json().catch(() => null);
+
+    if (response.status === 429 && hooks.throttledMessage) body = { ...(body ?? {}), message: hooks.throttledMessage(), reason: body?.reason ?? 'throttled' };
 
     if (!response.ok) {
         const error = new ApiError(response.status, body);

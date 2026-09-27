@@ -69,6 +69,7 @@ class SyncRunResource extends BaseResource
                 TextEntry::make('stats.incoming.unclassified')->label(__('Unclassified records'))->placeholder('-'),
                 TextEntry::make('stats.incoming.invalid_row')->label(__('Invalid records'))->placeholder('-'),
                 TextEntry::make('stats.incoming.duplicate')->label(__('Repeated external ids'))->visible(fn (SyncRun $record) => ($record->stats['incoming']['duplicate'] ?? 0) > 0),
+                TextEntry::make('stats.incoming.duplicate_email')->label(__('Repeated e-mail addresses'))->visible(fn (SyncRun $record) => ($record->stats['incoming']['duplicate_email'] ?? 0) > 0),
             ]),
             RepeatableEntry::make('stats.preview')->label(__('Incoming records (first 10 accepted)'))->columnSpanFull()->schema([
                 TextEntry::make('external_id')->label(__('External ID')),

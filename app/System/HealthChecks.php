@@ -3,6 +3,7 @@
 namespace App\System;
 
 use App\Auth\Oidc\OidcProvider;
+use App\Clients\ClientPhones;
 use App\Enums\ApiKeyScope;
 use App\Enums\OutboundMessageStatus;
 use App\Enums\PrincipalType;
@@ -60,6 +61,7 @@ class HealthChecks
             'sync_auth' => [__('EMD API authentication'), $this->syncAuthentication(...)],
             'api_keys' => [__('API keys'), $this->apiKeys(...)],
             'package_overrides' => [__('Package overrides'), $this->packageOverrides(...)],
+            'shared_numbers' => [__('Shared phone numbers'), $this->sharedPhoneNumbers(...)],
             'oidc' => [__('Single sign-on'), $this->oidc(...)],
             'storage' => [__('Storage'), $this->storage(...)],
             'retention' => [__('Data retention'), $this->retention(...)],
@@ -98,6 +100,7 @@ class HealthChecks
             'sync' => __('Red: the last run failed or no successful run happened in twice the expected interval. Open EMD sync runs for the error; check the API URL/key or upload the file manually. A refused run usually means the export was much smaller than before (row-ratio guard). Yellow with a waiting run: the sync started from the panel was not picked up, start a worker for the EMD_SYNC_QUEUE queue.'),
             'api_keys' => __('A scope (call center or mobile backend) has no active key, so that partner cannot call in. Create one under API keys and hand it over, or ignore this while the integration is not live yet.'),
             'package_overrides' => __('Informational: these clients carry a temporary manual package. Nothing to fix, but review the list now and then and end an override EMD has caught up with.'),
+            'shared_numbers' => __('A number on file for more than one client recognises nobody in the phone menu, so those callers are not asked for their PIN. Open Shared phone numbers, decide whose number it is and remove it from the others; a number EMD lists for several people has to be corrected in the directory.'),
             'oidc' => __('A provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*). Either fill in the configuration or switch the provider off, otherwise the login button leads to an error.'),
             'storage' => __('Red: the public disk is not writable, fix the permissions of storage/app/public. Yellow: run "php artisan storage:link" on the server, otherwise uploaded logos and images do not show.'),
             'retention' => __('The daily "hdid:prune" task has not run for days. It runs through the scheduler, so check that tile first; run "php artisan hdid:prune" by hand to catch up.'),
@@ -348,6 +351,16 @@ class HealthChecks
         $list = $active->take(5)->map(fn (Client $c) => $c->name.' → '.$c->package_override.' ('.$c->package_override_until?->format(HuDate::DATE).')')->implode(' · ');
 
         return Check::warn('package_overrides', $label, __(':n client(s) with a temporary package override: :list', ['n' => $active->count(), 'list' => $list]));
+    }
+
+    public function sharedPhoneNumbers(): Check
+    {
+        $label = __('Shared phone numbers');
+        $count = app(ClientPhones::class)->sharedNumberCount();
+
+        return $count === 0
+            ? Check::ok('shared_numbers', $label, __('Every registered number belongs to one client.'))
+            : Check::warn('shared_numbers', $label, __(':n phone number(s) on file for more than one client; the phone menu recognises nobody from them.', ['n' => $count]));
     }
 
     public function apiKeys(): Check

@@ -240,6 +240,9 @@ class ManageSettings extends Page
                     SettingKey::SyncUniqueDomains => __('Enabled: a domain may appear in only one list. Disabled: shared domains are classified as staff. Domains are saved in lowercase; unlisted domains are skipped.'),
                     SettingKey::ClientsListRelevantOnly => __('The Clients list opens with the relevant accounts only: portal access, closed, or any history (PIN, answers, calls, identifications, links, notes). EMD-only accounts stay reachable through the list filter and the search.'),
                     SettingKey::ClientsUnlinkedBadge => __('Shows a red counter next to the Clients menu item with the number of explicit-premium clients that have no sponsor link yet. The tab on the list keeps its counter either way.'),
+                    SettingKey::PortalPhoneVerificationEnabled => __('The client confirms a number added on the portal with a code sent by SMS; needs a working SMS gateway. Off: the helpdesk confirms the number on the client page, or an identified call does when that switch is on. Unverified numbers rank below verified ones when a caller is matched.'),
+                    SettingKey::VerifyPhoneOnIdentifiedCall => __('A client identified on a call (by PIN, code, question and answer or manually) proves the number the call came from: their unverified copy of that number becomes verified. Off: numbers are verified by SMS code or by the helpdesk only.'),
+                    SettingKey::PortalSharedNumberNotice => __('On: the portal tells the client when one of their numbers is also on file for another client, so the phone menu cannot recognise them from it (the other client is never named). Off: the portal says nothing about it.'),
                     default => null,
                 }),
             SettingType::Integer => TextInput::make($name)->label($label)->numeric()->required()
@@ -251,9 +254,9 @@ class ManageSettings extends Page
                 })
                 ->helperText(match ($key) {
                     SettingKey::ClientLoginMagicLinkTtlMinutes => __('In minutes; 4320 = 3 days.'),
-                    SettingKey::PinMinLength, SettingKey::PinMaxLength => __('Allowed PIN length when setting or replacing a PIN (:min–:max digits). Existing PINs remain valid.', ['min' => PinService::MIN_ALLOWED_LENGTH, 'max' => PinService::MAX_ALLOWED_LENGTH]),
-                    SettingKey::IvrCodeLength => __('Length of new IVR codes requested by the mobile backend (8–12 digits), independent of the portal dictated code.'),
-                    SettingKey::MobileOtpLength => __('Digits of the dictated code; shown in pairs, the second digit of a pair is never zero.'),
+                    SettingKey::PinMinLength, SettingKey::PinMaxLength => __('Allowed PIN length when setting or replacing a PIN (:min–:max digits). Existing PINs remain valid. The phone menu checks the PIN only for callers recognised by a registered number, so a PIN needs a phone number.', ['min' => PinService::MIN_ALLOWED_LENGTH, 'max' => PinService::MAX_ALLOWED_LENGTH]),
+                    SettingKey::IvrCodeLength => __('Length of new IVR codes requested by the mobile app backend (8–12 digits), independent of the portal one-time identification code.'),
+                    SettingKey::MobileOtpLength => __('Digits of the one-time identification code; shown in pairs, the second digit of a pair is never zero.'),
                     SettingKey::AgentAttemptsPerHour => __('Failed code and PIN checks one agent may run in an hour; successful checks do not count.'),
                     SettingKey::SyncMinRowsRatioPercent => __('A run is refused when it reads fewer rows than this share of the previous successful run (0 = off). Protects against a truncated export closing accounts.'),
                     SettingKey::SyncExpectedIntervalHours => __('How often EMD sync is expected to run; the status page fails when no successful run happened in twice this time.'),

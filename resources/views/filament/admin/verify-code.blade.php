@@ -20,7 +20,7 @@
     @endif
 
     @if ($client === null)
-        <x-filament::section :heading="__('Code dictated by the caller')" :description="__('Ask the caller to read the dictated code shown in the client portal. A correct code identifies the client on its own.')">
+        <x-filament::section :heading="__('One-time identification code told by the caller')" :description="__('Ask the caller to read out the one-time identification code shown in the client portal. A correct code identifies the client on its own.')">
             <form
                 wire:submit="verify"
                 class="space-y-4"

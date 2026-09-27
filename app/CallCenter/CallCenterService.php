@@ -163,16 +163,19 @@ class CallCenterService
 
     /**
      * An agent takes the call. A call another agent already holds is only
-     * handed over when the agent explicitly asks for it.
+     * handed over when the agent explicitly asks for it; when the request
+     * names the colleague it was confirmed against, the hand-over happens
+     * only while that colleague still holds the call, so a call that
+     * changed hands between the confirmation and the click stays where it is.
      *
      * @throws CallAlreadyClaimedException
      */
-    public function claim(Call $call, User $agent, bool $takeOver = false): Call
+    public function claim(Call $call, User $agent, bool $takeOver = false, ?string $takeOverFrom = null): Call
     {
-        return $this->underCallLock($call, function (Call $call) use ($agent, $takeOver): Call {
+        return $this->underCallLock($call, function (Call $call) use ($agent, $takeOver, $takeOverFrom): Call {
             $holder = $call->agent_user_id !== null && $call->agent_user_id !== $agent->id ? $call->agent : null;
 
-            if ($holder !== null && ! $takeOver) {
+            if ($holder !== null && (! $takeOver || ($takeOverFrom !== null && $takeOverFrom !== $holder->id))) {
                 throw new CallAlreadyClaimedException($holder);
             }
 
@@ -279,7 +282,7 @@ class CallCenterService
     }
 
     /**
-     * IVR: caller typed the code generated in the portal (dictated code) or
+     * IVR: caller typed the one-time code generated in the portal or
      * requested by the mobile app backend (IVR code). The code alone
      * identifies the client; when the call is known the client is attached.
      */

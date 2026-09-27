@@ -1,9 +1,11 @@
 <?php
 
 use App\Enums\PhoneNumberSource;
+use App\Enums\PhoneVerificationSource;
 use App\Enums\PrincipalType;
 use App\Enums\SyncRunStatus;
 use App\Enums\SyncSource;
+use App\Identification\PinService;
 use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\ClientPhoneNumber;
@@ -524,4 +526,68 @@ it('reads an uploaded csv with the configured delimiter', function (): void {
     unlink($path);
 
     expect(Client::query()->where('email', 'semi@x.hu')->exists())->toBeTrue();
+});
+
+/**
+ * The directory vouches for a number the client had only added by hand: it
+ * becomes a verified directory number (it outranks unverified ones in the
+ * caller lookup and the client can no longer remove it), the label stays.
+ */
+it('adopts a self-added number as a verified directory number once the directory carries it', function (): void {
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([row('1', 'a@x.hu')]));
+    $client = Client::query()->where('email', 'a@x.hu')->firstOrFail();
+    $phone = $client->phoneNumbers()->create(['number_e164' => '+36301111111', 'source' => PhoneNumberSource::ClientSelf, 'label' => 'mobil']);
+
+    $sync->run(readerOf([row('1', 'a@x.hu', 'Acme', ['+36301111111'])]));
+
+    expect($phone->fresh()->source)->toBe(PhoneNumberSource::Sync)
+        ->and($phone->fresh()->verified_at)->not->toBeNull()
+        ->and($phone->fresh()->label)->toBe('mobil')
+        ->and($client->fresh()->phoneNumbers()->count())->toBe(1);
+});
+
+/**
+ * Two directory rows with one e-mail are one client, not a client that is
+ * rebound to the other row on every run: the first row wins, the repeat is
+ * reported, and nothing bounces.
+ */
+it('imports one client for an e-mail that several directory rows share and reports the repeats', function (): void {
+    $sync = app(SyncExternalRecords::class);
+    $rows = fn (): array => [row('1', 'a@x.hu', name: 'Első Elek'), row('2', 'a@x.hu', name: 'Második Miklós'), row('3', 'b@x.hu')];
+
+    $run = $sync->run(readerOf($rows()));
+
+    $client = Client::query()->where('email', 'a@x.hu')->firstOrFail();
+    expect($client->name)->toBe('Első Elek')
+        ->and($client->externalRecord->external_id)->toBe(1)
+        ->and(ExternalRecord::query()->where('external_id', 2)->exists())->toBeFalse()
+        ->and($run->stats['incoming']['clients'])->toBe(2)
+        ->and($run->stats['incoming'][SkippedRow::REASON_DUPLICATE_EMAIL])->toBe(1)
+        ->and($run->skipped_rows[0]['reason'])->toBe(SkippedRow::REASON_DUPLICATE_EMAIL)
+        ->and($run->skipped_rows[0]['sample']['external_id'])->toBe('2');
+
+    $sync->run(readerOf($rows()));
+
+    expect($client->fresh()->name)->toBe('Első Elek')
+        ->and($client->fresh()->externalRecord->external_id)->toBe(1)
+        ->and(AuditLog::query()->where('event', 'account.rebound')->exists())->toBeFalse();
+});
+
+it('keeps the pin when the directory replaces the only number in one run', function (): void {
+    app(Settings::class)->set(SettingKey::SyncClientDomains, ['x.hu']);
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([row('1', 'a@x.hu', 'Acme', ['+36301111111'])]));
+    $client = Client::query()->where('email', 'a@x.hu')->firstOrFail();
+    app(PinService::class)->setPin($client, '123456');
+
+    $sync->run(readerOf([row('1', 'a@x.hu', 'Acme', ['+36309999999'])]));
+
+    expect($client->fresh()->hasPin())->toBeTrue()
+        ->and($client->fresh()->phoneNumbers->pluck('number_e164')->all())->toBe(['+36309999999'])
+        ->and($client->fresh()->phoneNumbers->first()->verified_via)->toBe(PhoneVerificationSource::Directory);
+
+    $sync->run(readerOf([row('1', 'a@x.hu', 'Acme', [])]));
+
+    expect($client->fresh()->hasPin())->toBeFalse('the directory dropped the last number');
 });

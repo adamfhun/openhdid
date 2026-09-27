@@ -4,6 +4,7 @@ namespace App\Identification;
 
 use App\Audit\Auditor;
 use App\Auth\Passwordless\OneTimeCodes;
+use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
 use App\Enums\IdChannel;
 use App\Enums\IdMethod;
@@ -91,8 +92,29 @@ class PinService
         throw new IdentificationException(__('Could not generate an unused PIN. Please try again.'));
     }
 
+    /**
+     * The phone menu recognises the caller by number before it asks for the
+     * PIN, so a PIN without a registered number can never be used.
+     */
+    public function canSetPin(Client $client): bool
+    {
+        return $client->phoneNumbers()->exists();
+    }
+
+    /**
+     * Why a PIN cannot be set right now, or null when it can.
+     */
+    public function setPinBlocker(Client $client): ?string
+    {
+        return $this->canSetPin($client) ? null : __('A PIN needs at least one registered phone number: the phone menu recognises the caller by the number before it asks for the PIN.');
+    }
+
     public function setPin(Client $client, string $pin): void
     {
+        if (($blocker = $this->setPinBlocker($client)) !== null) {
+            throw ValidationException::withMessages(['pin' => $blocker]);
+        }
+
         if (! preg_match('/^\d{'.$this->minLength().','.$this->maxLength().'}$/', $pin)) {
             throw ValidationException::withMessages(['pin' => __('The PIN must be :min to :max digits.', ['min' => $this->minLength(), 'max' => $this->maxLength()])]);
         }
@@ -120,12 +142,15 @@ class PinService
         $client->refresh();
     }
 
-    public function clearPin(Client $client): void
+    /**
+     * @param  string|null  $reason  why the PIN goes, when not an operator's or the client's own choice
+     */
+    public function clearPin(Client $client, ?string $reason = null): void
     {
-        DB::transaction(function () use ($client): void {
+        DB::transaction(function () use ($client, $reason): void {
             $client->forceFill(['pin_hash' => null, 'pin_lookup' => null, 'pin_set_at' => null, 'pin_failed_attempts' => 0, 'pin_locked_until' => null, 'pin_lockout_count' => 0])->save();
             $this->codes->revokeAll($client);
-            $this->auditor->record('client.pin_cleared', $client);
+            $this->auditor->record('client.pin_cleared', $client, array_filter(['reason' => $reason]));
         });
     }
 
@@ -165,6 +190,7 @@ class PinService
 
         $session->forceFill(['status' => $status, 'outcome_reason' => $reason, 'decided_at' => now()])->save();
         $this->auditor->record('id_session.finished', $session, ['status' => $status->value, 'reason' => $reason, 'method' => 'pin'], $agent);
+        app(ClientPhones::class)->verifyFromIdentifiedCall($session);
 
         return $session;
     }

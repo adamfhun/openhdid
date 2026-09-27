@@ -56,6 +56,7 @@ enum SettingKey: string
     case PortalNewsOnOverview = 'portal.news_on_overview';
     case PortalMaxPhoneNumbersPerClient = 'portal.max_phone_numbers_per_client';
     case PortalPhoneVerificationEnabled = 'portal.phone_verification_enabled';
+    case PortalSharedNumberNotice = 'portal.shared_number_notice';
 
     // Client login methods
     case ClientLoginMagicLinkEnabled = 'client_login.magic_link.enabled';
@@ -98,6 +99,9 @@ enum SettingKey: string
     // Identification: how many code / PIN checks one agent may run per hour
     case AgentAttemptsPerHour = 'identification.agent_attempts_per_hour';
 
+    // Identification: a client identified on a call proves the number the call came from
+    case VerifyPhoneOnIdentifiedCall = 'identification.verify_phone_on_identified_call';
+
     // External sync
     case SyncMissedRunsBeforeClose = 'sync.missed_runs_before_close';
     case SyncUniqueDomains = 'sync.unique_domains';
@@ -130,6 +134,8 @@ enum SettingKey: string
             self::UserLoginPasswordEnabled,
             self::PortalNewsOnOverview,
             self::PortalPhoneVerificationEnabled,
+            self::PortalSharedNumberNotice,
+            self::VerifyPhoneOnIdentifiedCall,
             self::UserSsoAdfsEnabled,
             self::UserSsoEntraEnabled,
             self::ClientSsoAdfsEnabled,
@@ -226,6 +232,7 @@ enum SettingKey: string
             self::PortalNewsOnOverview => true,
             self::PortalMaxPhoneNumbersPerClient => 5,
             self::PortalPhoneVerificationEnabled => false,
+            self::PortalSharedNumberNotice => false,
 
             self::ClientLoginMagicLinkEnabled => true,
             self::ClientLoginMagicLinkTtlMinutes => 4320,
@@ -262,6 +269,7 @@ enum SettingKey: string
             self::MobileOtpLength, self::IvrCodeLength => 8,
             self::MobileOtpTtlMinutes => 5,
             self::AgentAttemptsPerHour => 50,
+            self::VerifyPhoneOnIdentifiedCall => false,
 
             self::SyncMissedRunsBeforeClose => 2,
             self::SyncMinRowsRatioPercent => 50,

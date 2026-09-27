@@ -22,6 +22,7 @@ const verifyNotice = ref(null);
 
 const sourceLabel = { sync: 'from Enterprise Master Data', admin: 'added by the helpdesk', self: 'added by you' };
 
+const verifiedOnCall = computed(() => store.user?.phone_verification_on_call === true);
 const canVerify = (phone) => verificationEnabled.value && phone.source === 'self' && !phone.verified;
 
 async function makePrimary(phone) {
@@ -33,16 +34,24 @@ async function makePrimary(phone) {
 async function add() {
     busy.value = true;
     try {
+        // The server answers with the unchanged list when the number is already on it.
+        const before = new Set((store.user?.phone_numbers ?? []).map((phone) => phone.id));
         const r = await post('/client/phone-numbers', { number: number.value, label: label.value || null });
         store.user = r.data; number.value = label.value = '';
-        store.toast(t('Phone number added.'));
+        const added = (r.data?.phone_numbers ?? []).some((phone) => !before.has(phone.id));
+        store.toast(added ? t('Phone number added.') : t('This number is already on your list.'));
     } catch (e) { store.toast(e.firstError ?? e.message, 'error'); } finally { busy.value = false; }
 }
 
 async function remove(phone) {
     busy.value = true;
-    try { await del(`/client/phone-numbers/${phone.id}`); removingId.value = null; store.toast(t('Phone number removed.')); await store.refreshUser(); }
-    catch (e) { store.toast(e.message, 'error'); } finally { busy.value = false; }
+    try {
+        const r = await del(`/client/phone-numbers/${phone.id}`);
+        removingId.value = null;
+        // The last registered number takes the PIN with it: the server says so.
+        store.toast(r?.pin_cleared ? t('Phone number removed. It was your last registered number, so your PIN was removed too.') : t('Phone number removed.'), r?.pin_cleared ? 'error' : 'success', r?.pin_cleared ? 8000 : 4000);
+        await store.refreshUser();
+    } catch (e) { store.toast(e.message, 'error'); } finally { busy.value = false; }
 }
 
 async function requestVerification(phone) {
@@ -69,7 +78,7 @@ async function verify(phone) {
 
 <template>
     <div class="space-y-6">
-        <PageHeader :title="t('Phone numbers')" :subtitle="t('When you call from one of these numbers the helpdesk finds you immediately.')" icon="phone" />
+        <PageHeader :title="t('Phone numbers')" :subtitle="t('When you call from one of these numbers the helpdesk finds you immediately, and the phone menu can ask for your PIN.')" icon="phone" />
 
         <div class="card divide-y divide-slate-100">
             <div v-for="phone in phones" :key="phone.id" class="p-4">
@@ -79,8 +88,10 @@ async function verify(phone) {
                             <span class="font-mono font-semibold">{{ phone.number }}</span>
                             <span v-if="phone.verified" class="badge bg-emerald-50 text-emerald-700"><Icon name="check" class="h-3 w-3" />{{ t('verified') }}</span>
                             <span v-else class="badge bg-amber-50 text-amber-700" :title="t('The helpdesk treats an unverified number with less trust when you call from it.')">{{ t('not verified') }}</span>
+                            <span v-if="phone.shared" class="badge bg-amber-50 text-amber-700">{{ t('shared') }}</span>
                         </div>
                         <div class="text-xs text-slate-500">{{ phone.label ? phone.label + ' · ' : '' }}{{ t(sourceLabel[phone.source]) }}<span v-if="phone.is_primary" class="font-semibold text-brand-deep"> · {{ t('primary') }}</span></div>
+                        <p v-if="phone.shared" class="mt-1 text-xs text-amber-800">{{ t('This number is also on file for another client, so the phone menu cannot recognise you from it. Use the one-time identification code, or contact the helpdesk.') }}</p>
                     </div>
                     <div v-if="removingId === phone.id" class="flex items-center gap-2 text-sm">
                         <span class="text-red-700">{{ t('Remove?') }}</span>
@@ -110,7 +121,11 @@ async function verify(phone) {
             <div v-if="!phones.length" class="p-4 text-sm text-slate-500">{{ t('No phone numbers yet.') }}</div>
         </div>
 
-        <p v-if="!verificationEnabled && phones.some((p) => !p.verified)" class="text-xs text-ink-muted">{{ t('Numbers you add yourself cannot be verified online yet; the helpdesk can confirm them for you.') }}</p>
+        <p v-if="phones.some((p) => !p.verified)" class="text-xs text-ink-muted">
+            {{ verificationEnabled ? t('An unverified number ranks below verified ones when the helpdesk matches a caller: confirm yours with the SMS code.') : t('Numbers you add yourself cannot be verified online yet; the helpdesk can confirm them for you.') }}
+            <template v-if="verifiedOnCall"> {{ t('A number is also verified automatically once you call from it and are identified.') }}</template>
+        </p>
+        <p v-if="phones.length" class="text-xs text-ink-muted">{{ t('Removing your last registered number also removes your PIN: the phone menu could no longer use it.') }}</p>
 
         <form class="card grid gap-3 p-5 sm:grid-cols-[1fr_1fr_auto]" @submit.prevent="add">
             <div><label class="label" for="number">{{ t('Phone number') }}</label><input id="number" v-model="number" class="input" placeholder="+36 30 123 4567" required autocomplete="tel" :disabled="atCap" /></div>

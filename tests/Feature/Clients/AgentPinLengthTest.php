@@ -15,7 +15,7 @@ it('lets an agent set a pin of any length between six and ten digits', function 
     $this->seed(RolesAndPermissionsSeeder::class);
     $this->actingAs(User::factory()->withRole(Role::Agent)->create());
     Filament::setCurrentPanel('admin');
-    $client = Client::factory()->synced()->create();
+    $client = Client::factory()->synced()->withPhone()->create();
 
     Livewire::test(ViewClient::class, ['record' => $client->id])
         ->callAction('setPin', ['pin' => '12345', 'send_sms' => false])
@@ -36,7 +36,7 @@ it('uses configured limits for the suggested and manually entered agent pin', fu
         SettingKey::PinMinLength->value => 11,
         SettingKey::PinMaxLength->value => 12,
     ]);
-    $client = Client::factory()->synced()->create();
+    $client = Client::factory()->synced()->withPhone()->create();
 
     $page = Livewire::test(ViewClient::class, ['record' => $client->id])->mountAction('setPin');
     $suggestion = $page->get('mountedActions.0.data.pin');
@@ -54,7 +54,7 @@ it('shows a field error when an agent selects an already assigned pin', function
     $this->actingAs(User::factory()->withRole(Role::Agent)->create());
     Filament::setCurrentPanel('admin');
     Client::factory()->withPin('123456')->create();
-    $client = Client::factory()->synced()->create();
+    $client = Client::factory()->synced()->withPhone()->create();
 
     Livewire::test(ViewClient::class, ['record' => $client->id])
         ->callAction('setPin', ['pin' => '123456', 'send_sms' => false])

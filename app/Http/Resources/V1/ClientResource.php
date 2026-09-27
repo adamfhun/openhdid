@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\V1;
 
+use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
 use App\Identification\ClientAnswers;
 use App\Identification\PinService;
@@ -23,6 +24,9 @@ class ClientResource extends JsonResource
     {
         $tiers = app(ClientTiers::class);
         $tier = $tiers->tierFor($this->resource);
+        $settings = app(Settings::class);
+        // Whether a number is shared with another client is told only when the operator decided to say so.
+        $shared = $settings->bool(SettingKey::PortalSharedNumberNotice) && $this->relationLoaded('phoneNumbers') ? app(ClientPhones::class)->sharedNumbersOf($this->resource) : [];
 
         return [
             'id' => $this->id,
@@ -39,15 +43,19 @@ class ClientResource extends JsonResource
                 'source' => $p->source->value,
                 'is_primary' => $p->is_primary,
                 'verified' => $p->verified_at !== null,
+                'verified_via' => $p->verified_via?->value,
+                'shared' => in_array($p->number_e164, $shared, true),
             ])->values()),
-            'phone_verification' => app(Settings::class)->bool(SettingKey::PortalPhoneVerificationEnabled),
-            'max_phone_numbers' => app(Settings::class)->int(SettingKey::PortalMaxPhoneNumbersPerClient),
+            'phone_verification' => $settings->bool(SettingKey::PortalPhoneVerificationEnabled),
+            'phone_verification_on_call' => $settings->bool(SettingKey::VerifyPhoneOnIdentifiedCall),
+            'max_phone_numbers' => $settings->int(SettingKey::PortalMaxPhoneNumbersPerClient),
             'last_login_at' => $this->last_login_at,
             'identification' => [
                 'answered' => app(ClientAnswers::class)->usableCount($this->resource),
                 'required' => app(ClientAnswers::class)->requiredCount(),
                 'eligible' => app(ClientAnswers::class)->isEligible($this->resource),
                 'pin_changes_enabled' => app(PinService::class)->clientChangesEnabled(),
+                'pin_requires_phone' => ! app(PinService::class)->canSetPin($this->resource),
                 'pin_min_length' => app(PinService::class)->minLength(),
                 'pin_max_length' => app(PinService::class)->maxLength(),
             ],

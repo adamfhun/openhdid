@@ -112,3 +112,29 @@ it('offers only configured package names on the client form and warns before clo
         ->and(ClientResource::nameMarks($sponsor->fresh()))->toContain('Premium')
         ->and(ClientResource::nameMarks(Client::factory()->closed()->create()))->toContain('Account closed');
 });
+
+/**
+ * While the sponsor was closed the directory dropped the linked client too;
+ * reopening the sponsor must not bring back an account the directory no
+ * longer knows. It stays closed for the directory's reason, and the next
+ * sync reopens it if the record returns.
+ */
+it('keeps a linked client closed when the directory dropped it while its sponsor was closed', function (): void {
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $dependent = Client::factory()->synced()->create(['implicit_package' => null, 'explicit_package' => 'Premium']);
+    $links->link($sponsor, $dependent);
+
+    $sponsor->close(AccountProvisioner::CLOSE_REASON_MISSING);
+    $dependent->externalRecord->forceFill(['missing_since' => now(), 'missed_runs' => 2])->save();
+
+    $sponsor->reopen();
+
+    expect($dependent->fresh()->isClosed())->toBeTrue()
+        ->and($dependent->fresh()->closed_reason)->toBe(AccountProvisioner::CLOSE_REASON_MISSING);
+
+    $dependent->externalRecord->forceFill(['missing_since' => null, 'missed_runs' => 0])->save();
+    app(AccountProvisioner::class)->syncAccount($dependent->externalRecord->fresh());
+
+    expect($dependent->fresh()->isClosed())->toBeFalse();
+});

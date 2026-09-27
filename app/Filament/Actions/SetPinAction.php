@@ -32,6 +32,9 @@ class SetPinAction
             ->icon('heroicon-o-key')
             ->color('warning')
             ->visible(fn (Client $record): bool => auth()->user()?->can(Permission::ClientsPinSet->value) && ! $record->isClosed())
+            // The phone menu recognises the caller by number before it asks for the PIN: no number, no usable PIN.
+            ->disabled(fn (Client $record): bool => ! $pins->canSetPin($record))
+            ->tooltip(fn (Client $record): ?string => $pins->setPinBlocker($record))
             ->modalHeading(fn (Client $record): string => __('New PIN for :name', ['name' => $record->name]))
             ->modalSubmitActionLabel(__('Set PIN'))
             ->schema(fn (Client $record): array => [
@@ -43,7 +46,7 @@ class SetPinAction
                     ->rule('digits_between:'.$pins->minLength().','.$pins->maxLength())
                     ->minLength($pins->minLength())
                     ->maxLength($pins->maxLength())
-                    ->helperText(__(':min to :max digits. A random :min-digit PIN is proposed; overwrite it if the client asked for a specific one.', ['min' => $pins->minLength(), 'max' => $pins->maxLength()])),
+                    ->helperText(__(':min to :max digits. A random :min-digit PIN is proposed; overwrite it if the client asked for a specific one. The phone menu checks it only when the client calls from a registered number.', ['min' => $pins->minLength(), 'max' => $pins->maxLength()])),
                 Toggle::make('send_sms')
                     ->label(fn () => __('Send the PIN by SMS to :number', ['number' => $record->primaryPhoneNumber()]))
                     ->default(true)

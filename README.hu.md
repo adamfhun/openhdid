@@ -1,6 +1,6 @@
 # OpenHDID
 
-**Ügyfélszolgálati hívóazonosítás.** Az ügyintéző a hívó ügyfelet biztonsági kérdésekkel, PIN-kóddal, bediktált egyszeri kóddal vagy IVR-kóddal azonosítja; az ügyfél a saját azonosító adatait egy önkiszolgáló portálon kezeli; a telefonközpont és a mobilalkalmazás kiszolgálója aláírt gépi felületen kapcsolódik.
+**Ügyfélszolgálati hívóazonosítás.** Az ügyintéző a hívó ügyfelet biztonsági kérdésekkel, PIN-kóddal, egyszeri azonosító kóddal vagy IVR-kóddal azonosítja; az ügyfél a saját azonosító adatait egy önkiszolgáló portálon kezeli; a telefonközpont és a mobilalkalmazás kiszolgálója aláírt gépi felületen kapcsolódik.
 
 [English](README.md) · [Dokumentáció](#dokumentáció) · [Kiadások](https://github.com/adamfhun/openhdid/releases) · [Konténer-image](https://github.com/adamfhun/openhdid/pkgs/container/openhdid)
 
@@ -8,7 +8,7 @@ Az OpenHDID futtatásra kész konténer-image-ként jelenik meg. Ez a repó a te
 
 ## Funkciók
 
-- **Munkatársi panel** (`/admin`): hívások vezérlőpultja élő hívósorral, ügyfélkeresés (Ctrl/Cmd+K), azonosítás kérdésekkel, PIN-nel, bediktált kóddal vagy indokolt kézi azonosítással, nem fogadott hívások, kimutatások (HTML, XLSX), auditnapló, rendszerállapot. A menü és minden művelet a felhasználó jogosultságaihoz igazodik.
+- **Munkatársi panel** (`/admin`): hívások vezérlőpultja élő hívósorral, ügyfélkeresés (Ctrl/Cmd+K), azonosítás kérdésekkel, PIN-nel, egyszeri azonosító kóddal vagy indokolt kézi azonosítással, nem fogadott hívások, kimutatások (HTML, XLSX), auditnapló, rendszerállapot. A menü és minden művelet a felhasználó jogosultságaihoz igazodik.
 - **Ügyfélportál** (`/`): jelszó nélküli belépés e-mailes hivatkozással vagy SMS-kóddal, választható Entra ID / ADFS egyszeri bejelentkezés, biztonsági válaszok, PIN, telefonszámok, hírek. Prémium és normál szint, saját megjelenéssel.
 - **Gépi felületek** (`/api/v1/...`): híváseseményeket és IVR-ellenőrzést fogad a telefonközponttól, egyszeri IVR-kódot ad a mobilalkalmazás kiszolgálójának. Partnerenkénti kulcsok, választható HMAC-aláírás visszajátszás elleni védelemmel, forgalomkorlát, OpenAPI-leírás a rendszergazdáknak.
 - **Ügyféltörzs (EMD) átvétele**: munkatársi és ügyfélfiókok hitelesített XLSX/CSV-exportból, JSON API-ból vagy feltöltött fájlból. Próbafuttatás és védelem a csonka forrás ellen.
@@ -89,8 +89,8 @@ Nem privilegizált felhasználóként (uid 82) fut, csak olvasható gyökér-fá
 Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz:
 
 ```sh
-gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.0.1 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.0.1 \
+gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.1.0 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.1.0 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```

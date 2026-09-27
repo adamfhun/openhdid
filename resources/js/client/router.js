@@ -60,5 +60,6 @@ hooks.onUnauthenticated = () => {
 };
 
 hooks.networkErrorMessage = () => t('No connection. Check your network and try again.');
+hooks.throttledMessage = () => t('Too many attempts. Please wait a minute and try again.');
 
 export default router;

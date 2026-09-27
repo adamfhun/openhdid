@@ -39,7 +39,7 @@ beforeEach(function (): void {
 
 it('renders every admin index page', function (string $path): void {
     $this->get('/admin/'.$path)->assertOk();
-})->with(['', 'accounts/users', 'accounts/roles', 'clients', 'system/external-records', 'system/sync-runs', 'system/api-keys', 'system/status', 'questions', 'id-sessions', 'calls', 'system/audit-logs', 'system/settings', 'content/news-posts', 'content/message-templates', 'content/outbound-messages', 'verify-code', 'search-clients', 'reports']);
+})->with(['', 'accounts/users', 'accounts/roles', 'clients', 'system/external-records', 'system/sync-runs', 'system/api-keys', 'system/status', 'questions', 'id-sessions', 'calls', 'system/audit-logs', 'system/settings', 'content/news-posts', 'content/message-templates', 'content/outbound-messages', 'verify-code', 'search-clients', 'reports', 'shared-phone-numbers']);
 
 it('hides admin resources from an agent', function (): void {
     $agent = User::factory()->withRole(Role::Agent)->create();
@@ -159,7 +159,7 @@ it('keeps the sidebar short: helpdesk items first, administrative clusters last'
     $html = $this->withCookie('locale', 'en')->get('/admin')->getContent();
     preg_match_all('/fi-sidebar-item-label[^>]*>\s*([^<]+?)\s*</', $html, $items);
 
-    expect($items[1])->toBe(['Dashboard', 'Find client', 'Verify code', 'Clients', 'Calls', 'Reports', 'Questions', 'Identification sessions', 'Content', 'Accounts', 'System']);
+    expect($items[1])->toBe(['Dashboard', 'Find client', 'Verify code', 'Clients', 'Shared phone numbers', 'Calls', 'Reports', 'Questions', 'Identification sessions', 'Content', 'Accounts', 'System']);
 });
 
 it('lets an admin publish news with the author recorded', function (): void {

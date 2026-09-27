@@ -15,7 +15,7 @@ enum IdMethod: string
         return match ($this) {
             self::QuestionAnswer => __('Question & answer'),
             self::Pin => __('PIN'),
-            self::MobileOtp => __('Dictated code'),
+            self::MobileOtp => __('One-time identification code'),
             self::IvrCode => __('Mobile app IVR code'),
             self::Manual => __('Manual identification'),
         };

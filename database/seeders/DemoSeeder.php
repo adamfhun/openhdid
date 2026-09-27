@@ -6,6 +6,7 @@ use App\Auth\Role;
 use App\Enums\CallStatus;
 use App\Enums\ClientTier;
 use App\Enums\PhoneNumberSource;
+use App\Enums\PhoneVerificationSource;
 use App\Enums\PrincipalType;
 use App\Identification\ClientAnswers;
 use App\Identification\PinService;
@@ -64,7 +65,7 @@ class DemoSeeder extends Seeder
 
         NewsPost::query()->create([
             'title' => 'Új azonosítási mód: mobilos kód',
-            'body' => "Mostantól a **mobilapp** egyszeri kódjával is azonosíthatod magad hívás közben.\n\n- Nyisd meg az appot\n- Generálj kódot\n- Diktáld be az ügyintézőnek",
+            'body' => "Mostantól a **mobilapp** egyszeri kódjával is azonosíthatja magát hívás közben.\n\n- Nyissa meg az appot\n- Generáljon kódot\n- Diktálja be az ügyintézőnek",
             'published_at' => now()->subDays(2),
         ]);
         NewsPost::query()->create([
@@ -74,14 +75,20 @@ class DemoSeeder extends Seeder
         ]);
 
         $anna = self::client(100001, 'Kovács Anna', 'anna@example.test', 'Basic', 'Premium+', 'Acme Kft.');
-        $anna->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Sync, 'is_primary' => true, 'verified_at' => now()]);
+        $anna->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Sync, 'is_primary' => true, 'verified_at' => now(), 'verified_via' => PhoneVerificationSource::Directory]);
         foreach ($questions->take(5) as $i => $question) {
             app(ClientAnswers::class)->save($anna, $question, ['Rex', 'Szeged', 'Gulyás', 'Suzuki', 'Petőfi'][$i]);
         }
         app(PinService::class)->setPin($anna, '123456');
 
         $bela = self::client(100002, 'Nagy Béla', 'bela@example.test', 'Basic', null, 'Acme Kft.');
-        $bela->phoneNumbers()->create(['number_e164' => '+36209876543', 'source' => PhoneNumberSource::Sync, 'is_primary' => true]);
+        $bela->phoneNumbers()->create(['number_e164' => '+36209876543', 'source' => PhoneNumberSource::Sync, 'is_primary' => true, 'verified_at' => now(), 'verified_via' => PhoneVerificationSource::Directory]);
+
+        // A shared office line: the directory lists it for two people, so the
+        // phone menu recognises neither of them from it (Shared phone numbers page).
+        $bela->phoneNumbers()->create(['number_e164' => '+3612345678', 'label' => 'iroda', 'source' => PhoneNumberSource::Sync, 'verified_at' => now(), 'verified_via' => PhoneVerificationSource::Directory]);
+        $csaba = self::client(100003, 'Szabó Csaba', 'csaba@example.test', 'Basic', null, 'Acme Kft.');
+        $csaba->phoneNumbers()->create(['number_e164' => '+3612345678', 'label' => 'iroda', 'source' => PhoneNumberSource::Sync, 'is_primary' => true, 'verified_at' => now(), 'verified_via' => PhoneVerificationSource::Directory]);
 
         Call::query()->create([
             'external_call_id' => 'demo-call-1',

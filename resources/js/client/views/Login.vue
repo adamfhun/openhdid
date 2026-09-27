@@ -54,8 +54,8 @@ const showSupport = computed(() => store.support && (errorReason.value === 'not_
 
 const perks = [
     { icon: 'question', text: 'Answer a few personal questions the agent can check.' },
-    { icon: 'key', text: 'Set a PIN for the phone menu and skip the questions.' },
-    { icon: 'code', text: 'Generate a one-time code in the app while you call.' },
+    { icon: 'key', text: 'Set a PIN: calling from a registered number, the phone menu identifies you before an agent picks up.' },
+    { icon: 'code', text: 'Generate a one-time identification code on the portal while you call and read it to the agent.' },
 ];
 
 onMounted(() => {

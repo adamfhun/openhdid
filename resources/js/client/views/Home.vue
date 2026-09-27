@@ -33,13 +33,16 @@ const steps = computed(() => [
     { to: '/questions', icon: 'question', title: t('Security questions'), progress: questionProgress.value, done: !!id.value.eligible,
       status: id.value.eligible ? t('Ready') : t('{n} of {r} answered', { n: id.value.answered ?? 0, r: id.value.required ?? 0 }),
       text: t('The agent will ask you one of your own questions and compare your answer.') },
-    { to: '/pin', icon: 'key', title: t('PIN'), progress: store.user?.has_pin ? 1 : 0, done: !!store.user?.has_pin, tag: t('Recommended'),
-      status: store.user?.has_pin ? t('Set') : t('Not set'),
-      text: !store.user?.has_pin && !id.value.pin_changes_enabled ? t('Contact the helpdesk to set your PIN.') : t('Type your PIN into the phone menu to be identified before you reach an agent.') },
+    // The phone menu recognises the caller by number before it asks for the PIN: a PIN without a number is half a step.
+    { to: store.user?.has_pin && !phones.value.length ? '/phones' : '/pin', icon: 'key', title: t('PIN'), progress: store.user?.has_pin ? (phones.value.length ? 1 : 0.5) : 0, done: !!store.user?.has_pin && phones.value.length > 0, tag: t('Recommended'),
+      status: store.user?.has_pin ? (phones.value.length ? t('Set') : t('Incomplete: no phone number')) : t('Not set'),
+      text: store.user?.has_pin && !phones.value.length
+          ? t('Your PIN works in the phone menu only when you call from a registered number. Add a phone number.')
+          : (!store.user?.has_pin && !id.value.pin_changes_enabled ? t('Contact the helpdesk to set your PIN.') : t('Calling from a registered number, type your PIN into the phone menu and you are identified before you reach an agent.')) },
     { to: '/phones', icon: 'phone', title: t('Phone numbers'), done: phones.value.length > 0, optional: true, tag: t('Optional'),
       status: phones.value.length ? t('{n} on file', { n: phones.value.length }) : t('None'),
-      text: t('Calling from a known number lets the helpdesk find you instantly.') },
-    { to: '/mobile-code', icon: 'code', title: t('Identification code'), done: true, optional: true, tag: t('Optional'),
+      text: t('Calling from a registered number lets the helpdesk find you instantly; the PIN works in the phone menu only from such a number.') },
+    { to: '/mobile-code', icon: 'code', title: t('One-time identification code'), done: true, optional: true, tag: t('Optional'),
       status: t('On demand'),
       text: t('Generate a short one-time code and read it to the agent or the phone menu.') },
 ]);

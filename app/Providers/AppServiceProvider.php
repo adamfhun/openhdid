@@ -143,7 +143,7 @@ class AppServiceProvider extends ServiceProvider
             'api_path' => 'api/v1/callcenter',
             'info' => [
                 'version' => config('scramble.info.version'),
-                'description' => 'Call-center / IVR contract: push call events and verify the caller\'s PIN or dictated identification code. Authenticate with a long-lived API key (X-Api-Key header, bearer token or `api_key` parameter). Verification endpoints accept GET with query parameters for legacy IVR platforms. Keys with a signing secret must sign every request, see below.',
+                'description' => 'Call-center / IVR contract: push call events and verify the caller\'s PIN (only for a caller recognised by a registered number) or one-time identification code. Authenticate with a long-lived API key (X-Api-Key header, bearer token or `api_key` parameter). Verification endpoints accept GET with query parameters for legacy IVR platforms. Keys with a signing secret must sign every request, see below.',
             ],
         ])
             ->expose(
@@ -158,7 +158,7 @@ class AppServiceProvider extends ServiceProvider
             'api_path' => 'api/v1/mobile',
             'info' => [
                 'version' => config('scramble.info.version'),
-                'description' => 'Mobile app backend contract: issue an IVR identification code for a client the backend has already authenticated. Authenticate with a long-lived API key (X-Api-Key header or bearer token). Keys with a signing secret must sign every request, see below.',
+                'description' => 'Mobile app backend contract: issue an IVR identification code for a client the backend has already authenticated. The code is meant for the phone menu only (the app sends it as DTMF from the dialler); the helpdesk never accepts it and the client never has to read it out. Authenticate with a long-lived API key (X-Api-Key header or bearer token). Keys with a signing secret must sign every request, see below.',
             ],
         ])
             ->expose(

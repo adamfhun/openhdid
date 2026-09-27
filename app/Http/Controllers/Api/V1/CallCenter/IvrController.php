@@ -36,7 +36,7 @@ class IvrController extends Controller
     }
 
     /**
-     * Verify the code the caller generated in the portal (dictated code) or received through the mobile app (IVR code).
+     * Verify the one-time identification code the caller generated in the portal, or the IVR code the mobile app backend requested and the app sent into the phone menu.
      *
      * The code alone identifies the client. Pass `call_id` to attach the
      * identified client to the call.

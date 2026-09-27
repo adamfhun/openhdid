@@ -27,7 +27,7 @@ use Livewire\Livewire;
 use Spatie\Permission\PermissionRegistrar;
 
 it('sets a pin of the configured length only', function (): void {
-    $client = Client::factory()->create();
+    $client = Client::factory()->withPhone()->create();
     $pins = app(PinService::class);
 
     expect(fn () => $pins->setPin($client, '12'))->toThrow(ValidationException::class);
@@ -36,7 +36,7 @@ it('sets a pin of the configured length only', function (): void {
 });
 
 it('enforces new pin limits in the service while existing pins still verify', function (): void {
-    $client = Client::factory()->withPin('123456')->create();
+    $client = Client::factory()->withPin('123456')->withPhone()->create();
     app(Settings::class)->setMany([
         SettingKey::PinMinLength->value => 9,
         SettingKey::PinMaxLength->value => 11,
@@ -113,7 +113,7 @@ it('replaces the live code and never uses zero as the second digit of a pair', f
 
 it('rejects a duplicate pin atomically and keeps the previous pin and live codes', function (): void {
     $owner = Client::factory()->withPin('123456')->create();
-    $client = Client::factory()->withPin('654321')->create();
+    $client = Client::factory()->withPin('654321')->withPhone()->create();
     $pins = app(PinService::class);
     $code = app(MobileOtpService::class)->issue($client)['code'];
 
@@ -127,7 +127,7 @@ it('rejects a duplicate pin atomically and keeps the previous pin and live codes
 
 it('reserves pins for closed and soft deleted accounts', function (): void {
     $owner = Client::factory()->withPin('123456')->closed()->create();
-    $client = Client::factory()->create();
+    $client = Client::factory()->withPhone()->create();
     $pins = app(PinService::class);
 
     expect(fn () => $pins->setPin($client, '123456'))->toThrow(ValidationException::class);
@@ -136,8 +136,8 @@ it('reserves pins for closed and soft deleted accounts', function (): void {
 });
 
 it('allows the same client to keep a pin and frees it after replacement or removal', function (): void {
-    $owner = Client::factory()->withPin('123456')->create();
-    $client = Client::factory()->create();
+    $owner = Client::factory()->withPin('123456')->withPhone()->create();
+    $client = Client::factory()->withPhone()->create();
     $pins = app(PinService::class);
 
     $pins->setPin($owner, '123456');
@@ -151,7 +151,7 @@ it('allows the same client to keep a pin and frees it after replacement or remov
 });
 
 it('keeps the pin lookup out of model serialization and audit records', function (): void {
-    $client = Client::factory()->create();
+    $client = Client::factory()->withPhone()->create();
     app(PinService::class)->setPin($client, '123456');
 
     expect($client->toArray())->not->toHaveKey('pin_lookup')->not->toHaveKey('pin_hash');
@@ -161,7 +161,7 @@ it('keeps the pin lookup out of model serialization and audit records', function
 
 it('allows shared pins when uniqueness is disabled and preserves them when reenabled', function (): void {
     $owner = Client::factory()->withPin('123456')->create();
-    $client = Client::factory()->create();
+    $client = Client::factory()->withPhone()->create();
     $pins = app(PinService::class);
     app(Settings::class)->set(SettingKey::PinUniqueRequired, false);
 
@@ -172,7 +172,7 @@ it('allows shared pins when uniqueness is disabled and preserves them when reena
     expect($pins->verify($owner, '123456', IdChannel::Ivr)->status)->toBe(IdSessionStatus::Passed)
         ->and($pins->verify($client, '123456', IdChannel::Ivr)->status)->toBe(IdSessionStatus::Passed);
 
-    $third = Client::factory()->create();
+    $third = Client::factory()->withPhone()->create();
     expect(fn () => $pins->setPin($third, '123456'))->toThrow(ValidationException::class);
 });
 
@@ -216,7 +216,7 @@ it('drops the decryptable copy of a code once it is used or superseded', functio
 
 it('holds the global pin lock while it checks uniqueness and writes, so two clients cannot take the same pin', function (): void {
     app(Settings::class)->set(SettingKey::PinUniqueRequired, true);
-    $client = Client::factory()->synced()->create();
+    $client = Client::factory()->withPhone()->synced()->create();
     $held = [];
 
     Event::listen('eloquent.saving: '.Client::class, function (Client $saved) use (&$held): void {
@@ -236,7 +236,7 @@ it('holds the global pin lock while it checks uniqueness and writes, so two clie
 
     // With the lock proven, a competing assignment can only arrive after the
     // first one finished, and is refused.
-    $other = Client::factory()->synced()->create();
+    $other = Client::factory()->synced()->withPhone()->create();
     expect(fn () => app(PinService::class)->setPin($other, '654321'))->toThrow(ValidationException::class);
     expect($other->fresh()->pin_hash)->toBeNull('nothing is written when the pin turns out to be taken');
 });

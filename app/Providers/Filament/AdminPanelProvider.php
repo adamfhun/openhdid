@@ -56,6 +56,10 @@ class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->authGuard('web')
             ->globalSearch(false)
+            // The client page is where numbers, answers and links are managed
+            // (the manual sends the operator there); the policies of the
+            // related models keep the tabs read-only for everyone else.
+            ->readOnlyRelationManagersOnResourceViewPagesByDefault(false)
             ->sidebarCollapsibleOnDesktop()
             ->maxContentWidth(Width::Full)
             ->navigationGroups(array_map(

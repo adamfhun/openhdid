@@ -3,6 +3,7 @@
 namespace App\Identification;
 
 use App\Audit\Auditor;
+use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
 use App\Enums\IdChannel;
 use App\Enums\IdMethod;
@@ -291,6 +292,7 @@ class QaSessionEngine
 
         if ($finished === 1) {
             $this->auditor->record('id_session.finished', $session, ['status' => $status->value, 'reason' => $reason]);
+            app(ClientPhones::class)->verifyFromIdentifiedCall($session);
         }
 
         return $session;

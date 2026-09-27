@@ -7,6 +7,7 @@ use App\CallCenter\CallAlreadyClaimedException;
 use App\CallCenter\CallCenterService;
 use App\Enums\CallStatus;
 use App\Enums\ClientTier;
+use App\Filament\Actions\TakeCallAction;
 use App\Filament\Admin\Pages\Identify;
 use App\Filament\Admin\Pages\SearchClients;
 use App\Filament\Admin\Resources\Clients\ClientResource;
@@ -72,7 +73,7 @@ class OngoingCallsWidget extends TableWidget
                 TextColumn::make('agent.name')->label(__('Agent'))->placeholder('-'),
             ])
             ->recordActions([
-                Action::make('take')
+                TakeCallAction::make('take')
                     ->label(fn (Call $call) => $call->isHeldBySomeoneElse(auth()->user()) ? __('Take over') : __('Identify'))
                     ->icon('heroicon-o-identification')
                     ->button()
@@ -82,9 +83,13 @@ class OngoingCallsWidget extends TableWidget
                     ->modalHeading(fn (Call $call) => __(':name has already taken this call.', ['name' => $call->agent?->name ?? '?']))
                     ->modalDescription(__('Take it over only if you are the one actually talking to the caller. The hand-over is recorded.'))
                     ->modalSubmitActionLabel(__('Take over'))
-                    ->action(function (Call $call): void {
+                    ->action(function (Call $call, array $arguments): void {
+                        // The holder the button was drawn for (see TakeCallAction): a
+                        // take-over is confirmed against that colleague only.
+                        $from = TakeCallAction::from($arguments);
+
                         try {
-                            app(CallCenterService::class)->claim($call, auth()->user(), takeOver: $call->isHeldBySomeoneElse(auth()->user()));
+                            app(CallCenterService::class)->claim($call, auth()->user(), takeOver: $from !== null, takeOverFrom: $from);
                         } catch (CallAlreadyClaimedException $e) {
                             Notification::make()->title($e->getMessage())->warning()->send();
 

@@ -74,7 +74,7 @@ class SyncExternalRecords
 
         $stats = ['read' => 0, 'skipped' => 0, 'created' => 0, 'updated' => 0, 'missing' => 0, 'closed' => 0, 'provisioned' => 0];
         $stats['current'] = ['users' => User::query()->open()->count(), 'clients' => Client::query()->open()->count()];
-        $stats['incoming'] = ['users' => 0, 'clients' => 0, 'unclassified' => 0, 'invalid_row' => 0, 'duplicate' => 0];
+        $stats['incoming'] = ['users' => 0, 'clients' => 0, 'unclassified' => 0, 'invalid_row' => 0, 'duplicate' => 0, 'duplicate_email' => 0];
         $stats['preview'] = [];
         $stats['invalid_phones'] = 0;
         $stats['phone_warnings'] = [];
@@ -82,6 +82,8 @@ class SyncExternalRecords
         $samples = ['created' => [], 'closed' => []];
         /** @var array<int, true> $seen external identifiers already imported in this run */
         $seen = [];
+        /** @var array<string, true> $seenEmails e-mail addresses already imported in this run */
+        $seenEmails = [];
 
         try {
             $transactionStarted = false;
@@ -119,6 +121,17 @@ class SyncExternalRecords
                         continue;
                     }
                     $seen[$item->externalId] = true;
+
+                    // The e-mail is the account's key: two rows with one address
+                    // would bind the same client to each of them in turn, run after
+                    // run. The first row wins here too; the repeat is reported.
+                    $email = mb_strtolower(trim($item->email));
+                    if (isset($seenEmails[$email])) {
+                        $this->noteSkipped($stats, $skipped, SkippedRow::fromDto(SkippedRow::REASON_DUPLICATE_EMAIL, $item));
+
+                        continue;
+                    }
+                    $seenEmails[$email] = true;
 
                     $stats['incoming'][$kind === PrincipalType::User ? 'users' : 'clients']++;
                     if (count($stats['preview']) < 10) {

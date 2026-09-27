@@ -16,7 +16,8 @@ use Illuminate\Support\Facades\Hash;
 use Laravel\Sanctum\Sanctum;
 
 beforeEach(function (): void {
-    $this->client = Client::factory()->synced()->create();
+    // The phone menu asks for the PIN only from a registered number, so a PIN needs one.
+    $this->client = Client::factory()->synced()->withPhone('+36309999999')->create();
     Sanctum::actingAs($this->client, guard: 'client');
     $this->questions = Question::factory()->count(6)->create();
 });

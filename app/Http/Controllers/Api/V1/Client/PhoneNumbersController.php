@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api\V1\Client;
 
 use App\Audit\Auditor;
 use App\Auth\Passwordless\OneTimeCodes;
+use App\Clients\ClientPhones;
 use App\Enums\OneTimeCodePurpose;
 use App\Enums\PhoneNumberSource;
+use App\Enums\PhoneVerificationSource;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\V1\ClientResource;
 use App\Messaging\MessageKey;
@@ -16,6 +18,8 @@ use App\Models\OneTimeCode;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Support\PhoneNormalizer;
+use App\System\CheckStatus;
+use App\System\HealthChecks;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
@@ -123,6 +127,8 @@ class PhoneNumbersController extends Controller
         abort_unless($phoneNumber->client_id === $client->id, 404);
         abort_unless($this->verificationEnabled(), 403, __('Phone number verification is not available.'));
         abort_if($phoneNumber->verified_at !== null, 409, __('This number is already verified.'));
+        // A dead gateway would queue a message nobody receives while the page says "sent".
+        abort_if(app(HealthChecks::class)->sms()->status === CheckStatus::Fail, 503, __('The verification SMS cannot be sent right now. Please try again later, or ask the helpdesk to confirm the number.'));
 
         ['code' => $code] = $this->codes->issueNumeric(
             $client,
@@ -177,14 +183,13 @@ class PhoneNumbersController extends Controller
             throw ValidationException::withMessages(['code' => __('The code is not valid or has expired.')]);
         }
 
-        $phoneNumber->forceFill(['verified_at' => now()])->save();
-        $this->auditor->record('client_phone.verified', $phoneNumber, ['number' => $phoneNumber->number_e164]);
+        app(ClientPhones::class)->verify($phoneNumber, PhoneVerificationSource::Sms);
 
         return new ClientResource($client->load('phoneNumbers'));
     }
 
     /**
-     * @response array{message: string}
+     * @response array{message: string, pin_cleared: bool}
      */
     public function destroy(Request $request, ClientPhoneNumber $phoneNumber): JsonResponse
     {
@@ -194,9 +199,14 @@ class PhoneNumbersController extends Controller
         abort_unless($phoneNumber->client_id === $client->id, 404);
         abort_unless($phoneNumber->source === PhoneNumberSource::ClientSelf, 403, __('Only numbers you added yourself can be removed.'));
 
+        $hadPin = $client->hasPin();
         $phoneNumber->delete();
+        $pinCleared = $hadPin && ! $client->fresh()->hasPin();
 
-        return response()->json(['message' => __('Phone number removed.')]);
+        return response()->json([
+            'message' => $pinCleared ? __('Phone number removed. It was your last registered number, so your PIN was removed too: the phone menu could no longer use it.') : __('Phone number removed.'),
+            'pin_cleared' => $pinCleared,
+        ]);
     }
 
     private function verificationEnabled(): bool

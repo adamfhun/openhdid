@@ -80,6 +80,7 @@ it('offers the pin method only when enabled and set', function (): void {
         ->assertSee('Agents may not verify PINs');
 
     app(Settings::class)->set(SettingKey::PinAgentVerificationEnabled, true);
+    $this->client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Sync, 'verified_at' => now()]);
     app(PinService::class)->setPin($this->client, '123456');
 
     Livewire::test(Identify::class, ['client' => $this->client->id])
@@ -129,6 +130,7 @@ it('links a manual identification started from the missed-calls list to that cal
 it('links a pin verification started from the missed-calls list to that call', function (): void {
     $missed = Call::factory()->create(['status' => CallStatus::Missed, 'client_id' => $this->client->id, 'ended_at' => now()]);
     app(Settings::class)->set(SettingKey::PinAgentVerificationEnabled, true);
+    $this->client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Sync, 'verified_at' => now()]);
     app(PinService::class)->setPin($this->client, '123456');
 
     $page = Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $missed->id])
@@ -412,3 +414,17 @@ it('uses the same caller number fallback throughout identification', function (s
     'normalized first' => ['36301234567', '+36301234567', '+36301234567'],
     'withheld' => [null, null, 'withheld'],
 ]);
+
+/**
+ * A ringing call nobody holds is still in the queue: moving it to another
+ * client from a stale or hand-typed address would redirect the phone menu's
+ * PIN check to the wrong account. The call has to be taken first.
+ */
+it('refuses to move a ringing call nobody holds until it is taken from the dashboard', function (): void {
+    $other = Client::factory()->synced()->create(['name' => 'Másik Márta']);
+    $call = Call::factory()->create(['client_id' => $other->id, 'agent_user_id' => null]);
+
+    $this->get(Identify::getUrl(['client' => $this->client->id, 'call' => $call->id]))->assertForbidden();
+
+    expect($call->fresh()->client_id)->toBe($other->id);
+});

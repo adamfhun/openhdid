@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Pages;
 use App\Audit\Auditor;
 use App\Auth\Permission;
 use App\CallCenter\CallCenterService;
+use App\Clients\ClientPhones;
 use App\Enums\ClientTier;
 use App\Enums\IdChannel;
 use App\Enums\IdMethod;
@@ -34,7 +35,7 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
 /**
  * The agent's identification screen for one client: Q-A session flow,
  * optional agent PIN entry, manual identification with a reason, and the
- * history of attempts on the current call. Dictated codes are checked on
+ * history of attempts on the current call. One-time codes are checked on
  * the separate "Verify code" page, because the code alone identifies the
  * client.
  */
@@ -99,7 +100,9 @@ class Identify extends Page
      * The call arrived with (or was matched to) another client: move it to
      * this one and drop the open Q-A session the agent had with the other.
      * Only calls of the agent's own service level can be moved, and only by
-     * the agent holding the call (or anyone, while nobody holds it).
+     * the agent holding the call, or on a missed call nobody handled yet. A
+     * ringing call nobody holds is still in the queue: moving it from a stale
+     * address would point the phone menu's PIN check at the wrong account.
      */
     private function reassignCall(Call $call): void
     {
@@ -111,6 +114,10 @@ class Identify extends Page
 
         if ($call->isHeldBySomeoneElse($agent)) {
             throw new HttpException(403, __('This call is being handled by another agent.'));
+        }
+
+        if (! $call->isAttachableBy($agent)) {
+            throw new HttpException(403, __('Take the call from the dashboard first; a call nobody holds cannot be moved to another client.'));
         }
 
         if ($call->client_id !== null) {
@@ -251,6 +258,18 @@ class Identify extends Page
         $step = $this->getCurrentStep();
 
         return $step === null ? null : app(QaSessionEngine::class)->revealAnswer($step);
+    }
+
+    /**
+     * Numbers of this client that another client also carries: the phone
+     * menu cannot recognise the caller from them, which is why a PIN check
+     * there never happened.
+     *
+     * @return list<string>
+     */
+    public function getSharedNumbers(): array
+    {
+        return app(ClientPhones::class)->sharedNumbersOf($this->getClient());
     }
 
     public function getUsableAnswerCount(): int
@@ -447,6 +466,7 @@ class Identify extends Page
         $session->forceFill(['status' => IdSessionStatus::Passed, 'outcome_reason' => 'manual:'.$reason, 'decided_at' => now()])->save();
 
         app(Auditor::class)->record('id_session.manual', $session, ['client_id' => $client->id, 'call_id' => $call?->id, 'reason' => $reason], auth()->user());
+        app(ClientPhones::class)->verifyFromIdentifiedCall($session);
 
         return $session;
     }

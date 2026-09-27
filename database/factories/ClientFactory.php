@@ -2,6 +2,8 @@
 
 namespace Database\Factories;
 
+use App\Enums\PhoneNumberSource;
+use App\Enums\PhoneVerificationSource;
 use App\Identification\PinService;
 use App\Models\Client;
 use App\Models\ExternalRecord;
@@ -50,6 +52,21 @@ class ClientFactory extends Factory
             ->afterCreating(function (Client $client): void {
                 $client->externalRecord?->update(['email' => $client->email, 'email_domain' => ExternalRecord::domainOf($client->email)]);
             });
+    }
+
+    /**
+     * One registered, directory-verified number: what a PIN needs, since the
+     * phone menu recognises the caller by number before it asks for the PIN.
+     */
+    public function withPhone(?string $number = null): static
+    {
+        return $this->afterCreating(fn (Client $client) => $client->phoneNumbers()->create([
+            'number_e164' => $number ?? '+3630'.fake()->unique()->numerify('#######'),
+            'source' => PhoneNumberSource::Sync,
+            'is_primary' => true,
+            'verified_at' => now(),
+            'verified_via' => PhoneVerificationSource::Directory,
+        ]));
     }
 
     public function closed(string $reason = 'test'): static

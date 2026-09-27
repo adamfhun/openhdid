@@ -4,6 +4,7 @@ namespace App\Identification;
 
 use App\Audit\Auditor;
 use App\Auth\Passwordless\OneTimeCodes;
+use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
 use App\Enums\IdChannel;
 use App\Enums\IdMethod;
@@ -19,9 +20,10 @@ use Illuminate\Support\Carbon;
 
 /**
  * Short-lived, system-wide unique identification codes. Two kinds share the
- * same mechanics: the dictated code the client generates in the portal (read
- * to the agent, or typed into the IVR) and the IVR code the mobile app
- * backend requests (accepted by the IVR only). A wrong code matches no
+ * same mechanics: the one-time identification code the client generates in
+ * the portal (read to the agent, or typed into the IVR) and the IVR code the
+ * mobile app backend requests (accepted by the IVR only, meant to be sent
+ * by the app into the phone menu). A wrong code matches no
  * record, so there is nothing to lock; brute force is stopped by the rate
  * limits on the verifying endpoints and, for agents, by the hourly limit
  * of failed checks per agent.
@@ -90,7 +92,7 @@ class MobileOtpService
     }
 
     /**
-     * When the client's last dictated code was accepted recently: when and
+     * When the client's last one-time code was accepted recently: when and
      * through which channel, so the portal can tell them they are identified.
      *
      * @return array{at: Carbon, channel: string}|null
@@ -160,6 +162,7 @@ class MobileOtpService
         $session->forceFill(['outcome_reason' => 'code_ok', 'decided_at' => now()])->save();
 
         $this->auditor->record('id_session.finished', $session, ['status' => $session->status->value, 'reason' => $session->outcome_reason, 'method' => $session->method->value], $agent);
+        app(ClientPhones::class)->verifyFromIdentifiedCall($session);
 
         return $session->setRelation('client', $record->client);
     }

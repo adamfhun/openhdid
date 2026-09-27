@@ -27,7 +27,7 @@ use Livewire\Attributes\Url;
 use UnitEnum;
 
 /**
- * Identification by the code the caller dictates. The code is unique across
+ * Identification by the one-time code the caller reads out. The code is unique across
  * the system, so a correct code both finds and identifies the client.
  */
 class VerifyCode extends Page
@@ -78,7 +78,7 @@ class VerifyCode extends Page
         return $schema
             ->components([
                 OneTimeCodeInput::make('code')
-                    ->label(__('Code dictated by the caller'))
+                    ->label(__('One-time identification code told by the caller'))
                     ->length(fn (): int => app(MobileOtpService::class)->length())
                     ->autofocus()
                     ->required()

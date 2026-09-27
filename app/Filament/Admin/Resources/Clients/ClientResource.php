@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Resources\Clients;
 use App\Auth\Permission;
 use App\Clients\ClientExporter;
 use App\Clients\ClientLinks;
+use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
 use App\Clients\PackageOverrides;
 use App\Enums\ClientTier;
@@ -41,7 +42,6 @@ use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
-use Filament\Infolists\Components\IconEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Section;
@@ -490,7 +490,18 @@ class ClientResource extends BaseResource
                 TextEntry::make('answers')->label(__('Security questions'))->badge()
                     ->state(fn (Client $record) => __(':n / :r answers', ['n' => $answers->usableCount($record), 'r' => $answers->requiredCount()]))
                     ->color(fn (Client $record) => $answers->isEligible($record) ? 'success' : 'gray'),
-                IconEntry::make('pin_hash')->label(__('PIN set'))->boolean()->state(fn (Client $record) => $record->hasPin()),
+                TextEntry::make('pin_hash')->label(__('PIN'))->badge()
+                    ->state(fn (Client $record) => match (true) {
+                        ! $record->hasPin() => __('No PIN'),
+                        $record->phoneNumbers->isEmpty() => __('PIN set, no phone number'),
+                        default => __('PIN set'),
+                    })
+                    ->color(fn (Client $record) => ! $record->hasPin() ? 'gray' : ($record->phoneNumbers->isEmpty() ? 'warning' : 'success'))
+                    ->helperText(fn (Client $record) => $record->hasPin() && $record->phoneNumbers->isEmpty() ? __('The phone menu recognises the caller by a registered number before it asks for the PIN; without a number the PIN cannot be used there.') : null),
+                TextEntry::make('shared_numbers')->label(__('Shared phone numbers'))->badge()->color('warning')
+                    ->state(fn (Client $record) => app(ClientPhones::class)->sharedNumbersOf($record))
+                    ->visible(fn (Client $record) => app(ClientPhones::class)->sharedNumbersOf($record) !== [])
+                    ->helperText(__('Also on file for another client: the phone menu cannot recognise the caller from these numbers, so no PIN is asked there. See the Shared phone numbers page.')),
                 TextEntry::make('pin_locked_until')->label(__('PIN locked until'))->dateTime()->placeholder('-'),
                 TextEntry::make('last_login_at')->label(__('Last login'))->since()->placeholder('-'),
                 TextEntry::make('sponsor')->label(__('Linked to'))->placeholder(__('not linked'))
