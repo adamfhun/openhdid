@@ -12,6 +12,7 @@ use App\Sync\EmptySourceException;
 use App\Sync\ReaderFactory;
 use App\Sync\SourceFormatException;
 use App\Sync\SyncExternalRecords;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -77,6 +78,20 @@ it('posts the unchanged nested payload and maps reordered XLSX columns by their 
         && $request->body() === '{"query":{"ids":"12,34","empty":{},"list":[]},"other":"Árvíztűrő"}');
     expect(Storage::disk('local')->allFiles('sync-uploads'))->toBeEmpty();
 });
+
+it('fills the send time into the payload as UTC with zero milliseconds', function (string $local, string $utc): void {
+    $this->travelTo(CarbonImmutable::parse($local, 'Europe/Budapest'));
+    app(Settings::class)->set(SettingKey::SyncExportPayload, '{"query":{"ids":"12,34","from":"{{ now }}"},"sent":"{{NOW}}","other":"Árvíztűrő"}');
+    fakeDirectoryExport(directoryWorkbook([['Külső azonosító (ID)' => 1, 'Teljes név' => 'Ügyfél', 'E-mail cím' => 'client@client.hu']]));
+
+    $this->artisan('hdid:emd-sync')->assertSuccessful();
+
+    Http::assertSent(fn (Request $request) => $request->url() === 'https://directory.test/export'
+        && $request->body() === '{"query":{"ids":"12,34","from":"'.$utc.'"},"sent":"'.$utc.'","other":"Árvíztűrő"}');
+})->with([
+    'summer time' => ['2026-09-28 14:03:15.678', '2026-09-28T12:03:15.000Z'],
+    'winter time, previous UTC day' => ['2026-12-01 00:30:05', '2026-11-30T23:30:05.000Z'],
+]);
 
 it('imports CSV using its configured separator and character encoding', function (): void {
     config()->set(['hdid.sync.export_format' => 'csv', 'hdid.sync.csv_delimiter' => ';']);
@@ -152,7 +167,7 @@ it('refuses invalid payloads before contacting the external system', function (s
     expect(fn () => app(SyncExternalRecords::class)->run(app(ReaderFactory::class)->forApi()))
         ->toThrow(SourceFormatException::class);
     Http::assertNothingSent();
-})->with(['broken', '[]', 'null']);
+})->with(['broken', '[]', 'null', '{"from":"{{ since }}"}']);
 
 it('does not close accounts when every row is rejected by domain filters', function (): void {
     $client = Client::factory()->synced()->create();

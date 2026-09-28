@@ -174,6 +174,19 @@ it('lets only a SuperAdmin edit the complete export payload and validates its JS
     }
 });
 
+it('accepts the now placeholder in the export payload and rejects unknown placeholders', function (): void {
+    $this->actingAs(User::factory()->withRole(Role::SuperAdmin)->create());
+    $field = ManageSettings::fieldName(SettingKey::SyncExportPayload);
+    $payload = '{"ids":"12,34","from":"{{ now }}"}';
+
+    Livewire::test(ManageSettings::class)->fillForm([$field => $payload])->call('save')->assertHasNoFormErrors();
+    expect(app(Settings::class)->string(SettingKey::SyncExportPayload))->toBe($payload);
+
+    Livewire::test(ManageSettings::class)->fillForm([$field => '{"from":"{{ since }}"}'])->call('save')
+        ->assertHasFormErrors([$field])->assertSee('Unknown placeholder: since. Allowed: now');
+    expect(app(Settings::class)->string(SettingKey::SyncExportPayload))->toBe($payload);
+});
+
 it('preserves the export payload when an Admin saves other settings or tampers with its state', function (): void {
     $admin = auth()->user();
     $this->actingAs(User::factory()->withRole(Role::SuperAdmin)->create());

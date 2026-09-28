@@ -1076,7 +1076,7 @@
     "Every download is written to the audit log with the period and the parts chosen. Ended calls leave the dashboard after the short retention; the Calls list and the reports keep them until the general retention period ends.": "Minden letöltés az auditnaplóba kerül az időszakkal és a választott részekkel. A befejezett hívások a rövid megőrzési idő után a vezérlőpultról tűnnek el; a Hívások lista és a kimutatások az általános adatmegőrzés végéig mutatják őket.",
     "EMD export JSON payload": "Az ügyféltörzs-export kéréstörzse (JSON)",
     "Export payload": "Az export kéréstörzse (JSON)",
-    "Complete JSON request body, including the static ID list. Only a SuperAdmin can edit it.": "A teljes JSON kérés, a jelenleg statikus ID-listával együtt. Kizárólag a legmagasabb jogosultságú rendszergazda (SuperAdmin) szerkesztheti.",
+    "Complete JSON request body, including the static ID list. Inside a text value, {{ now }} is replaced with the time of sending in UTC, e.g. 2026-09-28T12:03:15.000Z. Only a SuperAdmin can edit it.": "A teljes JSON kérés, a jelenleg statikus ID-listával együtt. Egy szövegértéken belül a {{ now }} helyére a küldés időpontja kerül UTC szerint, például 2026-09-28T12:03:15.000Z. Kizárólag a legmagasabb jogosultságú rendszergazda (SuperAdmin) szerkesztheti.",
     "EMD export payload must be a JSON object.": "Az ügyféltörzs-export kéréstörzsének JSON-objektumnak kell lennie.",
     "EMD API login is not configured.": "Az ügyféltörzs API-jába való belépés nincs beállítva.",
     "EMD API authentication failed (HTTP :status).": "Nem sikerült belépni az ügyféltörzs API-jába (HTTP :status).",

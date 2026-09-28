@@ -4,6 +4,16 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.1.1] – 2026-09-28
+
+### Magyar
+- Ügyféltörzs-átvétel: az export kéréstörzsében egy szövegértékbe írt `{{ now }}` helyőrző helyére a küldés időpontja kerül UTC szerint (`2026-09-28T12:03:15.000Z` alakban); ismeretlen helyőrzőt a mentés elutasít, és az átvétel a végpont hívása előtt megáll.
+- Platform: PHP 8.5.11 (korábban 8.5.10), frissített Composer build-image.
+
+### English
+- EMD sync: a `{{ now }}` placeholder inside a text value of the export payload is replaced with the time of sending in UTC (as `2026-09-28T12:03:15.000Z`); an unknown placeholder is rejected on save and stops the sync before the endpoint is called.
+- Platform: PHP 8.5.11 (previously 8.5.10), refreshed Composer build image.
+
 ## [1.1.0] – 2026-09-27
 
 ### Magyar

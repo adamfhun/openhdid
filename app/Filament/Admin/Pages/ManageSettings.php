@@ -229,7 +229,7 @@ class ManageSettings extends Page
                 ->rules(SettingRules::for($key))
                 ->disabled(fn (): bool => ! $this->canEditExportPayload())
                 ->dehydrated(fn (): bool => $this->canEditExportPayload())
-                ->helperText(__('Complete JSON request body, including the static ID list. Only a SuperAdmin can edit it.'));
+                ->helperText(__('Complete JSON request body, including the static ID list. Inside a text value, {{ now }} is replaced with the time of sending in UTC, e.g. 2026-09-28T12:03:15.000Z. Only a SuperAdmin can edit it.'));
         }
 
         return match ($key->type()) {

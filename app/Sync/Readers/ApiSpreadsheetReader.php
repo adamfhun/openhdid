@@ -7,6 +7,7 @@ use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Sync\ApiTokens;
 use App\Sync\Contracts\SourceReader;
+use App\Sync\ExportPayload;
 use App\Sync\SourceFormatException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as Http;
@@ -40,6 +41,9 @@ class ApiSpreadsheetReader implements SourceReader
         if (! is_string($payload) || ! json_validate($payload) || ! (json_decode($payload) instanceof \stdClass)) {
             throw new SourceFormatException(__('EMD export payload must be a JSON object.'));
         }
+        if ($unknown = ExportPayload::unknownPlaceholderMessage($payload)) {
+            throw new SourceFormatException($unknown);
+        }
 
         $token = $this->tokens->accessToken();
         $disk = Storage::disk('local');
@@ -50,7 +54,7 @@ class ApiSpreadsheetReader implements SourceReader
         try {
             try {
                 $response = $this->http->withToken($token)->withoutRedirecting()
-                    ->withBody($payload, 'application/json')
+                    ->withBody(ExportPayload::render($payload), 'application/json')
                     ->connectTimeout(10)->timeout((int) config('hdid.sync.export_timeout', 600))
                     ->sink($path)->post($this->url);
             } catch (ConnectionException) {

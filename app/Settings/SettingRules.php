@@ -5,6 +5,7 @@ namespace App\Settings;
 use App\Auth\Oidc\OidcProvider;
 use App\Enums\PrincipalType;
 use App\Identification\PinService;
+use App\Sync\ExportPayload;
 
 /**
  * Validation rules per setting, applied when the panel saves. Business
@@ -64,8 +65,13 @@ class SettingRules
         }
 
         $payload = $values[SettingKey::SyncExportPayload->value] ?? null;
-        if (is_string($payload) && $payload !== '' && json_validate($payload) && ! (json_decode($payload) instanceof \stdClass)) {
-            $errors[SettingKey::SyncExportPayload->value] = __('EMD export payload must be a JSON object.');
+        if (is_string($payload) && $payload !== '' && json_validate($payload)) {
+            $error = json_decode($payload) instanceof \stdClass
+                ? ExportPayload::unknownPlaceholderMessage($payload)
+                : __('EMD export payload must be a JSON object.');
+            if ($error !== null) {
+                $errors[SettingKey::SyncExportPayload->value] = $error;
+            }
         }
 
         if ($int(SettingKey::QaMinAcceptedToPass) > $int(SettingKey::QaMaxQuestionsPerSession)) {
