@@ -47,6 +47,11 @@ class JsonApiReader implements SourceReader
         return $this->url;
     }
 
+    public function details(): array
+    {
+        return [];
+    }
+
     public function read(): iterable
     {
         $page = 1;

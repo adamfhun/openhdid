@@ -428,3 +428,15 @@ it('refuses to move a ringing call nobody holds until it is taken from the dashb
 
     expect($call->fresh()->client_id)->toBe($other->id);
 });
+
+it('refuses a manual identification of a client whose package no longer counts, like every other method', function (): void {
+    $unentitled = Client::factory()->synced()->unentitled()->create();
+
+    // The button stays in place, disabled with the reason; a disabled action cannot be called either.
+    Livewire::test(Identify::class, ['client' => $unentitled->id])
+        ->assertActionVisible('manualIdentify')
+        ->assertActionDisabled('manualIdentify')
+        ->callAction('manualIdentify', data: ['reason' => 'Visszahívtam a rögzített számon, egyeztettük.']);
+
+    expect(IdSession::query()->where('method', IdMethod::Manual)->count())->toBe(0);
+});

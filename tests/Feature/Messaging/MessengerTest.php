@@ -9,6 +9,7 @@ use App\Messaging\Channel;
 use App\Messaging\MessageKey;
 use App\Messaging\MessageNotRetryableException;
 use App\Messaging\Messenger;
+use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\OutboundMessage;
 use App\Settings\SettingKey;
@@ -210,4 +211,30 @@ it('masks codes in the log driver and posts to ozeki without retrying a timed-ou
 
     Http::fake(['http://ozeki.test/reject' => Http::response('<error>no credit</error>', 200)]);
     expect(fn () => (new OzekiSmsSender(app(Factory::class), 'http://ozeki.test/reject', 'u', 'p'))->send('+36301234567', 'hi'))->toThrow(SmsException::class);
+});
+
+it('audits the outcome of every message on the client: sent, or failed once the retries are used up', function (): void {
+    $client = Client::factory()->create();
+
+    $sent = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '123456'], '+36301234567');
+    $audit = AuditLog::query()->where('event', 'message.sent')->sole();
+    expect($audit->subject_id)->toBe($client->id)
+        ->and($audit->context)->toMatchArray(['message_id' => $sent->id, 'channel' => 'sms', 'template_key' => 'pin_sms', 'recipient' => '+36301234567', 'attempts' => 1])
+        ->and($audit->context)->not->toHaveKey('body');
+
+    app()->instance(SmsSender::class, new class implements SmsSender
+    {
+        public function send(string $to, string $message): void
+        {
+            throw new SmsException('gateway down');
+        }
+    });
+    $failed = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '123456'], '+36301234567');
+    SendOutboundMessage::dispatchSync($failed->id);
+    expect(AuditLog::query()->where('event', 'message.failed')->count())->toBe(0, 'not final yet');
+    SendOutboundMessage::dispatchSync($failed->id);
+
+    $audit = AuditLog::query()->where('event', 'message.failed')->sole();
+    expect($audit->subject_id)->toBe($client->id)
+        ->and($audit->context)->toMatchArray(['message_id' => $failed->id, 'attempts' => 3, 'error' => 'gateway down']);
 });

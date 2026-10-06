@@ -18,7 +18,7 @@ it('serves three openapi documents to administrators only', function (): void {
     $ivr = $this->get('/docs/ivr.json')->assertOk()->json();
     $mobile = $this->get('/docs/mobile.json')->assertOk()->json();
 
-    expect(array_keys($full['paths']))->toContain('/v1/client/mobile-code', '/v1/callcenter/ivr/verify-code', '/v1/mobile/ivr-code', '/v1/auth/{principal}/entra/token')
+    expect(array_keys($full['paths']))->toContain('/v1/client/mobile-code', '/v1/callcenter/ivr/verify-code', '/v1/mobile/ivr-code', '/v1/auth/client/entra/token')
         ->and(array_keys($ivr['paths']))->toBe(['/calls', '/calls/{callId}', '/calls/{callId}/end', '/lookup', '/ivr/verify-pin', '/ivr/verify-code'])
         ->and(array_keys($mobile['paths']))->toBe(['/ivr-code'])
         ->and($ivr['components']['securitySchemes'])->toHaveKey('apiKey')
@@ -56,7 +56,7 @@ it('documents the request signing scheme on every machine operation and nowhere 
         ->and($headerNames($full['paths']['/v1/callcenter/ivr/verify-code']['get']))->toContain('X-Timestamp', 'X-Signature')
         ->and($headerNames($full['paths']['/v1/mobile/ivr-code']['post']))->toContain('X-Timestamp', 'X-Signature')
         ->and($headerNames($full['paths']['/v1/client/mobile-code']['post']))->not->toContain('X-Signature')
-        ->and($headerNames($full['paths']['/v1/auth/{principal}/entra/token']['post']))->not->toContain('X-Signature');
+        ->and($headerNames($full['paths']['/v1/auth/client/entra/token']['post']))->not->toContain('X-Signature');
 
     // The documented payload is the one the middleware verifies.
     expect(ApiSignatureDocs::payload(1789714410, 'post', '/api/v1/callcenter/calls?x=1', '{"a":1}'))

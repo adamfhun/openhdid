@@ -73,7 +73,10 @@ class OngoingCallsWidget extends TableWidget
                 TextColumn::make('agent.name')->label(__('Agent'))->placeholder('-'),
             ])
             ->recordActions([
+                // Watching the calls (calls.view) is not working them: taking,
+                // releasing and handling need the identification permission.
                 TakeCallAction::make('take')
+                    ->authorize(fn (): bool => auth()->user()?->can(Permission::IdentificationRun->value) ?? false)
                     ->label(fn (Call $call) => $call->isHeldBySomeoneElse(auth()->user()) ? __('Take over') : __('Identify'))
                     ->icon('heroicon-o-identification')
                     ->button()
@@ -101,6 +104,7 @@ class OngoingCallsWidget extends TableWidget
                             : SearchClients::getUrl(['call' => $call->id]));
                     }),
                 Action::make('release')
+                    ->authorize(fn (): bool => auth()->user()?->can(Permission::IdentificationRun->value) ?? false)
                     ->label(__('Release'))
                     ->icon('heroicon-o-arrow-uturn-left')
                     ->color('gray')

@@ -21,6 +21,9 @@ class OidcClient
 {
     private const DISCOVERY_TTL = 3600;
 
+    /** Tolerated clock difference to the provider for exp, nbf and iat. */
+    public const CLOCK_SKEW_SECONDS = 60;
+
     public function __construct(
         private readonly Http $http,
         private readonly Cache $cache,
@@ -104,6 +107,7 @@ class OidcClient
         // stays an OidcUnavailableException instead of an invalid token; an
         // unusable document still fails inside it, like a stale key.
         $jwks = $this->jwks($discovery['jwks_uri']);
+        JWT::$leeway = self::CLOCK_SKEW_SECONDS;
 
         try {
             $claims = (array) JWT::decode($idToken, JWK::parseKeySet($jwks, 'RS256'));
@@ -121,6 +125,13 @@ class OidcClient
         $audiences = (array) ($claims['aud'] ?? []);
         if (! in_array($expectedAudience, $audiences, true)) {
             throw new OidcException('ID token audience mismatch.');
+        }
+
+        // OIDC Core 3.1.3.7: with several audiences the token must name us as
+        // the authorized party, and a present azp must be us in any case.
+        $authorizedParty = $claims['azp'] ?? null;
+        if ((count($audiences) > 1 || $authorizedParty !== null) && $authorizedParty !== $expectedAudience) {
+            throw new OidcException('ID token authorized party mismatch.');
         }
 
         if (! $this->issuerMatches($discovery['issuer'], (string) ($claims['iss'] ?? ''), $config)) {

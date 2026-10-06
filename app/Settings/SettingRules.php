@@ -5,7 +5,7 @@ namespace App\Settings;
 use App\Auth\Oidc\OidcProvider;
 use App\Enums\PrincipalType;
 use App\Identification\PinService;
-use App\Sync\ExportPayload;
+use App\Sync\RequestPayload;
 
 /**
  * Validation rules per setting, applied when the panel saves. Business
@@ -24,6 +24,13 @@ class SettingRules
             SettingKey::ClientLoginOtpSmsTtlMinutes => ['integer', 'min:1', 'max:60'],
             SettingKey::ClientLoginOtpSmsLength => ['integer', 'min:4', 'max:10'],
             SettingKey::ClientLoginOtpMaxAttempts => ['integer', 'min:1', 'max:20'],
+            SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute => ['integer', 'min:1', 'max:10'],
+            SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour => ['integer', 'min:1', 'max:60'],
+            SettingKey::ClientLoginRememberDays, SettingKey::UserLoginRememberDays => ['integer', 'min:1', 'max:365'],
+            SettingKey::ClientLoginSessionMaxHours, SettingKey::UserLoginSessionMaxHours => ['integer', 'min:1', 'max:720'],
+            SettingKey::ClientLoginLockoutMaxAttempts, SettingKey::UserLoginLockoutMaxAttempts => ['integer', 'min:1', 'max:20'],
+            SettingKey::ClientLoginLockoutMinutes, SettingKey::UserLoginLockoutMinutes => ['integer', 'min:1', 'max:43200'],
+            SettingKey::SsoMobileTokenMaxAgeMinutes => ['integer', 'min:1', 'max:60'],
             SettingKey::QaMinAnsweredQuestionsRequired => ['integer', 'min:1', 'max:50'],
             SettingKey::QaMaxQuestionsPerSession => ['integer', 'min:1', 'max:20'],
             SettingKey::QaMinAcceptedToPass => ['integer', 'min:1', 'max:20'],
@@ -44,7 +51,9 @@ class SettingRules
             SettingKey::SupportStandardEmail, SettingKey::SupportPremiumEmail => ['nullable', 'email'],
             SettingKey::PortalPrivacyUrl, SettingKey::PortalTermsUrl, SettingKey::PortalImprintUrl => ['nullable', 'url'],
             SettingKey::SyncCsvEncoding => ['nullable', 'string', 'max:40'],
-            SettingKey::SyncExportPayload => ['nullable', 'string', 'json'],
+            SettingKey::SyncExportPayload, SettingKey::SyncIdListPayload => ['nullable', 'string', 'json'],
+            SettingKey::SyncIdListIdPath, SettingKey::SyncIdListNamePath => ['required', 'string', 'max:200', 'regex:/^[A-Za-z0-9_\-*]+(\.[A-Za-z0-9_\-*]+)*$/'],
+            SettingKey::SyncIdListStatusPath => ['nullable', 'string', 'max:200', 'regex:/^[A-Za-z0-9_\-]+(\.[A-Za-z0-9_\-]+)*$/'],
             default => $key->type() === SettingType::Integer ? ['integer', 'min:0'] : [],
         };
     }
@@ -64,15 +73,7 @@ class SettingRules
             $errors[SettingKey::PinMaxLength->value] = __('The maximum PIN length must be at least the minimum PIN length.');
         }
 
-        $payload = $values[SettingKey::SyncExportPayload->value] ?? null;
-        if (is_string($payload) && $payload !== '' && json_validate($payload)) {
-            $error = json_decode($payload) instanceof \stdClass
-                ? ExportPayload::unknownPlaceholderMessage($payload)
-                : __('EMD export payload must be a JSON object.');
-            if ($error !== null) {
-                $errors[SettingKey::SyncExportPayload->value] = $error;
-            }
-        }
+        $errors = [...$errors, ...static::payloadErrors($values)];
 
         if ($int(SettingKey::QaMinAcceptedToPass) > $int(SettingKey::QaMaxQuestionsPerSession)) {
             $errors[SettingKey::QaMinAcceptedToPass->value] = __('Accepted answers needed to pass cannot exceed the questions per session.');
@@ -87,6 +88,42 @@ class SettingRules
         }
 
         return [...$errors, ...static::domainErrors($values), ...static::ssoErrors($values)];
+    }
+
+    /**
+     * Both EMD request bodies must be JSON objects with known placeholders;
+     * an export using `{{ ids }}` needs a configured ID list query.
+     *
+     * @param  array<string, mixed>  $values
+     * @return array<string, string>
+     */
+    public static function payloadErrors(array $values): array
+    {
+        $errors = [];
+        $export = $values[SettingKey::SyncExportPayload->value] ?? null;
+        $idList = $values[SettingKey::SyncIdListPayload->value] ?? null;
+
+        foreach ([
+            [SettingKey::SyncExportPayload, $export, RequestPayload::EXPORT_PLACEHOLDERS, __('EMD export payload must be a JSON object.')],
+            [SettingKey::SyncIdListPayload, $idList, RequestPayload::ID_LIST_PLACEHOLDERS, __('The ID list request payload must be a JSON object.')],
+        ] as [$key, $payload, $allowed, $notObject]) {
+            if (is_string($payload) && $payload !== '' && json_validate($payload)) {
+                $error = RequestPayload::isJsonObject($payload) ? RequestPayload::unknownPlaceholderMessage($payload, $allowed) : $notObject;
+                if ($error !== null) {
+                    $errors[$key->value] = $error;
+                }
+            }
+        }
+
+        if (! isset($errors[SettingKey::SyncExportPayload->value]) && RequestPayload::uses(is_string($export) ? $export : null, 'ids')) {
+            if (blank(config('hdid.sync.id_list_url'))) {
+                $errors[SettingKey::SyncExportPayload->value] = __('The export payload uses {{ ids }}, but EMD_SYNC_ID_LIST_URL is not configured.');
+            } elseif (! RequestPayload::isJsonObject(is_string($idList) ? $idList : null)) {
+                $errors[SettingKey::SyncExportPayload->value] = __('The export payload uses {{ ids }}: fill in the ID list request payload too.');
+            }
+        }
+
+        return $errors;
     }
 
     /** @param array<string, mixed> $values

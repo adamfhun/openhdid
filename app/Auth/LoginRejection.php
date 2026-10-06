@@ -7,6 +7,7 @@ enum LoginRejection: string
     case MethodDisabled = 'method_disabled';
     case NoAccount = 'no_account';
     case AccountClosed = 'account_closed';
+    case AccountLocked = 'account_locked';
     case NoExternalRecord = 'no_external_record';
     case ExternalRecordMissing = 'external_record_missing';
     case ExternalRecordMismatch = 'external_record_mismatch';
@@ -21,6 +22,7 @@ enum LoginRejection: string
             self::MethodDisabled => 'This login method is not available.',
             self::NoAccount => 'No account exists for this identity.',
             self::AccountClosed => 'This account has been closed.',
+            self::AccountLocked => 'Too many failed attempts: this login is locked for now. Try again later or ask for it to be unlocked.',
             self::NoExternalRecord, self::ExternalRecordMissing => 'This account is not present in Enterprise Master Data.',
             self::ExternalRecordMismatch => 'This account does not match its Enterprise Master Data record.',
             self::NoPermission => 'This account has no access.',

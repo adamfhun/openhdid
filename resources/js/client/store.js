@@ -19,6 +19,8 @@ const isSignedOutError = (error) => error instanceof ApiError
 export const store = reactive({
     branding: window.__BRANDING__ ?? { app_name: 'Helpdesk ID', primary_color: '#36495d', palette: {}, tiers: {} },
     loginMethods: { magic_link: false, otp_sms: false, adfs: false, entra: false },
+    // How the login page paces the SMS code (from /branding).
+    otpSms: { retry_after_seconds: 60, max_per_hour: 3, email_fallback: false },
     newsOnOverview: true,
     user: null,
     booted: false,
@@ -76,6 +78,7 @@ export const store = reactive({
             const info = await get('/branding');
             this.branding = info.branding;
             this.loginMethods = info.login_methods;
+            if (info.otp_sms) this.otpSms = info.otp_sms;
             this.newsOnOverview = info.news_on_overview ?? true;
             document.title = this.branding.app_name;
         } catch {

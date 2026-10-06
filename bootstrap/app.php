@@ -2,11 +2,13 @@
 
 use App\Auth\LoginRejectedException;
 use App\Http\Middleware\AuthenticateApiKey;
+use App\Http\Middleware\EnforceAuthSessions;
 use App\Http\Middleware\EnsureClientEntitled;
 use App\Http\Middleware\EnsurePrincipal;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\ValidateCsrfTokenUnlessBearer;
 use App\Localization\SetLocale;
+use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -29,7 +31,10 @@ return Application::configure(basePath: dirname(__DIR__))
         // before .env and config are loaded, so nothing may be read here.
         $middleware->append(SecurityHeaders::class);
         $middleware->statefulApi();
-        $middleware->web(append: [SetLocale::class]);
+        $middleware->web(append: [SetLocale::class, EnforceAuthSessions::class]);
+        // Route-level auth is sorted ahead of the group's tail by priority; the
+        // session lifetime and "sign out everywhere" check must run before it.
+        $middleware->prependToPriorityList(AuthenticatesRequests::class, EnforceAuthSessions::class);
         $middleware->api(prepend: [SetLocale::class]);
         $middleware->encryptCookies(except: [SetLocale::COOKIE]);
         // The CSRF guard lives in the "web" group under its Laravel 13 name;
@@ -72,6 +77,10 @@ return Application::configure(basePath: dirname(__DIR__))
 
             return null;
         });
+
+        // A refused login is an expected answer, audited as login.rejected;
+        // reporting it would write a stack trace per bot attempt.
+        $exceptions->dontReport(LoginRejectedException::class);
 
         $exceptions->render(function (LoginRejectedException $e, Request $request) {
             if ($request->is('api/*') || $request->expectsJson()) {

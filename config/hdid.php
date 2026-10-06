@@ -48,6 +48,8 @@ $sync = [
     'auth_timeout' => (int) $emd('AUTH_TIMEOUT', 20),
     'export_format' => $emd('EXPORT_FORMAT', 'xlsx'),
     'export_timeout' => (int) $emd('EXPORT_TIMEOUT', 600),
+    // ID list query (e.g. organizations) whose selected IDs fill {{ ids }} in the export payload.
+    'id_list_url' => $emd('ID_LIST_URL'),
     'csv_delimiter' => $emd('CSV_DELIMITER', ','),
     // Queue of the panel-started EMD sync job. A dedicated queue with its own worker keeps a
     // long sync from delaying e-mails and SMS; "default" keeps single-worker installs running.
@@ -119,7 +121,6 @@ return [
                 'tenant' => env('USER_ENTRA_TENANT'),
                 'client_id' => env('USER_ENTRA_CLIENT_ID'),
                 'client_secret' => env('USER_ENTRA_CLIENT_SECRET'),
-                'mobile_client_id' => env('USER_ENTRA_MOBILE_CLIENT_ID'),
             ],
         ],
         'client' => [

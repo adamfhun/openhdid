@@ -15,8 +15,6 @@ use Illuminate\Console\Command;
 class MakeAdminCommand extends Command
 {
     /** Local (non-synced) records get ids far above anything the directory uses. */
-    private const LOCAL_ID_BASE = 9_000_000_000;
-
     protected $signature = 'hdid:make-admin {email} {--name=Administrator} {--password= : Omit to be prompted}';
 
     protected $description = 'Create (or promote) a super-admin user with password login';
@@ -38,7 +36,7 @@ class MakeAdminCommand extends Command
         if ($user->external_record_id === null) {
             $record = ExternalRecord::query()->where('email', $email)->first()
                 ?? ExternalRecord::query()->create([
-                    'external_id' => self::LOCAL_ID_BASE + (int) ExternalRecord::query()->where('external_id', '>=', self::LOCAL_ID_BASE)->count() + 1,
+                    'external_id' => ExternalRecord::LOCAL_ID_BASE + (int) ExternalRecord::query()->where('external_id', '>=', ExternalRecord::LOCAL_ID_BASE)->count() + 1,
                     'kind' => PrincipalType::User,
                     'company' => 'local',
                     'name' => $user->name,

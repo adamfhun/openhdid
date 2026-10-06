@@ -3,7 +3,7 @@
 namespace App\Settings;
 
 use App\Audit\Auditor;
-use App\Auth\Role;
+use App\Auth\Permission;
 use App\Models\Setting;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Support\Facades\DB;
@@ -72,8 +72,8 @@ class Settings
 
     private function write(SettingKey $key, mixed $value): void
     {
-        if ($key === SettingKey::SyncExportPayload && auth()->check()) {
-            abort_unless(auth()->user()->hasRole(Role::SuperAdmin->value), 403);
+        if ($key->requiresSyncManage() && auth()->check()) {
+            abort_unless(auth()->user()->can(Permission::SyncManage->value), 403);
         }
 
         $previous = $this->get($key);

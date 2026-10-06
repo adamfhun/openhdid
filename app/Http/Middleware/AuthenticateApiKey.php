@@ -172,7 +172,11 @@ class AuthenticateApiKey
 
     private function reject(Request $request, ApiKeyScope $scope, string $reason, string $message, ?ApiKey $key = null): never
     {
-        $this->auditor->record('api_key.rejected', $key, ['scope' => $scope->value, 'reason' => $reason, 'path' => $request->path()]);
+        // A scanner may send a thousand bad keys a minute from one address;
+        // one audit row a minute per address and reason keeps the signal.
+        if (Cache::add('audit:api-key-rejected:'.$scope->value.':'.$reason.':'.$request->ip(), 1, 60)) {
+            $this->auditor->record('api_key.rejected', $key, ['scope' => $scope->value, 'reason' => $reason, 'path' => $request->path(), 'ip' => $request->ip()]);
+        }
 
         throw new HttpException(401, $message);
     }

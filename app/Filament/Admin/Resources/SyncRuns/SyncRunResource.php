@@ -56,7 +56,20 @@ class SyncRunResource extends BaseResource
                     ->state(fn (SyncRun $record) => collect($record->stats ?? [])->filter(fn ($value): bool => is_int($value))->map(fn ($v, $k) => __(ucfirst($k)).': '.$v)->implode(' · ')),
                 TextEntry::make('stats.samples.created')->label(__('New (sample)'))->listWithLineBreaks()->placeholder('-')->columnSpanFull(),
                 TextEntry::make('stats.samples.closed')->label(__('Closed (sample)'))->listWithLineBreaks()->placeholder('-')->columnSpanFull(),
+                TextEntry::make('stats.samples.closing_next')->label(__('Closes at the next sync (sample)'))->listWithLineBreaks()->placeholder('-')->columnSpanFull()
+                    ->helperText(__('Records absent from this run that one more absent run makes missing, closing their accounts.')),
             ]),
+            Section::make(__('EMD requests'))->description(__('Status codes of the ID list query and the export; the ID list status comes from the configured response path, or from HTTP when none is set.'))
+                ->visible(fn (SyncRun $record): bool => ! empty($record->stats['requests'] ?? null))->columns(3)->schema([
+                    TextEntry::make('stats.requests.id_list.status')->label(__('ID list status code'))->placeholder('-')
+                        ->formatStateUsing(fn ($state, SyncRun $record) => $state.(($record->stats['requests']['id_list']['http_status'] ?? $state) !== $state ? ' (HTTP '.$record->stats['requests']['id_list']['http_status'].')' : ''))
+                        ->visible(fn (SyncRun $record): bool => isset($record->stats['requests']['id_list'])),
+                    TextEntry::make('stats.requests.id_list.sent')->label(__('IDs sent'))->placeholder('-')
+                        ->visible(fn (SyncRun $record): bool => isset($record->stats['requests']['id_list'])),
+                    TextEntry::make('stats.requests.export.status')->label(__('Export status code'))->placeholder('-'),
+                    TextEntry::make('stats.requests.id_list.ids')->label(__('IDs in the export payload'))->placeholder('-')->columnSpanFull()
+                        ->visible(fn (SyncRun $record): bool => isset($record->stats['requests']['id_list'])),
+                ]),
             Section::make(__('Current active accounts'))->description(__('Accounts before this run: not closed and not deleted.'))->columns(2)->schema([
                 TextEntry::make('stats.current.users')->label(__('Active staff accounts'))->placeholder('-'),
                 TextEntry::make('stats.current.clients')->label(__('Active client accounts'))->placeholder('-'),
@@ -107,6 +120,8 @@ class SyncRunResource extends BaseResource
                 TextColumn::make('stats.skipped')->label(__('Skipped'))->color(fn ($state) => $state > 0 ? 'warning' : null),
                 TextColumn::make('stats.missing')->label(__('Missing')),
                 TextColumn::make('stats.closed')->label(__('Closed'))->color('danger'),
+                TextColumn::make('stats.closing_next')->label(__('Closes next'))->placeholder('-')->color(fn ($state) => $state > 0 ? 'warning' : null)
+                    ->tooltip(__('Accounts the next sync closes if their records stay absent')),
                 TextColumn::make('error')->label(__('Error'))->limit(60)->placeholder('-')->tooltip(fn (SyncRun $record) => $record->error),
             ])
             ->recordActions([ViewAction::make()])

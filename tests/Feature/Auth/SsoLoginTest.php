@@ -9,8 +9,10 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Illuminate\Cookie\CookieValuePrefix;
 use Illuminate\Http\Client\Events\RequestSending;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Tests\Support\FakeOidc;
@@ -256,3 +258,84 @@ it('reports an unreachable identity provider as unavailable, not as an error pag
     $this->get('/auth/client/adfs/callback?code=abc&state='.$query['state'])->assertRedirect('/login?error=provider_unavailable');
     $this->assertGuest('client');
 })->with(['discovery unreachable', 'discovery error', 'token endpoint unreachable', 'token endpoint error', 'jwks unreachable', 'jwks error']);
+
+it('sets no remember-me cookie after single sign-on while remember-me is off', function (string $principal): void {
+    $account = $principal === 'user'
+        ? User::factory()->synced()->withRole(Role::Agent)->create(['email' => 'p@corp.hu'])
+        : Client::factory()->synced()->create(['email' => 'p@corp.hu']);
+    $rememberToken = $account->remember_token;
+
+    $response = completeSso($principal, 'adfs', ['aud' => "{$principal}-app", 'email' => 'p@corp.hu']);
+
+    expect(collect($response->headers->getCookies())->filter(fn ($cookie) => str_starts_with($cookie->getName(), 'remember_')))->toBeEmpty()
+        ->and($account->fresh()->remember_token)->toBe($rememberToken);
+})->with(['user', 'client']);
+
+it('remembers a single sign-on for the configured days once remember-me is switched on', function (string $principal): void {
+    $type = $principal === 'user' ? 'User' : 'Client';
+    app(Settings::class)->set(constant(SettingKey::class.'::'.$type.'LoginRememberEnabled'), true);
+    app(Settings::class)->set(constant(SettingKey::class.'::'.$type.'LoginRememberDays'), 30);
+    $principal === 'user'
+        ? User::factory()->synced()->withRole(Role::Agent)->create(['email' => 'p@corp.hu'])
+        : Client::factory()->synced()->create(['email' => 'p@corp.hu']);
+
+    $response = completeSso($principal, 'adfs', ['aud' => "{$principal}-app", 'email' => 'p@corp.hu']);
+
+    $cookie = collect($response->headers->getCookies())->first(fn ($cookie) => str_starts_with($cookie->getName(), 'remember_'));
+    expect($cookie)->not->toBeNull()
+        ->and(abs($cookie->getExpiresTime() - (time() + 30 * 86400)))->toBeLessThan(60);
+})->with(['user', 'client']);
+
+it('ends a staff session after the absolute lifetime and when access is revoked', function (): void {
+    $user = User::factory()->synced()->withRole(Role::Agent)->create(['email' => 'agent@corp.hu']);
+    completeSso('user', 'adfs', ['aud' => 'user-app', 'email' => 'agent@corp.hu'])->assertRedirect('/admin');
+
+    $this->travel(11 * 60 + 59)->minutes();
+    $this->get('/admin')->assertOk();
+    $this->travel(2)->minutes();
+    $this->get('/admin')->assertRedirect('/admin/login');
+
+    completeSso('user', 'adfs', ['aud' => 'user-app', 'email' => 'agent@corp.hu']);
+    $this->get('/admin')->assertOk();
+    $user->revokeAccess();
+    Auth::forgetGuards();
+    $this->get('/admin')->assertRedirect('/admin/login');
+});
+
+it('audits a forged callback and an invalid ID token as rejected logins', function (): void {
+    FakeOidc::fake([]);
+    $this->get('/auth/client/adfs/redirect');
+    $this->get('/auth/client/adfs/callback?code=abc&state=forged');
+    completeSso('client', 'adfs', ['aud' => 'someone-else', 'email' => 'c@x.hu']);
+
+    expect(AuditLog::query()->where('event', 'login.rejected')->get()->pluck('context.detail')->all())
+        ->toBe(['state_or_code', 'invalid_token']);
+});
+
+it('keeps single sign-on open for a staff account whose password login is locked', function (): void {
+    $user = User::factory()->synced()->withRole(Role::Agent)->create(['email' => 'agent@corp.hu', 'locked_until' => now()->addDay()]);
+
+    completeSso('user', 'adfs', ['aud' => 'user-app', 'email' => 'agent@corp.hu'])->assertRedirect('/admin');
+
+    $this->assertAuthenticatedAs($user, 'web');
+    expect(AuditLog::query()->where('event', 'login.succeeded')->where('subject_id', $user->id)->exists())->toBeTrue();
+});
+
+it('signs a remembered browser in again after the absolute session limit while remember-me is on, but not after revocation', function (): void {
+    app(Settings::class)->set(SettingKey::UserLoginRememberEnabled, true);
+    $user = User::factory()->synced()->withRole(Role::Agent)->create(['email' => 'agent@corp.hu']);
+    completeSso('user', 'adfs', ['aud' => 'user-app', 'email' => 'agent@corp.hu']);
+    $guard = Auth::guard('web');
+    $recaller = fn (): array => [$guard->getRecallerName() => encrypt(CookieValuePrefix::create($guard->getRecallerName(), app('encrypter')->getKey()).$user->getKey().'|'.$user->fresh()->remember_token.'|'.$guard->hashPasswordForCookie((string) $user->getAuthPassword()), false)];
+    $cookie = $recaller();
+
+    $this->travel(13)->hours();
+    Auth::forgetGuards();
+    $this->call('GET', '/admin', [], $cookie)->assertOk();
+    $this->assertAuthenticatedAs($user, 'web');
+
+    $user->revokeAccess();
+    Auth::forgetGuards();
+    $this->flushSession();
+    $this->call('GET', '/admin', [], $cookie)->assertRedirect('/admin/login');
+});

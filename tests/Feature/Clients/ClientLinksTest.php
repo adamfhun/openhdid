@@ -3,6 +3,7 @@
 use App\Auth\Role;
 use App\Clients\ClientLinks;
 use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\Admin\Resources\Clients\Pages\EditClient;
 use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
 use App\Filament\Admin\Resources\Clients\RelationManagers\LinkedClientsRelationManager;
 use App\Models\AuditLog;
@@ -137,4 +138,22 @@ it('keeps a linked client closed when the directory dropped it while its sponsor
     app(AccountProvisioner::class)->syncAccount($dependent->externalRecord->fresh());
 
     expect($dependent->fresh()->isClosed())->toBeFalse();
+});
+
+it('closes a sponsor and its linked clients before the sponsor row is removed from the panel', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    Filament::setCurrentPanel('admin');
+    $sponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null, 'name' => 'Fő Ügyfél']);
+    $dependent = Client::factory()->synced()->create(['implicit_package' => null, 'explicit_package' => 'Premium', 'name' => 'Kapcsolt Kata']);
+    app(ClientLinks::class)->link($sponsor, $dependent);
+
+    Livewire::test(EditClient::class, ['record' => $sponsor->id])
+        ->assertActionVisible('delete')
+        ->callAction('delete');
+
+    expect(Client::withTrashed()->find($sponsor->id)->trashed())->toBeTrue()
+        ->and(Client::withTrashed()->find($sponsor->id)->isClosed())->toBeTrue()
+        ->and($dependent->fresh()->isClosed())->toBeTrue()
+        ->and($dependent->fresh()->closed_reason)->toBe('sponsor_closed');
 });

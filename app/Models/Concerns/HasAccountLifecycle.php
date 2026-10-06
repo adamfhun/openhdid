@@ -59,8 +59,12 @@ trait HasAccountLifecycle
     {
         $this->tokens()->delete();
 
+        // A higher epoch ends every browser session that started before,
+        // whatever the session store (AuthSessions checks it on each request);
+        // bumped in the database, so overlapping revocations cannot lose one.
         $this->setRememberToken(Str::random(60));
         $this->saveQuietly();
+        $this->incrementQuietly('session_epoch');
 
         if (config('session.driver') === 'database') {
             DB::table(config('session.table', 'sessions'))->where('user_id', $this->getKey())->delete();
@@ -69,6 +73,14 @@ trait HasAccountLifecycle
         if ($this instanceof Client) {
             app(OneTimeCodes::class)->revokeAll($this);
         }
+    }
+
+    /**
+     * Locked after repeated wrong passwords or SMS codes (LoginLockout).
+     */
+    public function isLoginLocked(): bool
+    {
+        return $this->locked_until !== null && $this->locked_until->isFuture();
     }
 
     public function reopen(): void

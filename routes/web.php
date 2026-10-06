@@ -32,6 +32,7 @@ Route::prefix('auth')->middleware('throttle:30,1,sso')->group(function (): void 
 Route::prefix('api/v1/client')->name('api.v1.client.')->group(function (): void {
     Route::middleware('throttle:5,1,client-auth')->group(function (): void {
         Route::post('auth/magic-link', [PasswordlessController::class, 'requestMagicLink'])->name('auth.magic-link');
+        Route::post('auth/magic-link/consume', [PasswordlessController::class, 'consumeMagicLink'])->name('auth.magic-link.consume');
         Route::post('auth/otp/request', [PasswordlessController::class, 'requestOtp'])->name('auth.otp.request');
         Route::post('auth/otp/verify', [PasswordlessController::class, 'verifyOtp'])->name('auth.otp.verify');
     });

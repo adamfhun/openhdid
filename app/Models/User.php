@@ -32,6 +32,15 @@ class User extends Authenticatable implements FilamentUser, Principal
 {
     use Auditable;
     use HasAccountLifecycle;
+
+    /**
+     * Login bookkeeping changes on every login; the lockout writes its own
+     * audit entries (login.rejected, account.locked, account.unlocked).
+     *
+     * @var list<string>
+     */
+    protected array $auditExclude = ['last_login_at', 'session_epoch', 'failed_login_attempts', 'locked_until'];
+
     use HasApiTokens;
 
     /** @use HasFactory<UserFactory> */
@@ -52,6 +61,9 @@ class User extends Authenticatable implements FilamentUser, Principal
             'active_tier' => ClientTier::class,
             'closed_at' => 'datetime',
             'last_login_at' => 'datetime',
+            'session_epoch' => 'integer',
+            'failed_login_attempts' => 'integer',
+            'locked_until' => 'datetime',
         ];
     }
 

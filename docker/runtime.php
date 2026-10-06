@@ -169,7 +169,16 @@ function check_env(string $role): void
         $warnings[] = 'SMS_DRIVER=log writes SMS to the log only; clients receive nothing.';
     }
     if (in_array(env_value('QUEUE_CONNECTION', 'database'), ['sync', 'null'], true)) {
-        $warnings[] = 'QUEUE_CONNECTION=sync: e-mails and SMS are sent inside web requests and the panel cannot start an EMD sync.';
+        $warnings[] = 'QUEUE_CONNECTION=sync: e-mails and SMS are sent inside web requests and the panel cannot start an EMD sync or a file import.';
+    }
+
+    // The image ships max_execution_time = 300 for FPM and the CLI alike; an
+    // override below 120 s would make every EMD sync refuse to start.
+    $timeLimit = (int) ini_get('max_execution_time');
+    if ($timeLimit > 0 && $timeLimit < 120) {
+        $errors[] = "max_execution_time is {$timeLimit} s; EMD sync needs at least 120 s (300 recommended). Remove the override of the image's php.ini.";
+    } elseif ($timeLimit > 0 && $timeLimit < 300) {
+        $warnings[] = "max_execution_time is {$timeLimit} s; 300 s is recommended for large EMD imports.";
     }
 
     foreach ($warnings as $warning) {

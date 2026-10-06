@@ -13,8 +13,11 @@ use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Support\PhoneNormalizer;
 use App\Sync\Contracts\SourceReader;
+use Closure;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -29,12 +32,27 @@ use Throwable;
  * occurrence wins and the repeats are reported as skipped rows. A dry run
  * does all the work inside a transaction that is rolled back, and keeps
  * only the report.
+ *
+ * A run takes minutes on a large directory, so it refuses to start under a
+ * PHP time limit below MIN_TIME_LIMIT_SECONDS, and an abort guard turns a
+ * run that PHP cut short anyway (time limit, memory, crash) into a failed
+ * run with the sync lock released, instead of a run stuck "running" that
+ * blocks every later sync for an hour.
  */
 class SyncExternalRecords
 {
     public const SKIPPED_SAMPLE_SIZE = 50;
 
     public const CHANGE_SAMPLE_SIZE = 20;
+
+    /** Below this PHP time limit (seconds) a run is refused; 0 means unlimited. */
+    public const MIN_TIME_LIMIT_SECONDS = 120;
+
+    public const RECOMMENDED_TIME_LIMIT_SECONDS = 300;
+
+    private static ?Closure $abortGuard = null;
+
+    private static bool $shutdownRegistered = false;
 
     public function __construct(
         private readonly RecordClassifier $classifier,
@@ -46,21 +64,87 @@ class SyncExternalRecords
 
     public function run(SourceReader $reader, ?User $triggeredBy = null, bool $dryRun = false, ?SyncRun $run = null): SyncRun
     {
+        if (($limit = self::insufficientTimeLimit()) !== null) {
+            throw new RuntimeException(__('PHP max_execution_time is :limit s; EMD sync needs at least :min s (:recommended recommended) for both PHP-FPM and the CLI.', ['limit' => $limit, 'min' => self::MIN_TIME_LIMIT_SECONDS, 'recommended' => self::RECOMMENDED_TIME_LIMIT_SECONDS]));
+        }
+
         // Two overlapping runs would mark each other's records as missing.
         $lock = Cache::lock('hdid:sync', 3600);
 
         if (! $lock->get()) {
-            throw new \RuntimeException(__('Another EMD sync is already running; try again when it has finished.'));
+            throw new RuntimeException(__('Another EMD sync is already running; try again when it has finished.'));
         }
 
         try {
+            $run = $this->startRun($reader, $triggeredBy, $dryRun, $run);
+            self::armAbortGuard($run, $lock, $this->auditor);
+
             return $this->execute($reader, $triggeredBy, $dryRun, $run);
         } finally {
+            self::$abortGuard = null;
             $lock->release();
         }
     }
 
-    private function execute(SourceReader $reader, ?User $triggeredBy, bool $dryRun, ?SyncRun $run): SyncRun
+    /**
+     * The current PHP time limit when it is too short for a run; null when
+     * it is unlimited (0, the CLI default) or long enough.
+     */
+    public static function insufficientTimeLimit(): ?int
+    {
+        $limit = (int) ini_get('max_execution_time');
+
+        return $limit > 0 && $limit < self::MIN_TIME_LIMIT_SECONDS ? $limit : null;
+    }
+
+    /**
+     * What PHP runs at shutdown while a run is in progress: a run that was
+     * cut short (time limit, memory, crash) never reaches its finally
+     * blocks, so this records the failure and frees the lock. A completed
+     * run disarms it. Registered once per process; the worker reuses it.
+     */
+    public static function armAbortGuard(SyncRun $run, Lock $lock, Auditor $auditor): void
+    {
+        $baseTransactionLevel = DB::transactionLevel();
+
+        self::$abortGuard = function () use ($run, $lock, $auditor, $baseTransactionLevel): void {
+            try {
+                // A dry run's open transaction would swallow the status change.
+                while (DB::transactionLevel() > $baseTransactionLevel) {
+                    DB::rollBack();
+                }
+
+                $fresh = $run->fresh();
+                if ($fresh !== null && $fresh->status === SyncRunStatus::Running) {
+                    $error = __('The run was cut short by PHP (time limit, memory or crash): the rows after the last written record were not processed and no account was closed as missing. Check max_execution_time (at least :min s, :recommended recommended) and the worker log.', ['min' => self::MIN_TIME_LIMIT_SECONDS, 'recommended' => self::RECOMMENDED_TIME_LIMIT_SECONDS]);
+                    $fresh->forceFill(['status' => SyncRunStatus::Failed, 'finished_at' => now(), 'error' => $error])->save();
+                    $auditor->record('sync.failed', $fresh, ['error' => $error, 'dry_run' => $fresh->dry_run, 'aborted' => true]);
+                }
+            } catch (Throwable) {
+                // Shutdown: nothing left to report to.
+            }
+
+            try {
+                $lock->release();
+            } catch (Throwable) {
+            }
+        };
+
+        if (! self::$shutdownRegistered) {
+            register_shutdown_function(static fn () => self::$abortGuard?->__invoke());
+            self::$shutdownRegistered = true;
+        }
+    }
+
+    /**
+     * Runs the armed abort guard as PHP would at shutdown (tests).
+     */
+    public static function simulateAbort(): void
+    {
+        self::$abortGuard?->__invoke();
+    }
+
+    private function startRun(SourceReader $reader, ?User $triggeredBy, bool $dryRun, ?SyncRun $run): SyncRun
     {
         $run ??= new SyncRun;
         $run->fill([
@@ -72,6 +156,11 @@ class SyncExternalRecords
             'dry_run' => $dryRun,
         ])->save();
 
+        return $run;
+    }
+
+    private function execute(SourceReader $reader, ?User $triggeredBy, bool $dryRun, SyncRun $run): SyncRun
+    {
         $stats = ['read' => 0, 'skipped' => 0, 'created' => 0, 'updated' => 0, 'missing' => 0, 'closed' => 0, 'provisioned' => 0];
         $stats['current'] = ['users' => User::query()->open()->count(), 'clients' => Client::query()->open()->count()];
         $stats['incoming'] = ['users' => 0, 'clients' => 0, 'unclassified' => 0, 'invalid_row' => 0, 'duplicate' => 0, 'duplicate_email' => 0];
@@ -194,6 +283,7 @@ class SyncExternalRecords
                 $this->assertNotShrunk($run, $stats);
 
                 [$stats['missing'], $stats['closed'], $samples['closed']] = $this->handleMissing($run);
+                [$stats['closing_next'], $samples['closing_next']] = $this->closingAtNextRun();
             } finally {
                 if ($transactionStarted) {
                     DB::rollBack();
@@ -201,9 +291,11 @@ class SyncExternalRecords
             }
 
             $stats['samples'] = $samples;
+            $stats = $this->withRequestDetails($stats, $reader);
             $run->forceFill(['status' => SyncRunStatus::Completed, 'finished_at' => now(), 'stats' => $stats, 'skipped_rows' => $skipped])->save();
             $this->auditor->record($dryRun ? 'sync.dry_run' : 'sync.completed', $run, $stats, $triggeredBy);
         } catch (Throwable $e) {
+            $stats = $this->withRequestDetails($stats, $reader);
             $run->forceFill(['status' => SyncRunStatus::Failed, 'finished_at' => now(), 'stats' => $stats, 'skipped_rows' => $skipped, 'error' => $e->getMessage()])->save();
             $this->auditor->record('sync.failed', $run, ['error' => $e->getMessage(), 'dry_run' => $dryRun] + $stats, $triggeredBy);
 
@@ -216,6 +308,20 @@ class SyncExternalRecords
     /** @param array<string, mixed> $stats
      * @return list<string>
      */
+    /**
+     * The reader's request report (status codes, IDs sent), kept on failed
+     * runs too.
+     *
+     * @param  array<string, mixed>  $stats
+     * @return array<string, mixed>
+     */
+    private function withRequestDetails(array $stats, SourceReader $reader): array
+    {
+        $details = $reader->details();
+
+        return $details === [] ? $stats : $stats + ['requests' => $details];
+    }
+
     private function normalizePhones(ExternalRecordDto $item, array &$stats): array
     {
         $numbers = [];
@@ -300,6 +406,24 @@ class SyncExternalRecords
     }
 
     /**
+     * Records that one more absent run would make missing (closing their
+     * accounts), after this run's bookkeeping: the count and a sample of
+     * names, so the operator sees the next run's closures coming.
+     *
+     * @return array{0: int, 1: list<string>}
+     */
+    private function closingAtNextRun(): array
+    {
+        $threshold = max(1, $this->settings->int(SettingKey::SyncMissedRunsBeforeClose));
+        $query = ExternalRecord::query()->fromDirectory()->closingAtNextRun($threshold);
+
+        return [
+            $query->count(),
+            $query->clone()->orderBy('name')->limit(self::CHANGE_SAMPLE_SIZE)->get()->map(fn (ExternalRecord $record): string => $record->name.' <'.$record->email.'>')->all(),
+        ];
+    }
+
+    /**
      * @return array{0: int, 1: int, 2: list<string>} [newly missing, accounts closed, sample of closed names]
      */
     private function handleMissing(SyncRun $run): array
@@ -309,7 +433,10 @@ class SyncExternalRecords
         $closed = 0;
         $sample = [];
 
+        // Local bootstrap rows (hdid:make-admin) are not the directory's: a
+        // run never sees them, and must not close the first administrator.
         ExternalRecord::query()
+            ->fromDirectory()
             ->where(fn ($q) => $q->where('last_seen_run_id', '!=', $run->id)->orWhereNull('last_seen_run_id'))
             ->with(['user', 'client'])
             ->chunkById(200, function ($records) use ($threshold, &$missing, &$closed, &$sample): void {

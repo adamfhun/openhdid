@@ -3,6 +3,8 @@
 use App\Auth\Permission;
 use App\Auth\Role;
 use App\Enums\PhoneNumberSource;
+use App\Enums\SyncRunStatus;
+use App\Enums\SyncSource;
 use App\Filament\Admin\Pages\ManageSettings;
 use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Admin\Resources\ExternalRecords\Pages\ManageExternalRecords;
@@ -11,22 +13,26 @@ use App\Filament\Admin\Resources\Questions\Pages\ListQuestions;
 use App\Filament\Admin\Resources\Roles\Pages\ManageRoles;
 use App\Filament\Admin\Resources\SyncRuns\Pages\ManageSyncRuns;
 use App\Filament\Admin\Resources\Users\Pages\CreateUser;
+use App\Jobs\RunDirectorySync;
 use App\Mail\MagicLinkMail;
 use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\ExternalRecord;
 use App\Models\NewsPost;
 use App\Models\Question;
+use App\Models\SyncRun;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Sms\FakeSmsSender;
 use App\Sms\SmsSender;
+use App\Sync\QueuedSyncs;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 
@@ -107,14 +113,28 @@ it('filters external records by e-mail domain', function (): void {
         ->assertCountTableRecords(1);
 });
 
-it('imports a csv from the sync runs page', function (): void {
+it('queues a csv import from the sync runs page for the worker and removes the upload once read', function (): void {
     Storage::fake('local');
+    Queue::fake();
+    config()->set(['queue.default' => 'database', 'queue.connections.database.retry_after' => 1260]);
     app(Settings::class)->set(SettingKey::SyncClientDomains, ['x.hu']);
     $file = UploadedFile::fake()->createWithContent('clients.csv', "external_id,name,email,company,phone,implicit_package\n1,Anna,anna@x.hu,Acme,+36301234567,Basic\n");
 
-    Livewire::test(ManageSyncRuns::class)->callAction('importFile', ['file' => $file]);
+    Livewire::test(ManageSyncRuns::class)->callAction('importFile', ['file' => $file])->assertNotified();
 
-    expect(Client::query()->where('email', 'anna@x.hu')->first()->implicit_package)->toBe('Basic');
+    $run = SyncRun::query()->sole();
+    expect($run->status)->toBe(SyncRunStatus::Queued)->and($run->source)->toBe(SyncSource::Csv)
+        ->and(Client::query()->where('email', 'anna@x.hu')->exists())->toBeFalse('nothing runs inside the request');
+    Queue::assertPushed(RunDirectorySync::class, function (RunDirectorySync $job) use ($run): bool {
+        expect(Storage::disk('local')->exists($job->upload))->toBeTrue();
+        (new RunDirectorySync($job->runId, $job->upload))->handle(app(QueuedSyncs::class));
+        expect(Storage::disk('local')->exists($job->upload))->toBeFalse('the upload is removed once read');
+
+        return $job->runId === $run->id;
+    });
+
+    expect(Client::query()->where('email', 'anna@x.hu')->first()->implicit_package)->toBe('Basic')
+        ->and($run->fresh()->status)->toBe(SyncRunStatus::Completed);
 });
 
 it('closes and reopens a client from the table', function (): void {

@@ -150,7 +150,8 @@ it('rejects non-file or incomplete export responses without marking existing acc
         ->toThrow(SourceFormatException::class);
     expect($client->fresh()->isClosed())->toBeFalse()
         ->and($client->externalRecord->fresh()->missed_runs)->toBe(0)
-        ->and(SyncRun::query()->sole()->status->value)->toBe('failed');
+        ->and(SyncRun::query()->sole()->status->value)->toBe('failed')
+        ->and(SyncRun::query()->sole()->stats['requests'])->toBe(['export' => ['status' => $status]]);
     expect(Storage::disk('local')->allFiles('sync-uploads'))->toBeEmpty();
     Http::assertSentCount(2);
 })->with([

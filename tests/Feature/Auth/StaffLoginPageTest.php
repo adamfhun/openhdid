@@ -8,6 +8,8 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cookie;
 use Livewire\Livewire;
 use Tests\Support\FakeOidc;
 
@@ -101,4 +103,35 @@ it('applies the one login rule to the password path as well', function (): void 
 
     $this->assertGuest();
     expect(AuditLog::query()->where('event', 'login.rejected')->where('context->reason', LoginRejection::ExternalRecordMismatch->value)->exists())->toBeTrue();
+});
+
+it('offers no remember-me box by default and ignores a forged one', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $user = User::factory()->synced()->withRole(Role::Admin)->create(['password' => 'secret-pass-1']);
+
+    Livewire::test(Login::class)
+        ->assertDontSee('Remember me')
+        ->fillForm(['email' => $user->email, 'password' => 'secret-pass-1'])
+        ->set('data.remember', true)
+        ->call('authenticate')
+        ->assertHasNoFormErrors();
+
+    expect(Cookie::hasQueued(Auth::guard('web')->getRecallerName()))->toBeFalse();
+});
+
+it('remembers a password login for the configured days when remember-me is on', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    app(Settings::class)->set(SettingKey::UserLoginRememberEnabled, true);
+    app(Settings::class)->set(SettingKey::UserLoginRememberDays, 30);
+    $user = User::factory()->synced()->withRole(Role::Admin)->create(['password' => 'secret-pass-1']);
+
+    Livewire::test(Login::class)
+        ->assertSee('Remember me')
+        ->fillForm(['email' => $user->email, 'password' => 'secret-pass-1', 'remember' => true])
+        ->call('authenticate')
+        ->assertHasNoFormErrors();
+
+    $cookie = Cookie::queued(Auth::guard('web')->getRecallerName());
+    expect($cookie)->not->toBeNull()
+        ->and(abs($cookie->getExpiresTime() - (time() + 30 * 86400)))->toBeLessThan(60);
 });

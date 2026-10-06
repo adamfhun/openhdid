@@ -1,6 +1,8 @@
 <?php
 
 use App\Auth\AccountLogin;
+use App\Auth\LoginRejectedException;
+use App\Auth\LoginRejection;
 use App\Enums\ApiKeyScope;
 use App\Http\Middleware\AuthenticateApiKey;
 use App\Http\Middleware\ValidateCsrfTokenUnlessBearer;
@@ -9,8 +11,12 @@ use App\Models\ApiKey;
 use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\OneTimeCode;
+use App\Models\User;
+use App\Settings\SettingKey;
+use App\Settings\Settings;
 use App\Sms\FakeSmsSender;
 use App\Sms\SmsSender;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Cookie\CookieValuePrefix;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Http\Request;
@@ -46,7 +52,7 @@ function magicLinkFor(string $email): string
 it('signs in from a magic link without a remember cookie and never audits the remember token', function (): void {
     $client = Client::factory()->synced()->create(['email' => 'c@x.hu']);
 
-    $response = $this->get(magicLinkFor('c@x.hu'))->assertRedirect('/');
+    $response = signInWithLink(magicLinkFor('c@x.hu'))->assertOk();
     $this->assertAuthenticatedAs($client, 'client');
 
     $rememberCookies = collect($response->headers->getCookies())->filter(fn ($cookie) => str_starts_with($cookie->getName(), 'remember_'));
@@ -69,7 +75,7 @@ it('limits login requests per e-mail address, quietly', function (): void {
 
 it('signs a closed client out of a live session and deletes its sessions and secrets on closure', function (): void {
     $client = Client::factory()->synced()->create(['email' => 'c@x.hu']);
-    $this->get(magicLinkFor('c@x.hu'));
+    signInWithLink(magicLinkFor('c@x.hu'));
     $this->getJson('/api/v1/client/me')->assertOk();
     $this->postJson('/api/v1/client/mobile-code')->assertOk();
     DB::table('sessions')->insert(['id' => 'sess-1', 'user_id' => $client->id, 'payload' => '', 'last_activity' => time()]);
@@ -106,6 +112,7 @@ function meViaRecaller(Client $client, string $rememberToken): TestResponse
 }
 
 it('issues scoped tokens and can sign a client out everywhere, including the remember-me cookie', function (): void {
+    app(Settings::class)->set(SettingKey::ClientLoginRememberEnabled, true);
     $client = Client::factory()->synced()->create();
     $token = app(AccountLogin::class)->issueToken($client, 'test', 'phone');
     app(AccountLogin::class)->issueToken($client, 'test', 'tablet');
@@ -215,4 +222,28 @@ it('throttles the client pin endpoints', function (): void {
     $pin = collect(app('router')->getRoutes())->first(fn ($route) => $route->getName() === 'api.v1.client.pin.store');
 
     expect(collect($pin->gatherMiddleware())->contains('throttle:10,1,pin-change'))->toBeTrue();
+});
+
+it('does not report refused logins to the error log', function (): void {
+    expect(app(ExceptionHandler::class)->shouldReport(new LoginRejectedException(LoginRejection::InvalidCredentials)))->toBeFalse();
+});
+
+it('ignores and clears a remember-me cookie while remember-me is switched off', function (): void {
+    $client = Client::factory()->synced()->create();
+    $client->forceFill(['remember_token' => $token = Str::random(60)])->saveQuietly();
+
+    $response = meViaRecaller($client, $token)->assertUnauthorized();
+    expect($response->getCookie(Auth::guard('client')->getRecallerName(), false)?->getExpiresTime())->toBeLessThan(time());
+
+    app(Settings::class)->set(SettingKey::ClientLoginRememberEnabled, true);
+    meViaRecaller($client, $token)->assertOk();
+});
+
+it('clears the remember tokens issued before remember-me became a switch', function (): void {
+    $user = User::factory()->create(['remember_token' => 'old-user-token']);
+    $client = Client::factory()->create(['remember_token' => 'old-client-token']);
+
+    (require database_path('migrations/2026_10_03_100002_forget_remember_tokens.php'))->up();
+
+    expect($user->fresh()->remember_token)->toBeNull()->and($client->fresh()->remember_token)->toBeNull();
 });

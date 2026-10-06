@@ -1,11 +1,14 @@
 <?php
 
+use App\Auth\Permission;
 use App\Auth\Role;
 use App\Filament\Admin\Pages\ManageSettings;
+use App\Models\SyncIdListItem;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -160,8 +163,7 @@ it('stores the directory fields as column => label pairs from the settings page'
     expect(app(Settings::class)->array(SettingKey::ClientsDirectoryFields))->toBe(['department' => 'Osztály', 'title' => 'Beosztás']);
 });
 
-it('lets only a SuperAdmin edit the complete export payload and validates its JSON object', function (): void {
-    $this->actingAs(User::factory()->withRole(Role::SuperAdmin)->create());
+it('lets a sync manager edit the complete export payload and validates its JSON object', function (): void {
     $field = ManageSettings::fieldName(SettingKey::SyncExportPayload);
     $payload = '{"filter":{"ids":"12,34","empty":{}},"label":"Árvíztűrő"}';
 
@@ -175,7 +177,6 @@ it('lets only a SuperAdmin edit the complete export payload and validates its JS
 });
 
 it('accepts the now placeholder in the export payload and rejects unknown placeholders', function (): void {
-    $this->actingAs(User::factory()->withRole(Role::SuperAdmin)->create());
     $field = ManageSettings::fieldName(SettingKey::SyncExportPayload);
     $payload = '{"ids":"12,34","from":"{{ now }}"}';
 
@@ -183,26 +184,37 @@ it('accepts the now placeholder in the export payload and rejects unknown placeh
     expect(app(Settings::class)->string(SettingKey::SyncExportPayload))->toBe($payload);
 
     Livewire::test(ManageSettings::class)->fillForm([$field => '{"from":"{{ since }}"}'])->call('save')
-        ->assertHasFormErrors([$field])->assertSee('Unknown placeholder: since. Allowed: now');
+        ->assertHasFormErrors([$field])->assertSee('Unknown placeholder: since. Allowed: now, ids');
     expect(app(Settings::class)->string(SettingKey::SyncExportPayload))->toBe($payload);
 });
 
-it('preserves the export payload when an Admin saves other settings or tampers with its state', function (): void {
-    $admin = auth()->user();
-    $this->actingAs(User::factory()->withRole(Role::SuperAdmin)->create());
-    app(Settings::class)->set(SettingKey::SyncExportPayload, '{"ids":"original"}');
-    $this->actingAs($admin);
-    $field = ManageSettings::fieldName(SettingKey::SyncExportPayload);
+it('preserves the EMD request settings and the ID selection when a user without sync management saves or tampers', function (): void {
+    $settings = app(Settings::class);
+    $settings->set(SettingKey::SyncExportPayload, '{"ids":"original"}');
+    $settings->set(SettingKey::SyncIdListPayload, '{"list":"original"}');
+    $item = SyncIdListItem::factory()->selected()->create();
+    $settingsOnly = User::factory()->create();
+    $settingsOnly->givePermissionTo([Permission::AdminAccess->value, Permission::SettingsManage->value]);
+    $this->actingAs($settingsOnly);
 
     Livewire::test(ManageSettings::class)
-        ->set('data.'.$field, '{"ids":"tampered"}')
+        ->assertFormFieldIsDisabled(ManageSettings::fieldName(SettingKey::SyncExportPayload))
+        ->assertFormFieldIsDisabled('idList.'.ManageSettings::ID_LIST_FIELD)
+        ->set('data.'.ManageSettings::fieldName(SettingKey::SyncExportPayload), '{"ids":"tampered"}')
+        ->set('data.'.ManageSettings::fieldName(SettingKey::SyncIdListPayload), '{"list":"tampered"}')
+        ->set('data.'.ManageSettings::fieldName(SettingKey::SyncIdListIdPath), 'tampered.id')
+        ->set('data.'.ManageSettings::ID_LIST_FIELD, [])
         ->fillForm([ManageSettings::fieldName(SettingKey::SyncExpectedIntervalHours) => 3])
-        ->call('save')->assertHasNoFormErrors();
+        ->call('save')->assertHasNoFormErrors()
+        ->assertActionDoesNotExist(TestAction::make('fetchIdList')->schemaComponent('idList', 'form'));
 
-    expect(app(Settings::class)->string(SettingKey::SyncExportPayload))->toBe('{"ids":"original"}')
-        ->and(app(Settings::class)->int(SettingKey::SyncExpectedIntervalHours))->toBe(3);
-    expect(fn () => app(Settings::class)->set(SettingKey::SyncExportPayload, '{"ids":"bypass"}'))
-        ->toThrow(HttpException::class);
+    expect($settings->string(SettingKey::SyncExportPayload))->toBe('{"ids":"original"}')
+        ->and($settings->string(SettingKey::SyncIdListPayload))->toBe('{"list":"original"}')
+        ->and($settings->string(SettingKey::SyncIdListIdPath))->toBe('result.data.id')
+        ->and($settings->int(SettingKey::SyncExpectedIntervalHours))->toBe(3)
+        ->and($item->fresh()->selected)->toBeTrue();
+    expect(fn () => $settings->set(SettingKey::SyncExportPayload, '{"ids":"bypass"}'))->toThrow(HttpException::class)
+        ->and(fn () => $settings->set(SettingKey::SyncIdListPayload, '{"list":"bypass"}'))->toThrow(HttpException::class);
 });
 
 it('lowercases entered domains and rejects overlap without saving either list', function (): void {
@@ -286,3 +298,21 @@ it('never seeds the shared settings cache from an uncommitted transaction', func
     app(Settings::class)->forget();
     expect(app(Settings::class)->int(SettingKey::CallsDashboardPollSeconds))->toBe(5, 'the rolled back value is gone');
 });
+
+it('rejects out-of-range login, session and SMS budget values without saving them', function (SettingKey $key, int $value): void {
+    Livewire::test(ManageSettings::class)
+        ->fillForm([ManageSettings::fieldName($key) => $value])
+        ->call('save')
+        ->assertHasFormErrors([ManageSettings::fieldName($key)]);
+
+    expect(app(Settings::class)->int($key))->toBe($key->default());
+})->with([
+    'session longer than 30 days' => [SettingKey::UserLoginSessionMaxHours, 721],
+    'client session of zero hours' => [SettingKey::ClientLoginSessionMaxHours, 0],
+    'lockout after zero attempts' => [SettingKey::UserLoginLockoutMaxAttempts, 0],
+    'lockout of more than 30 days' => [SettingKey::ClientLoginLockoutMinutes, 43201],
+    'remember for a year and a day' => [SettingKey::UserLoginRememberDays, 366],
+    'mobile token older than an hour' => [SettingKey::SsoMobileTokenMaxAgeMinutes, 61],
+    'more than ten codes a minute' => [SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute, 11],
+    'no code an hour' => [SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour, 0],
+]);

@@ -30,6 +30,14 @@ class ExternalRecord extends Model
     use SoftDeletes;
 
     /**
+     * Records created locally (hdid:make-admin, before the directory is
+     * connected) carry an external_id from here up. They are not the
+     * directory's rows, so a run that does not see them does not make them
+     * missing, and a directory row with the same e-mail takes their place.
+     */
+    public const LOCAL_ID_BASE = 9_000_000_000;
+
+    /**
      * Every run stamps the bookkeeping columns on every record; auditing
      * them would write one log row per record per run.
      *
@@ -105,6 +113,48 @@ class ExternalRecord extends Model
     public function isMissing(): bool
     {
         return $this->missing_since !== null;
+    }
+
+    public function isLocal(): bool
+    {
+        return (int) $this->external_id >= self::LOCAL_ID_BASE;
+    }
+
+    /**
+     * Records the directory left out of one or more recent runs but has not
+     * made missing yet (the accounts are still open).
+     *
+     * @param  Builder<ExternalRecord>  $query
+     */
+    public function scopeMissedRecently(Builder $query): void
+    {
+        $query->whereNull('missing_since')->where('missed_runs', '>', 0);
+    }
+
+    /**
+     * Records one more absent run away from being made missing, which closes
+     * their accounts: the directory's next run decides.
+     *
+     * @param  Builder<ExternalRecord>  $query
+     */
+    public function scopeClosingAtNextRun(Builder $query, int $threshold): void
+    {
+        $query->whereNull('missing_since')->where('missed_runs', '>=', max(1, $threshold - 1));
+    }
+
+    public function closesAtNextRun(int $threshold): bool
+    {
+        return $this->missing_since === null && (int) $this->missed_runs >= max(1, $threshold - 1);
+    }
+
+    /**
+     * Rows that came from the directory, as opposed to local bootstrap rows.
+     *
+     * @param  Builder<ExternalRecord>  $query
+     */
+    public function scopeFromDirectory(Builder $query): void
+    {
+        $query->where('external_id', '<', self::LOCAL_ID_BASE);
     }
 
     /** @return HasOne<User, $this> */

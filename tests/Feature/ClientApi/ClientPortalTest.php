@@ -21,7 +21,7 @@ it('keeps the client signed in after a magic link without any referer header', f
         return true;
     });
 
-    $this->get($url)->assertRedirect('/');
+    signInWithLink($url)->assertOk();
 
     // A plain same-origin request: no Referer, no Origin, only the session cookie.
     $this->getJson('/api/v1/client/me')->assertOk()->assertJsonPath('data.id', $client->id);

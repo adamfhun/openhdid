@@ -62,6 +62,12 @@ class SsoController extends Controller
             || $pending['provider'] !== $provider->value
             || ! hash_equals((string) $pending['state'], (string) $request->query('state'))
             || ! is_string($request->query('code'))) {
+            // A forged or stale callback, or a sign-in cancelled at the provider.
+            $this->login->recordRejection($principal, 'sso.'.$provider->value, LoginRejection::InvalidCredentials, [
+                'detail' => is_array($pending) ? 'state_or_code' : 'no_pending_request',
+                'provider_error' => is_string($request->query('error')) ? mb_substr($request->query('error'), 0, 100) : null,
+            ]);
+
             return $this->failed($principal, LoginRejection::InvalidCredentials);
         }
 
@@ -72,17 +78,21 @@ class SsoController extends Controller
             $email = $this->oidc->email($claims, $config);
 
             if ($email === null) {
+                $this->login->recordRejection($principal, 'sso.'.$provider->value, LoginRejection::InvalidCredentials, ['detail' => 'no_email_claim']);
+
                 return $this->failed($principal, LoginRejection::InvalidCredentials);
             }
 
             $account = $this->login->resolveByEmail($principal, $email, 'sso.'.$provider->value);
             $this->access->assertEnabled($principal, $provider, 'sso.'.$provider->value, $account);
-            $this->login->loginToSession($account, 'sso.'.$provider->value, remember: true);
+            $this->login->loginToSession($account, 'sso.'.$provider->value, allowRemember: true);
         } catch (LoginRejectedException $e) {
             return $this->failed($principal, $e->reason);
         } catch (OidcUnavailableException $e) {
             return $this->unavailable($principal, $provider, $e);
-        } catch (OidcException) {
+        } catch (OidcException $e) {
+            $this->login->recordRejection($principal, 'sso.'.$provider->value, LoginRejection::InvalidCredentials, ['detail' => 'invalid_token', 'error' => $e->getMessage()]);
+
             return $this->failed($principal, LoginRejection::InvalidCredentials);
         }
 

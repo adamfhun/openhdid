@@ -18,7 +18,7 @@ use Illuminate\Http\JsonResponse;
 class BrandingController extends Controller
 {
     /**
-     * @response array{branding: array{app_name: string, logo_url: ?string, favicon_url: string, primary_color: string, palette: array<string, string>, tiers: array<string, array{background_image: ?string, login_background_image: ?string, badge_label: ?string, support: array{email: ?string, phone: ?string, hours: ?string}}>, portal: array<string, ?string>}, news_on_overview: bool, login_methods: array{magic_link: bool, otp_sms: bool, adfs: bool, entra: bool}}
+     * @response array{branding: array{app_name: string, logo_url: ?string, favicon_url: string, primary_color: string, palette: array<string, string>, tiers: array<string, array{background_image: ?string, login_background_image: ?string, badge_label: ?string, support: array{email: ?string, phone: ?string, hours: ?string}}>, portal: array<string, ?string>}, news_on_overview: bool, login_methods: array{magic_link: bool, otp_sms: bool, adfs: bool, entra: bool}, otp_sms: array{retry_after_seconds: int, max_per_hour: int, email_fallback: bool}}
      */
     public function __invoke(Branding $branding, Settings $settings, ClientPasswordlessLogin $passwordless, SsoAccess $access): JsonResponse
     {
@@ -30,6 +30,14 @@ class BrandingController extends Controller
                 'otp_sms' => $passwordless->otpSmsEnabled(),
                 'adfs' => $access->isAvailable(PrincipalType::Client, OidcProvider::Adfs),
                 'entra' => $access->isAvailable(PrincipalType::Client, OidcProvider::Entra),
+            ],
+            // How the login page paces the SMS code: one re-send after this
+            // many seconds, at most this many codes an hour, then the e-mailed
+            // link (when allowed) or support.
+            'otp_sms' => [
+                'retry_after_seconds' => $passwordless->otpRetryAfterSeconds(),
+                'max_per_hour' => $settings->int(SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour),
+                'email_fallback' => $passwordless->otpEmailFallbackEnabled(),
             ],
         ]);
     }

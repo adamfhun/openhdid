@@ -4,10 +4,7 @@ namespace App\Filament\Admin\Resources\SyncRuns\Pages;
 
 use App\Auth\Permission;
 use App\Filament\Admin\Resources\SyncRuns\SyncRunResource;
-use App\Models\SyncRun;
 use App\Sync\QueuedSyncs;
-use App\Sync\ReaderFactory;
-use App\Sync\SyncExternalRecords;
 use Filament\Actions\Action;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Toggle;
@@ -42,71 +39,41 @@ class ManageSyncRuns extends ManageRecords
                         ->default(false),
                 ])
                 ->action(function (array $data): void {
-                    abort_unless(auth()->user()?->can(Permission::SyncManage->value), 403);
-                    $path = Storage::disk('local')->path($data['file']);
-
-                    try {
-                        $this->runSync(fn (ReaderFactory $readers) => $readers->forFile($path, basename($data['file'])), (bool) ($data['dry_run'] ?? false));
-                    } finally {
-                        // The upload has served its purpose; it must not linger on disk.
-                        Storage::disk('local')->delete($data['file']);
-                    }
+                    // The worker reads the upload: a request has a time limit a
+                    // large file would hit. The upload is removed once it was read
+                    // (or could not be queued at all).
+                    $this->queue((bool) ($data['dry_run'] ?? false), $data['file']);
                 }),
             Action::make('syncApiDryRun')
                 ->label(__('Trial run from API'))
                 ->icon('heroicon-o-eye')
                 ->color('gray')
-                ->action(fn () => $this->queueApi(true)),
+                ->action(fn () => $this->queue(true)),
             Action::make('syncApi')
                 ->label(__('EMD sync from API now'))
                 ->icon('heroicon-o-cloud-arrow-down')
                 ->requiresConfirmation()
-                ->action(fn () => $this->queueApi(false)),
+                ->action(fn () => $this->queue(false)),
         ];
     }
 
-    private function runSync(callable $reader, bool $dryRun): void
-    {
-        abort_unless(auth()->user()?->can(Permission::SyncManage->value), 403);
-        try {
-            $run = app(SyncExternalRecords::class)->run($reader(app(ReaderFactory::class)), auth()->user(), $dryRun);
-            $notification = Notification::make()
-                ->title($dryRun ? __('Trial run finished; nothing was written') : __('EMD sync completed'))
-                ->body($this->summary($run));
-            ($dryRun ? $notification->info() : $notification->success())->persistent()->send();
-        } catch (Throwable $e) {
-            Notification::make()->title(__('EMD sync failed'))->body($e->getMessage())->danger()->persistent()->send();
-        }
-    }
-
-    private function queueApi(bool $dryRun): void
+    private function queue(bool $dryRun, ?string $upload = null): void
     {
         abort_unless(auth()->user()?->can(Permission::SyncManage->value), 403);
 
         try {
-            app(QueuedSyncs::class)->start(auth()->user(), $dryRun);
+            app(QueuedSyncs::class)->start(auth()->user(), $dryRun, $upload);
             Notification::make()->success()->persistent()
                 ->title($dryRun ? __('Trial run queued') : __('EMD sync queued'))
-                ->body(__('The file is downloaded and processed in the background. Open the run details when it finishes to see the counts and preview.'))
+                ->body($upload === null
+                    ? __('The file is downloaded and processed in the background. Open the run details when it finishes to see the counts and preview.')
+                    : __('The file is processed in the background. Open the run details when it finishes to see the counts and preview.'))
                 ->send();
         } catch (Throwable $exception) {
+            if ($upload !== null) {
+                Storage::disk('local')->delete($upload);
+            }
             Notification::make()->danger()->title(__('EMD sync failed'))->body($exception->getMessage())->send();
         }
-    }
-
-    private function summary(SyncRun $run): string
-    {
-        $stats = $run->stats;
-        $lines = [__(':n read, :c new, :u updated, :s skipped, :m missing, :x closed', [
-            'n' => $stats['read'], 'c' => $stats['created'], 'u' => $stats['updated'], 's' => $stats['skipped'], 'm' => $stats['missing'], 'x' => $stats['closed'],
-        ])];
-
-        foreach (['created' => __('New'), 'closed' => __('Closed')] as $key => $label) {
-            if ($sample = $stats['samples'][$key] ?? []) {
-                $lines[] = $label.': '.implode(', ', array_slice($sample, 0, 5)).(count($sample) > 5 ? ' …' : '');
-            }
-        }
-
-        return implode("\n", $lines);
     }
 }

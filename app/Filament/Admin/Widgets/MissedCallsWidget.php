@@ -59,6 +59,7 @@ class MissedCallsWidget extends TableWidget
                         ? Identify::getUrl(['client' => $call->client_id, 'call' => $call->id])
                         : SearchClients::getUrl(['call' => $call->id, 'q' => $call->callerNumber()])),
                 Action::make('handled')
+                    ->authorize(fn (): bool => auth()->user()?->can(Permission::IdentificationRun->value) ?? false)
                     ->label(__('Handled'))
                     ->icon('heroicon-o-check')
                     ->color('gray')

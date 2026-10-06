@@ -70,7 +70,7 @@ enum MessageKey: string
     public function placeholders(): array
     {
         $own = match ($this) {
-            self::MagicLink => ['link' => __('The one-time login link'), 'minutes' => __('Validity of the link in minutes'), 'days' => __('Validity of the link in days (rounded)')],
+            self::MagicLink => ['link' => __('The one-time login link'), 'minutes' => __('Validity of the link in minutes'), 'hours' => __('Validity of the link in hours'), 'days' => __('Validity of the link in days (rounded)')],
             self::PinSms => ['pin' => __('The new PIN')],
             self::LoginOtpSms => ['code' => __('The login code'), 'minutes' => __('Validity of the code in minutes')],
             self::PhoneVerifySms => ['code' => __('The verification code'), 'minutes' => __('Validity of the code in minutes')],
@@ -134,7 +134,7 @@ enum MessageKey: string
         return match ([$this, $this->locale($locale)]) {
             [self::MagicLink, 'hu'] => <<<'HTML'
 <h2>Kedves {{ name }}!</h2>
-<p>Az alábbi gombra kattintva beléphet a(z) {{ app_name }} ügyfélfelületére. A link {{ days }} napig érvényes, és egyszer használható fel.</p>
+<p>Az alábbi gombra kattintva beléphet a(z) {{ app_name }} ügyfélfelületére. A link {{ hours }} óráig érvényes, és egyszer használható fel.</p>
 <p><a class="button" href="{{ link }}">Belépés</a></p>
 <p>Ha a gomb nem működik, másolja be ezt a címet a böngészőbe:<br>{{ link }}</p>
 <p>Ha nem Ön kérte a belépést, ezt a levelet figyelmen kívül hagyhatja.</p>
@@ -142,7 +142,7 @@ enum MessageKey: string
 HTML,
             [self::MagicLink, 'en'] => <<<'HTML'
 <h2>Hello {{ name }},</h2>
-<p>Use the button below to sign in to {{ app_name }}. The link is valid for {{ days }} days and can be used once.</p>
+<p>Use the button below to sign in to {{ app_name }}. The link is valid for {{ hours }} hours and can be used once.</p>
 <p><a class="button" href="{{ link }}">Sign in</a></p>
 <p>If the button does not work, copy this address into your browser:<br>{{ link }}</p>
 <p>If you did not request this, you can ignore this e-mail.</p>

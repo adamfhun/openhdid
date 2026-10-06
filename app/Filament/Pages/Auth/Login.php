@@ -3,15 +3,19 @@
 namespace App\Filament\Pages\Auth;
 
 use App\Auth\AccountLogin;
+use App\Auth\LoginLockout;
 use App\Auth\LoginRejectedException;
+use App\Auth\LoginRejection;
 use App\Auth\Oidc\OidcProvider;
 use App\Auth\Oidc\SsoAccess;
 use App\Enums\PrincipalType;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use DanHarrin\LivewireRateLimiting\Exceptions\TooManyRequestsException;
 use Filament\Auth\Http\Responses\Contracts\LoginResponse;
 use Filament\Auth\Pages\Login as BaseLogin;
+use Filament\Facades\Filament;
 use Filament\Schemas\Components\Component;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
@@ -31,10 +35,32 @@ class Login extends BaseLogin
     {
         // Hiding the form is not enough: the Livewire action can be called
         // directly, so a disabled password login has to be refused here.
+        // These early refusals count towards the same per-address limit as
+        // the password check in the parent, which they never reach.
         if (! app(Settings::class)->bool(SettingKey::UserLoginPasswordEnabled)) {
-            $this->throwFailureValidationException();
+            if ($this->refusedByRateLimit()) {
+                return null;
+            }
+
+            app(AccountLogin::class)->recordRejection(PrincipalType::User, 'password', LoginRejection::MethodDisabled, ['email' => $this->attemptedEmail()]);
+
+            parent::throwFailureValidationException();
         }
 
+        // A locked account is refused before its password is even checked.
+        if (($locked = $this->attemptedUser()) !== null && $locked->isLoginLocked()) {
+            if ($this->refusedByRateLimit()) {
+                return null;
+            }
+
+            try {
+                app(LoginLockout::class)->assertNotLocked($locked, 'password');
+            } catch (LoginRejectedException $e) {
+                throw ValidationException::withMessages(['data.email' => $e->getMessage()]);
+            }
+        }
+
+        app(AccountLogin::class)->applyRememberDuration(PrincipalType::User);
         $response = parent::authenticate();
 
         if ($response !== null && ($user = auth()->user()) instanceof User) {
@@ -52,10 +78,74 @@ class Login extends BaseLogin
                 throw ValidationException::withMessages(['data.email' => $e->getMessage()]);
             }
 
+            app(LoginLockout::class)->recordSuccess($user);
             app(AccountLogin::class)->recordSuccess($user, 'password');
         }
 
         return $response;
+    }
+
+    /**
+     * Every wrong password is audited and counts towards the lockout of the
+     * account it names. An account Filament refuses for its state (closed,
+     * no panel access) is audited with that reason instead: the password may
+     * well have been right, and the lock would outlive a reopening.
+     */
+    protected function throwFailureValidationException(): never
+    {
+        $user = $this->attemptedUser();
+
+        if ($user === null) {
+            app(AccountLogin::class)->recordRejection(PrincipalType::User, 'password', LoginRejection::InvalidCredentials, ['email' => $this->attemptedEmail()]);
+        } elseif (! $user->canAccessPanel(Filament::getCurrentOrDefaultPanel())) {
+            app(AccountLogin::class)->recordRejection(PrincipalType::User, 'password', $user->isClosed() ? LoginRejection::AccountClosed : LoginRejection::NoPermission, ['email' => $user->email], $user);
+        } else {
+            app(LoginLockout::class)->recordFailure($user, 'password');
+        }
+
+        parent::throwFailureValidationException();
+    }
+
+    /**
+     * Filament's own per-address limit, applied where the parent's check is
+     * not reached; true (with the notification sent) when the limit is hit.
+     * (Not named isRateLimited: the rate-limiting trait took that name.)
+     */
+    private function refusedByRateLimit(): bool
+    {
+        try {
+            $this->rateLimit(5);
+        } catch (TooManyRequestsException $exception) {
+            $this->getRateLimitedNotification($exception)?->send();
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * The "remember me" box only while remember-me is switched on; hidden, its
+     * state is not part of the form data, so a forged value is ignored.
+     */
+    protected function getRememberFormComponent(): Component
+    {
+        return parent::getRememberFormComponent()
+            ->visible(fn (): bool => app(AccountLogin::class)->rememberMinutes(PrincipalType::User) !== null);
+    }
+
+    private function attemptedEmail(): ?string
+    {
+        $email = $this->data['email'] ?? null;
+
+        return is_string($email) && $email !== '' ? mb_strtolower(trim($email)) : null;
+    }
+
+    private function attemptedUser(): ?User
+    {
+        $email = $this->attemptedEmail();
+
+        return $email === null ? null : User::query()->where('email', $email)->first();
     }
 
     /**

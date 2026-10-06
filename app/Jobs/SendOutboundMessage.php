@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Audit\Auditor;
 use App\Enums\OutboundMessageStatus;
 use App\Mail\MagicLinkMail;
 use App\Mail\TemplatedMail;
@@ -26,6 +27,9 @@ use Throwable;
  * One message is processed by one job at a time: the job is unique per
  * message id while queued, and the row is locked while it is claimed, so
  * the requeue sweeper and a self-released retry cannot both send it.
+ *
+ * The outcome of every message is an audit entry on the client it was
+ * sent to (message.sent, or message.failed once the retries are used up).
  */
 class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
 {
@@ -44,7 +48,7 @@ class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
         return $this->messageId;
     }
 
-    public function handle(Mailer $mailer, SmsSender $sms): void
+    public function handle(Mailer $mailer, SmsSender $sms, Auditor $auditor): void
     {
         Cache::put(self::HEARTBEAT_KEY, now()->toIso8601String(), now()->addHours(6));
 
@@ -66,6 +70,7 @@ class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
 
             if ($exhausted) {
                 $message->redactSecret();
+                $auditor->record('message.failed', $message->client, self::auditContext($message) + ['error' => mb_substr($e->getMessage(), 0, 500)]);
             }
 
             report($e);
@@ -79,6 +84,23 @@ class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
 
         $message->forceFill(['status' => OutboundMessageStatus::Sent, 'sent_at' => now(), 'error' => null])->save();
         $message->redactSecret();
+        $auditor->record('message.sent', $message->client, self::auditContext($message));
+    }
+
+    /**
+     * What the audit entry says about the message; never its body.
+     *
+     * @return array<string, mixed>
+     */
+    private static function auditContext(OutboundMessage $message): array
+    {
+        return [
+            'message_id' => $message->id,
+            'channel' => $message->channel->value,
+            'template_key' => $message->template_key?->value,
+            'recipient' => $message->recipient,
+            'attempts' => $message->attempts,
+        ];
     }
 
     /**

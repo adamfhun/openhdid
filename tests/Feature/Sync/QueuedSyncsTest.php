@@ -2,6 +2,7 @@
 
 use App\Auth\Role;
 use App\Enums\SyncRunStatus;
+use App\Enums\SyncSource;
 use App\Filament\Admin\Resources\SyncRuns\Pages\ManageSyncRuns;
 use App\Jobs\RunDirectorySync;
 use App\Models\Client;
@@ -13,6 +14,7 @@ use App\Sync\QueuedSyncs;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -122,4 +124,30 @@ it('marks an interrupted worker run as failed and does not repeat a completed ru
     (new RunDirectorySync($run->id))->failed(null);
     expect($run->fresh()->status)->toBe(SyncRunStatus::Completed);
     Http::assertNothingSent();
+});
+
+it('refuses a file import on a synchronous queue and removes the upload', function (): void {
+    config()->set('queue.default', 'sync');
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    $file = UploadedFile::fake()->createWithContent('x.csv', "external_user_id,name,email\n1,A,a@client.hu\n");
+
+    Livewire::test(ManageSyncRuns::class)
+        ->callAction('importFile', ['file' => $file])
+        ->assertNotified(__('EMD sync failed'));
+
+    expect(SyncRun::query()->count())->toBe(0)
+        ->and(Storage::disk('local')->allFiles('sync-uploads'))->toBe([], 'the upload is removed when it cannot be queued');
+});
+
+it('marks a queued file import failed and removes the upload when the worker is killed', function (): void {
+    $admin = User::factory()->withRole(Role::Admin)->create();
+    Storage::disk('local')->put('sync-uploads/y.csv', "external_user_id,name,email\n1,A,a@client.hu\n");
+
+    $run = app(QueuedSyncs::class)->start($admin, false, 'sync-uploads/y.csv');
+    expect($run->source)->toBe(SyncSource::Csv)->and($run->file_name)->toBe('y.csv');
+    (new RunDirectorySync($run->id, 'sync-uploads/y.csv'))->failed(null);
+
+    expect($run->fresh()->status)->toBe(SyncRunStatus::Failed)
+        ->and($run->fresh()->error)->toContain('1200')
+        ->and(Storage::disk('local')->exists('sync-uploads/y.csv'))->toBeFalse();
 });

@@ -38,6 +38,11 @@ class SpreadsheetReader implements SourceReader
         return $this->label ?? basename($this->path);
     }
 
+    public function details(): array
+    {
+        return [];
+    }
+
     public function read(): iterable
     {
         $reader = SimpleExcelReader::create($this->path)->trimHeaderRow();

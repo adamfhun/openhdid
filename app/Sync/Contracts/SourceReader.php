@@ -19,4 +19,12 @@ interface SourceReader
      * @return iterable<int, ExternalRecordDto|SkippedRow>
      */
     public function read(): iterable;
+
+    /**
+     * Request details for the run report (status codes, IDs sent); empty
+     * for readers without a remote request worth reporting.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    public function details(): array;
 }

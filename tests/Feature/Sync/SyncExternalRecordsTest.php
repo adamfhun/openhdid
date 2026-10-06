@@ -1,10 +1,15 @@
 <?php
 
+use App\Auth\Role;
 use App\Enums\PhoneNumberSource;
 use App\Enums\PhoneVerificationSource;
 use App\Enums\PrincipalType;
 use App\Enums\SyncRunStatus;
 use App\Enums\SyncSource;
+use App\Filament\Admin\Resources\Clients\Pages\ListClients;
+use App\Filament\Admin\Resources\ExternalRecords\ExternalRecordResource;
+use App\Filament\Admin\Resources\ExternalRecords\Pages\ManageExternalRecords;
+use App\Filament\Admin\Resources\Users\Pages\ListUsers;
 use App\Identification\PinService;
 use App\Models\AuditLog;
 use App\Models\Client;
@@ -24,8 +29,12 @@ use App\Sync\SkippedRow;
 use App\Sync\SourceFormatException;
 use App\Sync\SuspiciousSourceException;
 use App\Sync\SyncExternalRecords;
+use App\System\CheckStatus;
+use App\System\HealthChecks;
+use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 /**
@@ -50,6 +59,11 @@ function readerOf(array $rows): SourceReader
         public function read(): iterable
         {
             yield from $this->rows;
+        }
+
+        public function details(): array
+        {
+            return [];
         }
     };
 }
@@ -590,4 +604,152 @@ it('keeps the pin when the directory replaces the only number in one run', funct
     $sync->run(readerOf([row('1', 'a@x.hu', 'Acme', [])]));
 
     expect($client->fresh()->hasPin())->toBeFalse('the directory dropped the last number');
+});
+
+it('never closes the administrator created by hdid:make-admin before the directory was connected', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->artisan('hdid:make-admin', ['email' => 'root@local.example', '--password' => 'a-long-password-1'])->assertSuccessful();
+    $admin = User::query()->where('email', 'root@local.example')->firstOrFail();
+    $sync = app(SyncExternalRecords::class);
+
+    $sync->run(readerOf([row('1', 'a@x.hu')]));
+    $second = $sync->run(readerOf([row('1', 'a@x.hu')]));
+
+    expect($admin->fresh()->isClosed())->toBeFalse()
+        ->and($admin->externalRecord->isLocal())->toBeTrue()
+        ->and($admin->externalRecord->fresh()->isMissing())->toBeFalse()
+        ->and($second->stats)->toMatchArray(['missing' => 0, 'closed' => 0]);
+});
+
+it('hands a bootstrapped administrator over to the directory row with its e-mail, audited', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->artisan('hdid:make-admin', ['email' => 'root@staff.hu', '--password' => 'a-long-password-1'])->assertSuccessful();
+    $admin = User::query()->where('email', 'root@staff.hu')->firstOrFail();
+    $localRecordId = $admin->external_record_id;
+    $sync = app(SyncExternalRecords::class);
+
+    $sync->run(readerOf([row('7', 'root@staff.hu', 'Acme')]));
+    $sync->run(readerOf([row('7', 'root@staff.hu', 'Acme')]));
+    $admin = $admin->fresh();
+
+    expect($admin->isClosed())->toBeFalse()
+        ->and($admin->externalRecord->external_id)->toBe(7)
+        ->and(ExternalRecord::query()->where('email', 'root@staff.hu')->count())->toBe(1, 'the local bootstrap record is gone')
+        ->and(ExternalRecord::query()->withTrashed()->whereKey($localRecordId)->first()->trashed())->toBeTrue()
+        ->and(AuditLog::query()->where('event', 'account.rebound')->where('subject_id', $admin->id)->sole()->context)->toMatchArray(['to_external_id' => 7]);
+
+    // Promoting an already synced user keeps its directory record.
+    $this->artisan('hdid:make-admin', ['email' => 'root@staff.hu', '--password' => 'a-long-password-1'])->assertSuccessful();
+    expect($admin->fresh()->externalRecord->external_id)->toBe(7);
+});
+
+it('refuses to start under a PHP time limit below 120 seconds', function (): void {
+    set_time_limit(60);
+
+    try {
+        expect(SyncExternalRecords::insufficientTimeLimit())->toBe(60)
+            ->and(fn () => app(SyncExternalRecords::class)->run(readerOf([row('1', 'a@x.hu')])))->toThrow(RuntimeException::class, 'max_execution_time is 60 s');
+        expect(SyncRun::query()->count())->toBe(0);
+
+        set_time_limit(120);
+        expect(SyncExternalRecords::insufficientTimeLimit())->toBeNull();
+    } finally {
+        set_time_limit(0);
+    }
+});
+
+it('turns a run that PHP cut short into a failed run and frees the sync lock', function (): void {
+    $sync = app(SyncExternalRecords::class);
+    $aborting = new class implements SourceReader
+    {
+        public function source(): SyncSource
+        {
+            return SyncSource::Csv;
+        }
+
+        public function label(): ?string
+        {
+            return 'cut-short.csv';
+        }
+
+        public function read(): iterable
+        {
+            yield row('1', 'a@x.hu');
+            // PHP dies here (time limit): only the shutdown handler runs.
+            SyncExternalRecords::simulateAbort();
+            $probe = Cache::lock('hdid:sync', 3600);
+            expect($probe->get())->toBeTrue('the guard released the sync lock');
+            $probe->release();
+            expect(SyncRun::query()->sole()->status)->toBe(SyncRunStatus::Failed);
+            throw new RuntimeException('simulated fatal');
+        }
+
+        public function details(): array
+        {
+            return [];
+        }
+    };
+
+    expect(fn () => $sync->run($aborting))->toThrow(RuntimeException::class, 'simulated fatal');
+
+    $run = SyncRun::query()->sole();
+    expect($run->status)->toBe(SyncRunStatus::Failed)
+        ->and($run->error)->toContain('simulated fatal')
+        ->and(AuditLog::query()->where('event', 'sync.failed')->where('context->aborted', true)->exists())->toBeTrue()
+        ->and(Client::query()->where('email', 'a@x.hu')->exists())->toBeTrue('the rows written before the cut stay');
+
+    // A completed run disarms the guard: nothing happens at shutdown.
+    $sync->run(readerOf([row('1', 'a@x.hu')]));
+    SyncExternalRecords::simulateAbort();
+    expect(SyncRun::query()->latest('started_at')->first()->status)->toBe(SyncRunStatus::Completed);
+});
+
+it('forecasts the accounts the next sync closes: run stats, EMD list, client and staff tabs, health tile', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    Filament\Facades\Filament::setCurrentPanel('admin');
+    $sync = app(SyncExternalRecords::class);
+    $all = fn (): array => [row('1', 'a@x.hu'), row('2', 'b@x.hu'), row('3', 'staff@staff.hu', 'Acme'), row('4', 'c@x.hu')];
+    $sync->run(readerOf($all()));
+    $staff = User::factory()->create(['email' => 'staff@staff.hu']);
+    $sync->run(readerOf($all()));
+    expect($staff->fresh()->external_record_id)->not->toBeNull();
+
+    // b and the staff member are absent once: one more absent run closes them (threshold 2).
+    $run = $sync->run(readerOf([row('1', 'a@x.hu'), row('4', 'c@x.hu')]));
+    $b = Client::query()->where('email', 'b@x.hu')->first();
+
+    expect($run->stats)->toMatchArray(['missing' => 0, 'closed' => 0, 'closing_next' => 2])
+        ->and($run->stats['samples']['closing_next'])->toBe(['Name 2 <b@x.hu>', 'Name 3 <staff@staff.hu>'])
+        ->and($b->isClosed())->toBeFalse()
+        ->and($b->externalRecord->closesAtNextRun(2))->toBeTrue()
+        ->and(ExternalRecord::query()->where('email', 'a@x.hu')->first()->closesAtNextRun(2))->toBeFalse();
+
+    Livewire\Livewire::test(ManageExternalRecords::class)
+        ->assertSee(__('closes at the next sync'))
+        ->set('activeTab', 'closing')
+        ->assertCanSeeTableRecords([$b->externalRecord, $staff->fresh()->externalRecord])
+        ->assertCountTableRecords(2);
+    Livewire\Livewire::test(ListClients::class)
+        ->set('activeTab', 'closing')
+        ->assertCanSeeTableRecords([$b])
+        ->assertCountTableRecords(1);
+    Livewire\Livewire::test(ListUsers::class)
+        ->set('activeTab', 'closing')
+        ->assertCanSeeTableRecords([$staff])
+        ->assertCountTableRecords(1);
+
+    $health = app(HealthChecks::class)->syncApi();
+    expect($health->status)->toBe(CheckStatus::Warn)->and($health->detail)->toContain('2 account(s) close at the next sync');
+
+    // The records return: the forecast clears without any closure.
+    $sync->run(readerOf($all()));
+    expect(ExternalRecordResource::closingAtNextRunCount())->toBe(0)
+        ->and($b->fresh()->isClosed())->toBeFalse()
+        ->and(app(HealthChecks::class)->syncApi()->status)->toBe(CheckStatus::Ok);
+
+    // A trial run forecasts too, without changing the counters.
+    $dry = $sync->run(readerOf([row('1', 'a@x.hu'), row('4', 'c@x.hu')]), dryRun: true);
+    expect($dry->stats['closing_next'])->toBe(2)
+        ->and(ExternalRecord::query()->where('email', 'b@x.hu')->first()->missed_runs)->toBe(0);
 });

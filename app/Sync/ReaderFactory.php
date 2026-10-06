@@ -17,6 +17,7 @@ class ReaderFactory
         private readonly Settings $settings,
         private readonly Http $http,
         private readonly ApiTokens $tokens,
+        private readonly IdList $idList,
     ) {}
 
     public function forFile(string $path, ?string $label = null): SourceReader
@@ -53,7 +54,7 @@ class ReaderFactory
                 throw new InvalidArgumentException(__('The CSV delimiter must be exactly one byte.'));
             }
 
-            return new ApiSpreadsheetReader($this->http, $this->tokens, $this->settings, $url, $format);
+            return new ApiSpreadsheetReader($this->http, $this->tokens, $this->settings, $this->idList, $url, $format);
         }
 
         if (config('hdid.sync.driver', 'json') !== 'json') {

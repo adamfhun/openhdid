@@ -96,7 +96,7 @@ class PhoneNumbersRelationManager extends RelationManager
             ])
             ->headerActions([
                 CreateAction::make()
-                    ->mutateDataUsing(fn (array $data): array => $data + ['source' => PhoneNumberSource::Admin, 'verified_at' => now(), 'verified_via' => PhoneVerificationSource::Admin])
+                    ->mutateDataUsing(fn (array $data): array => $data + ['source' => PhoneNumberSource::Admin, 'verified_at' => now(), 'verified_via' => PhoneVerificationSource::Admin, 'verified_by_user_id' => auth()->id()])
                     ->after(fn (ClientPhoneNumber $record) => $this->recordSharedAcknowledgement($record)),
             ])
             ->recordActions([
@@ -116,6 +116,12 @@ class PhoneNumbersRelationManager extends RelationManager
                     ->modalSubmitActionLabel(__('Confirm number'))
                     ->action(fn (ClientPhoneNumber $record) => $phones->verify($record, PhoneVerificationSource::Staff, auth()->user())),
                 EditAction::make()->visible(fn ($record) => $record->source !== PhoneNumberSource::Sync)
+                    // A changed number is a new number: the old one's SMS or
+                    // call confirmation does not carry over; the operator
+                    // vouches for it, as on create.
+                    ->mutateDataUsing(fn (array $data, ClientPhoneNumber $record): array => ($data['number_e164'] ?? $record->number_e164) === $record->number_e164
+                        ? $data
+                        : $data + ['verified_at' => now(), 'verified_via' => PhoneVerificationSource::Admin, 'verified_by_user_id' => auth()->id()])
                     ->after(fn (ClientPhoneNumber $record) => $this->recordSharedAcknowledgement($record)),
                 DeleteAction::make()->visible(fn ($record) => $record->source !== PhoneNumberSource::Sync)
                     ->modalDescription(fn (ClientPhoneNumber $record) => $record->client->hasPin() && $record->client->phoneNumbers()->count() === 1

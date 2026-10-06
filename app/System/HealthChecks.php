@@ -11,12 +11,14 @@ use App\Enums\SyncRunStatus;
 use App\Jobs\SendOutboundMessage;
 use App\Models\ApiKey;
 use App\Models\Client;
+use App\Models\ExternalRecord;
 use App\Models\OutboundMessage;
 use App\Models\SyncRun;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Support\HuDate;
 use App\Sync\ApiTokens;
+use App\Sync\SyncExternalRecords;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Support\Carbon;
@@ -54,6 +56,7 @@ class HealthChecks
             'cache' => [__('Cache'), $this->cacheStore(...)],
             'queue' => [__('Queue'), $this->queue(...)],
             'scheduler' => [__('Scheduler'), $this->scheduler(...)],
+            'php' => [__('PHP time limit'), $this->phpTimeLimit(...)],
             'messages' => [__('Outbound messages'), $this->outboundMessages(...)],
             'mail' => [__('Mail'), $this->mail(...)],
             'sms' => [__('SMS'), $this->sms(...)],
@@ -94,10 +97,11 @@ class HealthChecks
             'cache' => __('The cache store (CACHE_STORE in .env) cannot be written or read. With Redis check that the service runs and REDIS_* is right; with the file or database store check disk space and permissions on storage/. Settings, sessions and login throttling depend on it.'),
             'queue' => __('E-mails, SMS and EMD sync run in the queue. Red: no worker heartbeat, start or restart the queue worker (the "php artisan queue:work" service or the worker container). The EMD sync started from the panel runs on the EMD_SYNC_QUEUE queue, which needs a worker too. Yellow: failed or piling jobs, see "php artisan queue:failed" and retry with "queue:retry all" once the cause (mail, SMS, DB) is fixed.'),
             'scheduler' => __('The scheduler does not run: the cron entry "* * * * * php artisan schedule:run" or the scheduler container is missing or stopped. It drives the EMD sync, the stale-call cleanup, the override expiry and the data retention. Add or repair it on the app server.'),
+            'php' => __('EMD sync and large file imports need a PHP max_execution_time of at least 120 seconds (300 recommended) in both PHP-FPM (the panel, this page) and the CLI (the worker, hdid:emd-sync); 0 means unlimited and is fine. Set it in php.ini or the FPM pool (php_admin_value[max_execution_time]) with request_terminate_timeout above it, then restart PHP-FPM. Below 120 s a sync refuses to start. This tile shows the limit of the process that ran the check: the panel shows PHP-FPM, "php artisan hdid:health" shows the CLI.'),
             'messages' => __('Failed messages of the last 24 hours. Open Outbound messages, look at the error of a failed row and fix the transport (E-mail or SMS tile), then resend from the list. Queued ones that never leave point to the queue worker.'),
             'mail' => __('Red: the EWS URL or credentials are missing in the environment (MAIL_MAILER, EWS_*). Yellow: a log/array mailer is set, so no e-mail leaves the server, fine for testing, not for production. Test with a magic link to your own client account.'),
             'sms' => __('Red with Ozeki: the gateway is unreachable or the credentials are wrong (OZEKI_*), check the Ozeki service and the network path. Red/yellow with the log driver: SMS are only written to the log, set SMS_DRIVER=ozeki for production.'),
-            'sync' => __('Red: the last run failed or no successful run happened in twice the expected interval. Open EMD sync runs for the error; check the API URL/key or upload the file manually. A refused run usually means the export was much smaller than before (row-ratio guard). Yellow with a waiting run: the sync started from the panel was not picked up, start a worker for the EMD_SYNC_QUEUE queue.'),
+            'sync' => __('Red: the last run failed or no successful run happened in twice the expected interval. Open EMD sync runs for the error; check the API URL/key or upload the file manually. A refused run usually means the export was much smaller than before (row-ratio guard). Yellow with a waiting run: the sync started from the panel was not picked up, start a worker for the EMD_SYNC_QUEUE queue. With {{ ids }} in the export payload, a failed ID list query (EMD_SYNC_ID_LIST_URL, ID list settings) or no selected ID on the list also fails the run; the run details show the status codes. Yellow with accounts closing at the next sync: their records were absent from the last run(s); open EMD records, tab "Closes at the next sync", and check the export (or the ID list selection) before the next run closes them.'),
             'api_keys' => __('A scope (call center or mobile backend) has no active key, so that partner cannot call in. Create one under API keys and hand it over, or ignore this while the integration is not live yet.'),
             'package_overrides' => __('Informational: these clients carry a temporary manual package. Nothing to fix, but review the list now and then and end an override EMD has caught up with.'),
             'shared_numbers' => __('A number on file for more than one client recognises nobody in the phone menu, so those callers are not asked for their PIN. Open Shared phone numbers, decide whose number it is and remove it from the others; a number EMD lists for several people has to be corrected in the directory.'),
@@ -194,6 +198,34 @@ class HealthChecks
         $detail = __('last run :when', ['when' => $heartbeat->diffForHumans()]);
 
         return $heartbeat->lt(now()->subMinutes(self::HEARTBEAT_MAX_AGE_MINUTES)) ? Check::fail('scheduler', $label, $detail) : Check::ok('scheduler', $label, $detail);
+    }
+
+    /**
+     * The time limit of the PHP process running this check (FPM on the
+     * panel, the CLI in hdid:health): a sync refuses to start below the
+     * minimum, so the operator learns about a short limit before an import.
+     */
+    public function phpTimeLimit(): Check
+    {
+        $label = __('PHP time limit');
+        $limit = (int) ini_get('max_execution_time');
+        $sapi = match (PHP_SAPI) {
+            'cli' => 'CLI',
+            'fpm-fcgi' => 'PHP-FPM',
+            default => PHP_SAPI,
+        };
+
+        if ($limit <= 0) {
+            return Check::ok('php', $label, __(':sapi · unlimited', ['sapi' => $sapi]));
+        }
+
+        $detail = __(':sapi · :seconds s (minimum :min, recommended :recommended)', ['sapi' => $sapi, 'seconds' => $limit, 'min' => SyncExternalRecords::MIN_TIME_LIMIT_SECONDS, 'recommended' => SyncExternalRecords::RECOMMENDED_TIME_LIMIT_SECONDS]);
+
+        if ($limit < SyncExternalRecords::MIN_TIME_LIMIT_SECONDS) {
+            return Check::fail('php', $label, $detail);
+        }
+
+        return $limit < SyncExternalRecords::RECOMMENDED_TIME_LIMIT_SECONDS ? Check::warn('php', $label, $detail) : Check::ok('php', $label, $detail);
     }
 
     public function outboundMessages(): Check
@@ -302,6 +334,13 @@ class HealthChecks
                 'queue' => config('hdid.sync.queue'),
                 'minutes' => (int) $waiting->started_at->diffInMinutes(now()),
             ]));
+        }
+
+        // Closures the next run brings if the records stay absent: not an
+        // error, but the operator should see them coming.
+        $closing = ExternalRecord::query()->fromDirectory()->closingAtNextRun(max(1, $this->settings->int(SettingKey::SyncMissedRunsBeforeClose)))->count();
+        if ($closing > 0) {
+            return Check::warn('sync', $label, $detail.' · '.__(':n account(s) close at the next sync if their EMD record stays absent', ['n' => $closing]));
         }
 
         return Check::ok('sync', $label, $detail);

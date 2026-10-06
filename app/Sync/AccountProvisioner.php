@@ -102,17 +102,32 @@ class AccountProvisioner
         return $client;
     }
 
+    /**
+     * A user created before the directory was connected (hdid:make-admin)
+     * is bound to a local record; the directory row with the same e-mail
+     * takes it over, so the account follows the directory from then on.
+     */
     private function linkUser(ExternalRecord $record): ?User
     {
         $user = $record->user
-            ?? User::query()->whereNull('external_record_id')->where('email', $record->email)->first();
+            ?? User::query()
+                ->where('email', $record->email)
+                ->where(fn ($q) => $q->whereNull('external_record_id')
+                    ->orWhereHas('externalRecord', fn ($q) => $q->where('external_id', '>=', ExternalRecord::LOCAL_ID_BASE)))
+                ->first();
 
         if ($user === null) {
             return null;
         }
 
         if ($user->external_record_id !== $record->id) {
+            $local = $user->externalRecord;
             $user->forceFill(['external_record_id' => $record->id])->save();
+
+            if ($local?->isLocal()) {
+                $local->delete();
+                $this->auditor->record('account.rebound', $user, ['from_external_id' => $local->external_id, 'to_external_id' => $record->external_id]);
+            }
         }
 
         $this->reopenIfClosedBySync($user);

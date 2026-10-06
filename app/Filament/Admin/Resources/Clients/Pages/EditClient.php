@@ -3,7 +3,6 @@
 namespace App\Filament\Admin\Resources\Clients\Pages;
 
 use App\Filament\Admin\Resources\Clients\ClientResource;
-use Filament\Actions\DeleteAction;
 use Filament\Actions\ForceDeleteAction;
 use Filament\Actions\RestoreAction;
 use Filament\Actions\ViewAction;
@@ -17,7 +16,7 @@ class EditClient extends EditRecord
     {
         return [
             ViewAction::make(),
-            DeleteAction::make(),
+            ClientResource::deleteAction(),
             ForceDeleteAction::make(),
             RestoreAction::make(),
         ];

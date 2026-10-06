@@ -73,6 +73,15 @@ class OneTimeCodes
     }
 
     /**
+     * Whether the client has a code of this purpose that can still be
+     * verified (issued, not used up, not expired).
+     */
+    public function hasUsable(Client $client, OneTimeCodePurpose $purpose): bool
+    {
+        return OneTimeCode::query()->where('client_id', $client->id)->where('purpose', $purpose)->usable()->exists();
+    }
+
+    /**
      * Verify a code for a known client; counts failed attempts.
      */
     public function verify(Client $client, OneTimeCodePurpose $purpose, string $code): bool
@@ -126,6 +135,21 @@ class OneTimeCodes
         }
 
         return $this->consume($purpose, $token)?->client;
+    }
+
+    /**
+     * The client behind a still usable token, without consuming it (the
+     * login link's landing page picks the client's own look with it).
+     */
+    public function peekToken(OneTimeCodePurpose $purpose, string $token): ?Client
+    {
+        if (strlen($token) !== 64) {
+            return null;
+        }
+
+        $record = $this->findUsable($purpose, $token);
+
+        return $record !== null && Hash::check($token, $record->code_hash) ? $record->client : null;
     }
 
     /**

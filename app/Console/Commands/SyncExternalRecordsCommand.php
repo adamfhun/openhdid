@@ -39,6 +39,10 @@ class SyncExternalRecordsCommand extends Command
             }
         }
 
+        foreach ($run->stats['samples']['closing_next'] ?? [] as $line) {
+            $this->line("  Closes at the next sync: {$line}");
+        }
+
         foreach (array_slice($run->skipped_rows ?? [], 0, 10) as $row) {
             $this->line('  Skipped ('.$row['reason'].'): '.json_encode($row['sample'], JSON_UNESCAPED_UNICODE));
         }

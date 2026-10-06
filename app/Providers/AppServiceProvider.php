@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Auth\AuthSessions;
 use App\Auth\Permission;
 use App\Http\Controllers\HealthController;
 use App\Http\Middleware\AuthenticateApiKey;
@@ -23,6 +24,7 @@ use Filament\Forms\Components\DateTimePicker;
 use Filament\Schemas\Schema;
 use Filament\Tables\Table;
 use Illuminate\Auth\Events\Authenticated;
+use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Http\Client\Factory as Http;
@@ -68,6 +70,7 @@ class AppServiceProvider extends ServiceProvider
         Queue::before(fn () => $this->app->make(Settings::class)->forgetLocal());
 
         Event::listen(Authenticated::class, RememberClientLocale::class);
+        Event::listen(Login::class, fn (Login $event) => $this->app->make(AuthSessions::class)->stamp($event));
 
         // Real health for monitoring (the framework's /up only proves PHP boots).
         RouteFacade::middleware(['api', 'throttle:30,1,health'])->get('/health', HealthController::class)->name('health');

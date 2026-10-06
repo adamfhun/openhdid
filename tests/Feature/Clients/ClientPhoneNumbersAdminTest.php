@@ -2,6 +2,7 @@
 
 use App\Auth\Role;
 use App\Enums\PhoneNumberSource;
+use App\Enums\PhoneVerificationSource;
 use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
 use App\Filament\Admin\Resources\Clients\RelationManagers\PhoneNumbersRelationManager;
 use App\Models\Client;
@@ -59,4 +60,26 @@ it('lets client managers add a phone number on the client page itself', function
         ->assertHasNoFormErrors();
 
     expect($this->client->phoneNumbers()->where('number_e164', '+36303333333')->where('source', PhoneNumberSource::Admin)->whereNotNull('verified_at')->exists())->toBeTrue();
+});
+
+it('treats an edited number as a new number: the old confirmation does not carry over, the operator vouches for it', function (): void {
+    $admin = User::factory()->withRole(Role::Admin)->create();
+    $this->actingAs($admin);
+    $this->second->forceFill(['verified_at' => now()->subDay(), 'verified_via' => PhoneVerificationSource::Sms, 'verified_by_user_id' => null])->save();
+
+    // A label change keeps the SMS confirmation.
+    Livewire::test(PhoneNumbersRelationManager::class, ['ownerRecord' => $this->client, 'pageClass' => ViewClient::class])
+        ->callAction(TestAction::make('edit')->table($this->second), ['number_e164' => '+36302222222', 'label' => 'otthon'])
+        ->assertHasNoFormErrors();
+    expect($this->second->fresh()->verified_via)->toBe(PhoneVerificationSource::Sms);
+
+    Livewire::test(PhoneNumbersRelationManager::class, ['ownerRecord' => $this->client, 'pageClass' => ViewClient::class])
+        ->callAction(TestAction::make('edit')->table($this->second), ['number_e164' => '06 30 444 4444', 'label' => 'otthon'])
+        ->assertHasNoFormErrors();
+
+    $edited = $this->second->fresh();
+    expect($edited->number_e164)->toBe('+36304444444')
+        ->and($edited->verified_via)->toBe(PhoneVerificationSource::Admin)
+        ->and($edited->verified_by_user_id)->toBe($admin->id)
+        ->and($edited->verified_at->isAfter(now()->subMinute()))->toBeTrue();
 });

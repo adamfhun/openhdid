@@ -1,5 +1,6 @@
 <?php
 
+use App\Audit\Auditor;
 use App\Auth\Role;
 use App\Enums\OutboundMessageStatus;
 use App\Filament\Admin\Resources\OutboundMessages\Pages\ManageOutboundMessages;
@@ -52,7 +53,7 @@ it('wipes the secret body and meta when a queued message is cancelled from the p
         ->and($cancelled->meta)->toBeNull()
         ->and($cancelled->redacted_at)->not->toBeNull();
 
-    (new SendOutboundMessage($queued->id))->handle(app('mailer'), $this->sms);
+    (new SendOutboundMessage($queued->id))->handle(app('mailer'), $this->sms, app(Auditor::class));
 
     expect($queued->fresh()->status)->toBe(OutboundMessageStatus::Cancelled)
         ->and($this->sms->sent)->toBe([]);

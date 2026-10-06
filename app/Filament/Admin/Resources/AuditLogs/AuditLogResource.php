@@ -3,6 +3,7 @@
 namespace App\Filament\Admin\Resources\AuditLogs;
 
 use App\Filament\Admin\Clusters\System;
+use App\Filament\Admin\Pages\ManageSettings;
 use App\Filament\Admin\Resources\ApiKeys\ApiKeyResource;
 use App\Filament\Admin\Resources\AuditLogs\Pages\ManageAuditLogs;
 use App\Filament\Admin\Resources\BaseResource;
@@ -31,6 +32,7 @@ use App\Models\OneTimeCode;
 use App\Models\OutboundMessage;
 use App\Models\Question;
 use App\Models\QuestionVersion;
+use App\Models\SyncIdListItem;
 use App\Models\SyncRun;
 use App\Models\User;
 use App\Support\HuDate;
@@ -210,6 +212,7 @@ class AuditLogResource extends BaseResource
             $model instanceof Role => ['label' => __('Role').' · '.$model->name, 'url' => RoleResource::getUrl('index')],
             $model instanceof ApiKey => ['label' => __('API key').' · '.$model->name, 'url' => ApiKeyResource::getUrl('index')],
             $model instanceof SyncRun => ['label' => __('EMD sync run').' · '.$model->started_at?->format(HuDate::DATETIME), 'url' => SyncRunResource::getUrl('index')],
+            $model instanceof SyncIdListItem => ['label' => __('EMD ID list entry').' · '.$model->name.' ('.$model->external_id.')', 'url' => ManageSettings::getUrl()],
             $model instanceof ExternalRecord => ['label' => __('EMD record').' · '.($model->name ?: $model->email), 'url' => ExternalRecordResource::getUrl('index', ['tableSearch' => $model->email])],
             $model instanceof OutboundMessage => ['label' => __('Message').' · '.$model->recipient, 'url' => OutboundMessageResource::getUrl('index')],
             $model instanceof NewsPost => ['label' => __('News').' · '.$model->title, 'url' => NewsPostResource::getUrl('index')],

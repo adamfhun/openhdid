@@ -137,3 +137,20 @@ it('renders the status page for an admin only', function (): void {
     $this->flushSession();
     $this->actingAs(User::factory()->withRole(Role::Agent)->create())->get(SystemStatus::getUrl())->assertForbidden();
 });
+
+it('reports the PHP time limit of the checking process and fails below 120 seconds', function (): void {
+    $checks = app(HealthChecks::class);
+
+    try {
+        set_time_limit(0);
+        expect($checks->phpTimeLimit()->status)->toBe(CheckStatus::Ok);
+        set_time_limit(200);
+        expect($checks->phpTimeLimit()->status)->toBe(CheckStatus::Warn)->and($checks->phpTimeLimit()->detail)->toContain('200 s');
+        set_time_limit(300);
+        expect($checks->phpTimeLimit()->status)->toBe(CheckStatus::Ok);
+        set_time_limit(60);
+        expect($checks->phpTimeLimit()->status)->toBe(CheckStatus::Fail)->and(HealthChecks::hint('php'))->toContain('max_execution_time');
+    } finally {
+        set_time_limit(0);
+    }
+});

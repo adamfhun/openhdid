@@ -10,7 +10,8 @@ use Illuminate\Support\Facades\Route;
 Route::prefix('v1')->name('api.v1.')->group(function (): void {
     Route::get('branding', BrandingController::class)->name('branding');
 
-    Route::post('auth/{principal}/entra/token', EntraTokenController::class)
+    // Only clients have a mobile app; staff sign in on the panel (2026-10-03).
+    Route::post('auth/client/entra/token', EntraTokenController::class)
         ->middleware('throttle:10,1,entra-token')
         ->name('auth.entra.token');
 

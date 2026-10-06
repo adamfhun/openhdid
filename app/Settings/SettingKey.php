@@ -65,15 +65,29 @@ enum SettingKey: string
     case ClientLoginOtpSmsTtlMinutes = 'client_login.otp_sms.ttl_minutes';
     case ClientLoginOtpSmsLength = 'client_login.otp_sms.length';
     case ClientLoginOtpMaxAttempts = 'client_login.otp_sms.max_attempts';
+    case ClientLoginOtpSmsMaxPerNumberPerMinute = 'client_login.otp_sms.max_per_number_per_minute';
+    case ClientLoginOtpSmsMaxPerNumberPerHour = 'client_login.otp_sms.max_per_number_per_hour';
+    case ClientLoginOtpSmsEmailFallbackEnabled = 'client_login.otp_sms.email_fallback_enabled';
+    case ClientLoginRememberEnabled = 'client_login.remember.enabled';
+    case ClientLoginRememberDays = 'client_login.remember.days';
+    case ClientLoginSessionMaxHours = 'client_login.session_max_hours';
+    case ClientLoginLockoutMaxAttempts = 'client_login.lockout.max_failed_attempts';
+    case ClientLoginLockoutMinutes = 'client_login.lockout.minutes';
 
     // Staff login
     case UserLoginPasswordEnabled = 'user_login.password.enabled';
+    case UserLoginRememberEnabled = 'user_login.remember.enabled';
+    case UserLoginRememberDays = 'user_login.remember.days';
+    case UserLoginSessionMaxHours = 'user_login.session_max_hours';
+    case UserLoginLockoutMaxAttempts = 'user_login.lockout.max_failed_attempts';
+    case UserLoginLockoutMinutes = 'user_login.lockout.minutes';
 
     // SSO providers (secrets and endpoints live in config/hdid.php)
     case UserSsoAdfsEnabled = 'sso.user.adfs.enabled';
     case UserSsoEntraEnabled = 'sso.user.entra.enabled';
     case ClientSsoAdfsEnabled = 'sso.client.adfs.enabled';
     case ClientSsoEntraEnabled = 'sso.client.entra.enabled';
+    case SsoMobileTokenMaxAgeMinutes = 'sso.mobile_token_max_age_minutes';
 
     // Identification: question and answer sessions
     case QaMinAnsweredQuestionsRequired = 'identification.qa.min_answered_questions_required';
@@ -114,6 +128,10 @@ enum SettingKey: string
     case SyncExpectedIntervalHours = 'sync.expected_interval_hours';
     case SyncCsvEncoding = 'sync.csv_encoding';
     case SyncExportPayload = 'sync.export_payload';
+    case SyncIdListPayload = 'sync.id_list_payload';
+    case SyncIdListIdPath = 'sync.id_list_id_path';
+    case SyncIdListNamePath = 'sync.id_list_name_path';
+    case SyncIdListStatusPath = 'sync.id_list_status_path';
 
     // Call center
     case CallsRetentionHours = 'calls.retention_hours';
@@ -140,6 +158,9 @@ enum SettingKey: string
             self::UserSsoEntraEnabled,
             self::ClientSsoAdfsEnabled,
             self::ClientSsoEntraEnabled,
+            self::UserLoginRememberEnabled,
+            self::ClientLoginRememberEnabled,
+            self::ClientLoginOtpSmsEmailFallbackEnabled,
             self::PinAgentVerificationEnabled,
             self::PinClientChangesEnabled,
             self::PinUniqueRequired,
@@ -151,6 +172,17 @@ enum SettingKey: string
             self::ClientLoginOtpSmsTtlMinutes,
             self::ClientLoginOtpSmsLength,
             self::ClientLoginOtpMaxAttempts,
+            self::ClientLoginOtpSmsMaxPerNumberPerMinute,
+            self::ClientLoginOtpSmsMaxPerNumberPerHour,
+            self::ClientLoginRememberDays,
+            self::ClientLoginSessionMaxHours,
+            self::ClientLoginLockoutMaxAttempts,
+            self::ClientLoginLockoutMinutes,
+            self::UserLoginRememberDays,
+            self::UserLoginSessionMaxHours,
+            self::UserLoginLockoutMaxAttempts,
+            self::UserLoginLockoutMinutes,
+            self::SsoMobileTokenMaxAgeMinutes,
             self::QaMinAnsweredQuestionsRequired,
             self::QaMaxQuestionsPerSession,
             self::QaMinAcceptedToPass,
@@ -190,7 +222,7 @@ enum SettingKey: string
             self::PremiumBackgroundImage,
             self::PremiumLoginBackgroundImage => SettingType::Image,
 
-            self::PortalFooterText, self::SyncExportPayload => SettingType::LongText,
+            self::PortalFooterText, self::SyncExportPayload, self::SyncIdListPayload => SettingType::LongText,
 
             self::SyncUserDomains,
             self::SyncClientDomains,
@@ -235,11 +267,21 @@ enum SettingKey: string
             self::PortalSharedNumberNotice => false,
 
             self::ClientLoginMagicLinkEnabled => true,
-            self::ClientLoginMagicLinkTtlMinutes => 4320,
+            self::ClientLoginMagicLinkTtlMinutes => 720,
             self::ClientLoginOtpSmsEnabled => false,
             self::ClientLoginOtpSmsTtlMinutes => 5,
             self::ClientLoginOtpSmsLength => 6,
             self::ClientLoginOtpMaxAttempts => 5,
+            self::ClientLoginOtpSmsMaxPerNumberPerMinute => 1,
+            self::ClientLoginOtpSmsMaxPerNumberPerHour => 3,
+            self::ClientLoginOtpSmsEmailFallbackEnabled => true,
+            self::ClientLoginRememberEnabled, self::UserLoginRememberEnabled => false,
+            self::ClientLoginRememberDays, self::UserLoginRememberDays => 30,
+            self::ClientLoginSessionMaxHours => 24,
+            self::UserLoginSessionMaxHours => 12,
+            self::ClientLoginLockoutMaxAttempts, self::UserLoginLockoutMaxAttempts => 5,
+            self::ClientLoginLockoutMinutes, self::UserLoginLockoutMinutes => 120,
+            self::SsoMobileTokenMaxAgeMinutes => 15,
 
             self::UserLoginPasswordEnabled => true,
 
@@ -276,6 +318,10 @@ enum SettingKey: string
             self::SyncExpectedIntervalHours => 24,
             self::SyncCsvEncoding => 'UTF-8',
             self::SyncExportPayload => null,
+            self::SyncIdListPayload => null,
+            self::SyncIdListIdPath => 'result.data.id',
+            self::SyncIdListNamePath => 'result.data.name',
+            self::SyncIdListStatusPath => null,
             self::SyncUserDomains => [],
             self::SyncClientDomains => [],
             self::SyncUniqueDomains => true,
@@ -305,6 +351,18 @@ enum SettingKey: string
             self::RetentionShortLivedYears => 2,
             self::CallsStaleAfterHours => 6,
         };
+    }
+
+    /**
+     * The EMD request settings: they decide what is imported and, through
+     * missed runs, what is closed, so only sync managers may change them.
+     */
+    public function requiresSyncManage(): bool
+    {
+        return in_array($this, [
+            self::SyncExportPayload, self::SyncIdListPayload,
+            self::SyncIdListIdPath, self::SyncIdListNamePath, self::SyncIdListStatusPath,
+        ], true);
     }
 
     public function group(): string

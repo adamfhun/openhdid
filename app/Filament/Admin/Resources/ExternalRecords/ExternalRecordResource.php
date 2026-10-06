@@ -7,6 +7,8 @@ use App\Filament\Admin\Clusters\System;
 use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\ExternalRecords\Pages\ManageExternalRecords;
 use App\Models\ExternalRecord;
+use App\Settings\SettingKey;
+use App\Settings\Settings;
 use BackedEnum;
 use Filament\Actions\ViewAction;
 use Filament\Infolists\Components\KeyValueEntry;
@@ -63,7 +65,8 @@ class ExternalRecordResource extends BaseResource
             TextEntry::make('phones')->label(__('Phone numbers'))->listWithLineBreaks()->placeholder('-'),
             TextEntry::make('last_seen_at')->label(__('Last seen in EMD sync'))->dateTime()->placeholder('-'),
             TextEntry::make('missing_since')->label(__('Missing since'))->dateTime()->placeholder(__('present')),
-            TextEntry::make('missed_runs')->label(__('Missed EMD sync runs')),
+            TextEntry::make('missed_runs')->label(__('Missed EMD sync runs'))
+                ->helperText(fn (ExternalRecord $record): ?string => $record->closesAtNextRun(static::threshold()) ? __('One more EMD sync without this record closes its account.') : null),
             KeyValueEntry::make('attributes')->label(__('Other columns'))->columnSpanFull(),
         ]);
     }
@@ -83,6 +86,13 @@ class ExternalRecordResource extends BaseResource
                 TextColumn::make('implicit_package')->label(__('Implicit package'))->placeholder('-')->toggleable(),
                 TextColumn::make('explicit_package')->label(__('Explicit package'))->placeholder('-')->toggleable(),
                 TextColumn::make('missing_since')->label(__('Missing'))->since()->placeholder(__('present'))->badge()->color('danger'),
+                // The operator sees the next run's closures coming: missed once
+                // or more is a warning, one run away from closing is red.
+                TextColumn::make('missed_runs')->label(__('Missed runs'))->badge()
+                    ->state(fn (ExternalRecord $record): ?string => $record->missing_since !== null || (int) $record->missed_runs === 0 ? null
+                        : ($record->closesAtNextRun(static::threshold()) ? __('closes at the next sync') : __('missed :n of :m', ['n' => $record->missed_runs, 'm' => static::threshold()])))
+                    ->color(fn (ExternalRecord $record): string => $record->closesAtNextRun(static::threshold()) ? 'danger' : 'warning')
+                    ->placeholder('-'),
                 TextColumn::make('last_seen_at')->label(__('Last seen in EMD sync'))->since()->sortable()
                     ->tooltip(__('The last EMD sync run in which this record was present')),
             ])
@@ -96,6 +106,10 @@ class ExternalRecordResource extends BaseResource
                     true: fn (Builder $query) => $query->whereNotNull('missing_since'),
                     false: fn (Builder $query) => $query->whereNull('missing_since'),
                 ),
+                TernaryFilter::make('closing_next')->label(__('Closes at the next sync'))->queries(
+                    true: fn (Builder $query) => $query->closingAtNextRun(static::threshold()),
+                    false: fn (Builder $query) => $query->whereNotIn('id', ExternalRecord::query()->select('id')->closingAtNextRun(static::threshold())),
+                ),
             ])
             ->recordActions([ViewAction::make()])
             ->defaultSort('last_seen_at', 'desc');
@@ -104,5 +118,21 @@ class ExternalRecordResource extends BaseResource
     public static function getPages(): array
     {
         return ['index' => ManageExternalRecords::route('/')];
+    }
+
+    /**
+     * Absent runs before an account is closed (sync.missed_runs_before_close).
+     */
+    public static function threshold(): int
+    {
+        return max(1, app(Settings::class)->int(SettingKey::SyncMissedRunsBeforeClose));
+    }
+
+    /**
+     * Directory records whose accounts close if the next run leaves them out again.
+     */
+    public static function closingAtNextRunCount(): int
+    {
+        return ExternalRecord::query()->fromDirectory()->closingAtNextRun(static::threshold())->count();
     }
 }

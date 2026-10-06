@@ -7,7 +7,9 @@ use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Sync\ApiTokens;
 use App\Sync\Contracts\SourceReader;
-use App\Sync\ExportPayload;
+use App\Sync\IdList;
+use App\Sync\IdListException;
+use App\Sync\RequestPayload;
 use App\Sync\SourceFormatException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as Http;
@@ -17,10 +19,14 @@ use ZipArchive;
 
 class ApiSpreadsheetReader implements SourceReader
 {
+    /** @var array<string, array<string, mixed>> */
+    private array $details = [];
+
     public function __construct(
         private readonly Http $http,
         private readonly ApiTokens $tokens,
         private readonly Settings $settings,
+        private readonly IdList $idList,
         private readonly string $url,
         private readonly string $format,
     ) {}
@@ -35,17 +41,28 @@ class ApiSpreadsheetReader implements SourceReader
         return $this->url;
     }
 
+    /**
+     * Status codes of the ID list query and the export, and the IDs sent.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    public function details(): array
+    {
+        return $this->details;
+    }
+
     public function read(): iterable
     {
         $payload = $this->settings->string(SettingKey::SyncExportPayload);
-        if (! is_string($payload) || ! json_validate($payload) || ! (json_decode($payload) instanceof \stdClass)) {
+        if (! RequestPayload::isJsonObject($payload)) {
             throw new SourceFormatException(__('EMD export payload must be a JSON object.'));
         }
-        if ($unknown = ExportPayload::unknownPlaceholderMessage($payload)) {
+        if ($unknown = RequestPayload::unknownPlaceholderMessage($payload, RequestPayload::EXPORT_PLACEHOLDERS)) {
             throw new SourceFormatException($unknown);
         }
 
         $token = $this->tokens->accessToken();
+        $values = RequestPayload::uses($payload, 'ids') ? ['ids' => $this->selectedIds($token)] : [];
         $disk = Storage::disk('local');
         $disk->makeDirectory('sync-uploads');
         $file = 'sync-uploads/'.Str::uuid().'.'.$this->format;
@@ -54,13 +71,14 @@ class ApiSpreadsheetReader implements SourceReader
         try {
             try {
                 $response = $this->http->withToken($token)->withoutRedirecting()
-                    ->withBody(ExportPayload::render($payload), 'application/json')
+                    ->withBody(RequestPayload::render($payload, $values), 'application/json')
                     ->connectTimeout(10)->timeout((int) config('hdid.sync.export_timeout', 600))
                     ->sink($path)->post($this->url);
             } catch (ConnectionException) {
                 throw new SourceFormatException(__('EMD export could not connect or timed out.'));
             }
 
+            $this->details['export'] = ['status' => $response->status()];
             if ($response->status() !== 200) {
                 throw new SourceFormatException(__('EMD export failed (HTTP :status); a complete file was expected.', ['status' => $response->status()]));
             }
@@ -77,6 +95,30 @@ class ApiSpreadsheetReader implements SourceReader
         } finally {
             $disk->delete($file);
         }
+    }
+
+    /**
+     * Refreshes the ID list and returns the selected IDs still on it,
+     * comma-separated; an empty list is never sent.
+     */
+    private function selectedIds(string $token): string
+    {
+        try {
+            $result = $this->idList->refresh($token);
+        } catch (IdListException $exception) {
+            $this->details['id_list'] = ['status' => $exception->status, 'http_status' => $exception->httpStatus];
+
+            throw $exception;
+        }
+
+        $ids = $this->idList->selectedIds();
+        $this->details['id_list'] = $result + ['sent' => count($ids), 'ids' => implode(',', $ids)];
+
+        if ($ids === []) {
+            throw new SourceFormatException(__('No selected ID is on the EMD ID list; the export is not sent with an empty ID list.'));
+        }
+
+        return implode(',', $ids);
     }
 
     private function assertFile(string $path, string $contentType): void

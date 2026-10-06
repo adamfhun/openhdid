@@ -1,33 +1,31 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { store } from '../store';
 import { post, ApiError } from '../api';
 import { t } from '../i18n';
+import { loginErrorMessages } from '../loginErrors';
 import Alert from '../components/Alert.vue';
 import Icon from '../components/Icon.vue';
 
 const route = useRoute();
 const router = useRouter();
 
-const errorMessages = {
-    method_disabled: 'This login method is not available.',
-    no_account: 'No account exists for this identity.',
-    account_closed: 'This account has been closed.',
-    no_external_record: 'This account is not present in Enterprise Master Data.',
-    external_record_missing: 'This account is not present in Enterprise Master Data.',
-    external_record_mismatch: 'This account does not match its Enterprise Master Data record.',
-    no_permission: 'This account has no access.',
-    not_entitled: 'Your package does not include access to the client portal.',
-    invalid_credentials: 'The login link or code is not valid or has expired.',
-    provider_unavailable: 'The sign-in service is not available right now. Please try again later.',
-    session_expired: 'Your session has expired. Please sign in again.',
-};
+const errorMessages = loginErrorMessages;
 
 const email = ref('');
 const code = ref('');
 const mode = ref(store.loginMethods.magic_link ? 'magic' : 'otp');
 const otpSent = ref(false);
+// The SMS code within one sign-in: one re-send after a short wait, then the
+// e-mailed link (when allowed) or support. The server keeps its own budget
+// per number and never says whether it sent anything, so this is pacing,
+// not the protection.
+const otpSends = ref(0);
+const retryAt = ref(0);
+const fallbackSent = ref(false);
+const clock = ref(Date.now());
+let ticker = null;
 const busy = ref(false);
 const notice = ref(null);
 const error = ref(null);
@@ -50,7 +48,12 @@ const showPasswordless = computed(() => hasPasswordless.value && (!hasSso.value 
 const isPremium = computed(() => store.isPremium);
 const premiumLabel = computed(() => store.premiumBadgeLabel || t('Premium client'));
 const loginBackground = computed(() => store.tierTheme.login_background_image);
-const showSupport = computed(() => store.support && (errorReason.value === 'not_entitled' || isPremium.value));
+const otpPolicy = computed(() => store.otpSms);
+const retrySeconds = computed(() => Math.max(0, Math.ceil((retryAt.value - clock.value) / 1000)));
+const canResend = computed(() => otpSent.value && otpSends.value < 2);
+const offerFallback = computed(() => otpSent.value && otpSends.value >= 2 && otpPolicy.value.email_fallback && methods.value.magic_link && !fallbackSent.value);
+const otpExhausted = computed(() => otpSent.value && otpSends.value >= 2 && !offerFallback.value);
+const showSupport = computed(() => store.support && (errorReason.value === 'not_entitled' || isPremium.value || otpExhausted.value));
 
 const perks = [
     { icon: 'question', text: 'Answer a few personal questions the agent can check.' },
@@ -70,6 +73,18 @@ watch(() => store.notice, (value) => {
     if (reasonOf(value)) { errorReason.value = value; refreshError(); store.notice = null; }
 });
 
+onUnmounted(() => clearInterval(ticker));
+
+function startCountdown() {
+    retryAt.value = Date.now() + otpPolicy.value.retry_after_seconds * 1000;
+    clearInterval(ticker);
+    ticker = setInterval(() => { clock.value = Date.now(); if (clock.value >= retryAt.value) clearInterval(ticker); }, 500);
+}
+
+function resetOtp() {
+    otpSent.value = false; code.value = ''; otpSends.value = 0; retryAt.value = 0; fallbackSent.value = false; notice.value = null;
+}
+
 async function requestMagicLink() {
     busy.value = true; error.value = null; errorReason.value = null;
     try {
@@ -79,11 +94,21 @@ async function requestMagicLink() {
 }
 
 async function requestOtp() {
+    if (otpSends.value >= 2 || (otpSends.value > 0 && retrySeconds.value > 0)) return;
     busy.value = true; error.value = null; errorReason.value = null;
     try {
         const r = await post('/client/auth/otp/request', { email: email.value });
-        notice.value = r.message; otpSent.value = true;
+        notice.value = r.message; otpSent.value = true; otpSends.value += 1;
+        startCountdown();
         setTimeout(() => codeInput.value?.focus(), 50);
+    } catch (e) { error.value = e.message; } finally { busy.value = false; }
+}
+
+async function requestFallbackLink() {
+    busy.value = true; error.value = null; errorReason.value = null;
+    try {
+        const r = await post('/client/auth/magic-link', { email: email.value });
+        notice.value = r.message; fallbackSent.value = true;
     } catch (e) { error.value = e.message; } finally { busy.value = false; }
 }
 
@@ -153,7 +178,12 @@ async function verifyOtp() {
                         <div><label class="label" for="email2">{{ t('E-mail address') }}</label><input id="email2" v-model="email" type="email" required class="input" :disabled="otpSent" autocomplete="email" /></div>
                         <div v-if="otpSent"><label class="label" for="code">{{ t('Code from the SMS') }}</label><input id="code" ref="codeInput" v-model="code" inputmode="numeric" required class="input tracking-[0.4em]" autocomplete="one-time-code" /></div>
                         <button class="btn-primary w-full" :disabled="busy"><Icon name="chat" class="h-4 w-4" />{{ otpSent ? t('Sign in') : t('Send me a code') }}</button>
-                        <button v-if="otpSent" type="button" class="w-full text-center text-xs text-ink-muted hover:underline" @click="otpSent = false; code = ''">{{ t('Use a different e-mail') }}</button>
+                        <template v-if="otpSent">
+                            <button v-if="canResend" type="button" class="w-full text-center text-xs text-ink-muted hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60" :disabled="busy || retrySeconds > 0" @click="requestOtp">{{ retrySeconds > 0 ? t('Did not get the code? You can ask for a new one in {seconds} s.', { seconds: retrySeconds }) : t('Did not get the code? Send a new one') }}</button>
+                            <button v-else-if="offerFallback" type="button" class="w-full text-center text-xs text-ink-muted hover:underline" :disabled="busy" @click="requestFallbackLink">{{ t('Still no code? Send me a login link by e-mail instead') }}</button>
+                            <p v-else class="text-center text-xs text-ink-muted">{{ fallbackSent ? t('If neither the code nor the e-mail arrived, please contact support.') : t('If the code did not arrive, please contact support.') }}</p>
+                            <button type="button" class="w-full text-center text-xs text-ink-muted hover:underline" @click="resetOtp">{{ t('Use a different e-mail') }}</button>
+                        </template>
                     </form>
                 </div>
 

@@ -407,6 +407,22 @@ class ClientResource extends BaseResource
     }
 
     /**
+     * Removing a client closes its account first, so that a sponsor's
+     * linked clients are closed with it as on "Close account"; a plain soft
+     * delete would leave them entitled with no sponsor to be found.
+     */
+    public static function deleteAction(): DeleteAction
+    {
+        return DeleteAction::make()
+            ->modalDescription(fn (Client $record): string => __('The account is closed before the row is removed; the row can be restored later.').' '.static::closeWarning($record))
+            ->before(function (Client $record): void {
+                if (! $record->isClosed()) {
+                    $record->close('admin');
+                }
+            });
+    }
+
+    /**
      * What closing this account drags along.
      */
     public static function closeWarning(Client $client): string
@@ -624,7 +640,7 @@ class ClientResource extends BaseResource
                     Action::make('reopen')->label(__('Reopen'))->icon('heroicon-o-lock-open')->color('success')->requiresConfirmation()
                         ->visible(fn (Client $record) => $record->isClosed() && static::canEdit($record))
                         ->action(fn (Client $record) => $record->reopen()),
-                    DeleteAction::make(),
+                    static::deleteAction(),
                     RestoreAction::make(),
                 ])->icon('heroicon-m-ellipsis-vertical')->color('gray')->tooltip(__('More')),
             ])

@@ -3,6 +3,7 @@ import { store } from './store';
 import { hooks } from './api';
 import { t } from './i18n';
 import Login from './views/Login.vue';
+import MagicLink from './views/MagicLink.vue';
 import Home from './views/Home.vue';
 import Questions from './views/Questions.vue';
 import Pin from './views/Pin.vue';
@@ -15,6 +16,8 @@ const router = createRouter({
     routes: [
         { path: '/login', component: Login, meta: { guest: true, entry: 'standard' } },
         { path: '/premium/login', component: Login, meta: { guest: true, entry: 'premium' } },
+        { path: '/login/link', component: MagicLink, meta: { guest: true, entry: 'standard' } },
+        { path: '/premium/login/link', component: MagicLink, meta: { guest: true, entry: 'premium' } },
         { path: '/premium', redirect: () => (store.user ? '/' : '/premium/login') },
         { path: '/', component: Home },
         { path: '/questions', component: Questions },

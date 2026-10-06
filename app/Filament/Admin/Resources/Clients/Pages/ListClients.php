@@ -4,6 +4,8 @@ namespace App\Filament\Admin\Resources\Clients\Pages;
 
 use App\Filament\Actions\ExportClientsAction;
 use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\Admin\Resources\ExternalRecords\ExternalRecordResource;
+use App\Models\Client;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
 use Filament\Schemas\Components\Tabs\Tab;
@@ -30,6 +32,7 @@ class ListClients extends ListRecords
     public function getTabs(): array
     {
         $waiting = ClientResource::unlinkedPremiumCount();
+        $closing = static::closingAtNextRun(Client::query())->count();
 
         return [
             'all' => Tab::make(__('All clients')),
@@ -38,6 +41,22 @@ class ListClients extends ListRecords
                 ->badge($waiting > 0 ? $waiting : null)
                 ->badgeColor('danger')
                 ->modifyQueryUsing(fn (Builder $query) => ClientResource::scopeUnlinkedPremium($query)->open()),
+            // The helpdesk sees how many open accounts the next EMD sync closes
+            // if their records stay absent, before it happens.
+            'closing' => Tab::make(__('Closes at the next EMD sync'))
+                ->icon('heroicon-o-clock')
+                ->badge($closing > 0 ? $closing : null)
+                ->badgeColor('warning')
+                ->modifyQueryUsing(fn (Builder $query) => static::closingAtNextRun($query)),
         ];
+    }
+
+    /**
+     * @param  Builder<Client>  $query
+     * @return Builder<Client>
+     */
+    public static function closingAtNextRun(Builder $query): Builder
+    {
+        return $query->open()->whereHas('externalRecord', fn (Builder $record) => $record->fromDirectory()->closingAtNextRun(ExternalRecordResource::threshold()));
     }
 }

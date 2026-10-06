@@ -42,7 +42,7 @@ class Client extends Authenticatable implements Principal
     use SoftDeletes;
 
     /** @var list<string> */
-    protected array $auditExclude = ['pin_failed_attempts', 'pin_locked_until', 'pin_lockout_count', 'last_login_at'];
+    protected array $auditExclude = ['pin_failed_attempts', 'pin_locked_until', 'pin_lockout_count', 'last_login_at', 'session_epoch', 'failed_login_attempts', 'locked_until'];
 
     protected function casts(): array
     {
@@ -57,6 +57,9 @@ class Client extends Authenticatable implements Principal
             'package_override_until' => 'datetime',
             'link_warning_muted_at' => 'datetime',
             'link_warning_muted_until' => 'datetime',
+            'session_epoch' => 'integer',
+            'failed_login_attempts' => 'integer',
+            'locked_until' => 'datetime',
         ];
     }
 

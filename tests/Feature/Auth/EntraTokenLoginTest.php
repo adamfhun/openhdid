@@ -54,7 +54,9 @@ it('rejects a token issued by another tenant even when signature, audience and e
 
     $foreign = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'attacker-tenant', 'preferred_username' => 'c@x.hu', 'email' => 'c@x.hu', 'xms_edov' => true], ENTRA_ISSUER);
     $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $foreign, 'device_name' => 'x'])
-        ->assertUnprocessable()->assertJsonPath('errors.id_token.0', 'ID token tenant mismatch.');
+        ->assertUnprocessable()->assertJsonPath('errors.id_token.0', 'The token is not valid.');
+    expect(AuditLog::query()->where('event', 'login.rejected')->sole()->context)
+        ->toMatchArray(['method' => 'sso.entra.mobile', 'reason' => 'invalid_credentials', 'detail' => 'invalid_token', 'error' => 'ID token tenant mismatch.']);
 
     $noTenant = FakeOidc::idToken(['aud' => 'mobile-app', 'preferred_username' => 'c@x.hu'], ENTRA_ISSUER);
     $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $noTenant, 'device_name' => 'x'])->assertUnprocessable();
@@ -154,7 +156,8 @@ it('rejects the token when the JWKS endpoint answers with an unusable document, 
     $idToken = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu'], ENTRA_ISSUER);
 
     $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'iPhone'])
-        ->assertUnprocessable()->assertJsonPath('errors.id_token.0', fn (string $message): bool => str_starts_with($message, 'ID token invalid: '));
+        ->assertUnprocessable()->assertJsonPath('errors.id_token.0', 'The token is not valid.');
+    expect(AuditLog::query()->where('event', 'login.rejected')->sole()->context['error'])->toStartWith('ID token invalid: ');
 
     // The unusable set is refreshed once, like a stale key, before giving up.
     Http::assertSentCount(3);
@@ -200,7 +203,12 @@ it('rejects new tokens for a disabled provider without contacting Entra', functi
     Http::assertNothingSent();
     $this->assertDatabaseCount('personal_access_tokens', 0);
     expect(AuditLog::query()->where('event', 'login.rejected')->sole()->context['principal'])->toBe($principal->value);
-})->with([PrincipalType::User, PrincipalType::Client]);
+})->with([PrincipalType::Client]);
+
+it('no longer issues API tokens to staff accounts', function (): void {
+    $this->postJson('/api/v1/auth/user/entra/token', ['id_token' => 'unused', 'device_name' => 'phone'])->assertNotFound();
+    $this->assertDatabaseCount('personal_access_tokens', 0);
+});
 
 it('rechecks Entra after validating the remote token', function (PrincipalType $principal): void {
     $this->seed(RolesAndPermissionsSeeder::class);
@@ -228,4 +236,50 @@ it('rechecks Entra after validating the remote token', function (PrincipalType $
     $rejected = AuditLog::query()->where('event', 'login.rejected')->sole();
     expect($rejected->context['reason'])->toBe('method_disabled')
         ->and($rejected->subject_id)->toBe($account->id);
-})->with([PrincipalType::User, PrincipalType::Client]);
+})->with([PrincipalType::Client]);
+
+it('accepts an ID token only once and audits the replay', function (): void {
+    Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    FakeOidc::fake([], ENTRA_ISSUER, ENTRA_DISCOVERY);
+    $idToken = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu'], ENTRA_ISSUER);
+
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'phone'])->assertOk();
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'thief'])
+        ->assertUnprocessable()->assertJsonPath('errors.id_token.0', 'The token is not valid.');
+
+    $this->assertDatabaseCount('personal_access_tokens', 1);
+    expect(AuditLog::query()->where('event', 'login.rejected')->sole()->context)
+        ->toMatchArray(['method' => 'sso.entra.mobile', 'reason' => 'invalid_credentials', 'detail' => 'token_replayed', 'email' => 'c@x.hu']);
+});
+
+it('accepts an ID token only within the configured minutes of its issue', function (int $maxAge, int $ageMinutes, bool $accepted): void {
+    app(Settings::class)->set(SettingKey::SsoMobileTokenMaxAgeMinutes, $maxAge);
+    Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    FakeOidc::fake([], ENTRA_ISSUER, ENTRA_DISCOVERY);
+    $idToken = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu', 'iat' => time() - $ageMinutes * 60, 'exp' => time() + 3600], ENTRA_ISSUER);
+
+    $response = $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'phone']);
+
+    if ($accepted) {
+        $response->assertOk();
+    } else {
+        $response->assertUnprocessable();
+        expect(AuditLog::query()->where('event', 'login.rejected')->sole()->context['detail'])->toBe('token_too_old');
+    }
+})->with([
+    'default 15 minutes, 14 old' => [15, 14, true],
+    'default 15 minutes, 17 old' => [15, 17, false],
+    'set to 5 minutes, 6 old' => [5, 6, false],
+]);
+
+it('tolerates a minute of clock difference and checks the authorized party', function (): void {
+    Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    FakeOidc::fake([], ENTRA_ISSUER, ENTRA_DISCOVERY);
+
+    $early = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu', 'iat' => time() + 30, 'nbf' => time() + 30], ENTRA_ISSUER);
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $early, 'device_name' => 'phone'])->assertOk();
+
+    $otherParty = FakeOidc::idToken(['aud' => ['mobile-app', 'other-app'], 'azp' => 'other-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu'], ENTRA_ISSUER);
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $otherParty, 'device_name' => 'phone'])->assertUnprocessable();
+    expect(AuditLog::query()->where('event', 'login.rejected')->sole()->context['error'])->toBe('ID token authorized party mismatch.');
+});

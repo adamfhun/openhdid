@@ -6,14 +6,11 @@ use App\Filament\Admin\Resources\Users\Pages\EditUser;
 use App\Filament\Admin\Resources\Users\Pages\ListUsers;
 use App\Models\AuditLog;
 use App\Models\User;
-use App\Settings\SettingKey;
-use App\Settings\Settings;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Hash;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role as RoleModel;
-use Symfony\Component\HttpKernel\Exception\HttpException;
 
 beforeEach(function (): void {
     $this->seed(RolesAndPermissionsSeeder::class);
@@ -122,15 +119,4 @@ it('lets an admin close an ordinary account from the users list', function (): v
         ->callTableAction('close', $agent);
 
     expect($agent->fresh()->isClosed())->toBeTrue();
-});
-
-it('does not let a self-promoted admin reach the super-admin-only export payload', function (): void {
-    Livewire::test(EditUser::class, ['record' => $this->admin->id])
-        ->fillForm(['roles' => [$this->superAdminRoleId]])
-        ->call('save');
-
-    $this->actingAs($this->admin->fresh());
-
-    expect(fn () => app(Settings::class)->set(SettingKey::SyncExportPayload, '{"ids":"escalated"}'))
-        ->toThrow(HttpException::class);
 });

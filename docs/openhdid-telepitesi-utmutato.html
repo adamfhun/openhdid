@@ -92,7 +92,7 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.1 · 2026. szeptember 24.</span></div>
+    <div><span class="k">Verzió</span><span>1.4 · 2026. október 4.</span></div>
     <div><span class="k">Kiadás</span><span>OpenHDID 1.0.0 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.0, felhasználói kézikönyv 1.23</span></div>
@@ -199,7 +199,7 @@ Az első indításkor sorrendben:
 </ol></li>
 <li><strong>Az első rendszergazda</strong> (jelszót kér, legalább 12 karakter):
 <pre><code>docker compose exec web php artisan hdid:make-admin admin@example.org --name="Rendszergazda"</code></pre>
-A parancs az ügyféltörzsbeli tételt is létrehozza, így a belépési szabály teljesül.</li>
+A parancs helyi ügyféltörzsbeli tételt is létrehozza, így a belépési szabály teljesül; a későbbi ügyféltörzs-átvételek ezt a helyi tételt nem tekintik hiányzónak, és ha az e-mail-cím az ügyféltörzsben is megjelenik, a fiókot átkötik rá.</li>
 <li><strong>Első ellenőrzés és a telefonközpont kulcsa</strong> (a kulcs egyszer jelenik meg):
 <pre><code>docker compose exec web php artisan hdid:health
 docker compose exec web php artisan hdid:api-key:create "Prémium telefonközpont" callcenter</code></pre></li>
@@ -246,7 +246,7 @@ Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, vala
 <tr><td><code>OPENHDID_HTTP_REDIRECT</code></td><td><code>true</code></td><td>A 80-as porton a böngészős GET/HEAD 308-cal a HTTPS-címre megy; <code>false</code>: minden elutasítva.</td></tr>
 <tr><td><code>OPENHDID_MONITORING_ALLOW</code></td><td>üres</td><td>A <code>/health</code> és <code>/up</code> elérésére jogosult címek (IP vagy CIDR).</td></tr>
 <tr><td><code>OPENHDID_NGINX_WORKERS</code></td><td><code>auto</code></td><td>nginx-dolgozók száma.</td></tr>
-<tr><td><code>OPENHDID_FPM_*</code></td><td><code>dynamic</code>, 8, 2, 2, 4</td><td>PHP-FPM folyamatkezelés és a legtöbb/induló/tartalék folyamat webkonténerenként.</td></tr>
+<tr><td><code>OPENHDID_FPM_*</code></td><td><code>dynamic</code>, 8, 2, 2, 4</td><td>PHP-FPM folyamatkezelés és a legtöbb/induló/tartalék folyamat webkonténerenként. A képbe épített <code>php.ini</code> a <code>max_execution_time</code> értékét 300 mp-re állítja (FPM és CLI egyaránt; <code>request_terminate_timeout</code> 330 s): az ügyféltörzs-átvétel és a fájlimport 120 mp alatti korláttal el sem indul, és az indításkori ellenőrzés hibával leállítja a konténert, ha egy felülírás ez alá vinné.</td></tr>
 <tr><td><code>OPENHDID_DB_BUFFER_POOL</code>, <code>OPENHDID_DB_MAX_CONNECTIONS</code></td><td><code>512M</code>, 200</td><td>A beépített MariaDB memóriája és kapcsolatszáma.</td></tr>
 <tr><td><code>OPENHDID_DEMO_DATA</code></td><td><code>false</code></td><td>Demóadatok betöltése (13. fejezet); élesben tilos.</td></tr>
 </tbody></table></div>
@@ -277,7 +277,7 @@ Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, vala
 <tbody>
 <tr><td><code>MAIL_MAILER</code>, <code>MAIL_*</code>, <code>EWS_*</code></td><td><code>ews</code> (Exchange: URL, <code>basic</code>/<code>ntlm</code>/<code>oauth</code>, hozzáférés) vagy <code>smtp</code>. A <code>log</code> csak naplóba ír, élesben a rendszerállapot jelzi. <code>EWS_VERIFY_TLS=true</code> maradjon; belső CA a <code>ca</code> mappába.</td></tr>
 <tr><td><code>SMS_DRIVER</code>, <code>OZEKI_*</code></td><td><code>ozeki</code>: az átjáró HTTPS-címe és hozzáférése; <code>log</code> élesben hiba.</td></tr>
-<tr><td><code>EMD_SYNC_*</code></td><td>Ügyféltörzs-átvétel: illesztő (<code>spreadsheet</code> vagy <code>json</code>), export-, belépési és tokenfrissítési cím, hozzáférés, időkorlátok, formátum, ütemezés (<code>EMD_SYNC_CRON</code>), tokenfrissentartás, és a panelről indított átvétel sora (<code>EMD_SYNC_QUEUE=sync</code>).</td></tr>
+<tr><td><code>EMD_SYNC_*</code></td><td>Ügyféltörzs-átvétel: illesztő (<code>spreadsheet</code> vagy <code>json</code>), export-, ID-lista- (<code>EMD_SYNC_ID_LIST_URL</code>), belépési és tokenfrissítési cím, hozzáférés, időkorlátok, formátum, ütemezés (<code>EMD_SYNC_CRON</code>), tokenfrissentartás, és a panelről indított átvétel sora (<code>EMD_SYNC_QUEUE=sync</code>).</td></tr>
 <tr><td><code>CALLCENTER_*</code></td><td>Örökölt, rögzített telefonközponti kulcs és aláírás. Új partnerhez a felületen kezelt API-kulcs ajánlott; a <code>CALLCENTER_SIGNATURE_TTL</code> (300) az aláírt kérés időbélyegének megengedett eltérése.</td></tr>
 <tr><td><code>USER_*</code>, <code>CLIENT_*</code> (<code>ADFS</code>, <code>ENTRA</code>)</td><td>Négy alkalmazás-regisztráció az egyszeri bejelentkezéshez; az Entra-bérlő csak GUID lehet.</td></tr>
 </tbody></table></div>
@@ -414,7 +414,7 @@ docker compose logs -f --tail=100 worker            # élő követés</code></pr
     <li><strong>Arculat és Prémium:</strong> alkalmazásnév, embléma, böngészőikon, színek, háttérképek. Az alapértelmezés semleges színséma; a levelek és a kimutatások is a beállított színeket használják.</li>
     <li><strong>Portál:</strong> jogi név, lábléc, adatkezelési és felhasználási hivatkozások.</li>
     <li><strong>Ügyfél belépés és SSO:</strong> mely belépési módok élnek. Az SSO bekapcsolása előtt a környezeti változók legyenek kitöltve.</li>
-    <li><strong>Ügyféltörzs (EMD):</strong> munkatársi és ügyfél-domainlista, oszlopmegfeleltetés, védőkorlátok, CSV-kódolás, és az export kéréstörzse (csak főrendszergazda).</li>
+    <li><strong>Ügyféltörzs (EMD):</strong> munkatársi és ügyfél-domainlista, oszlopmegfeleltetés, védőkorlátok, CSV-kódolás, az export és az ID-lista kéréstörzse, az ID-lista válaszútvonalai és kijelölése (az ügyféltörzs-átvétel kezelésére jogosult munkatárs).</li>
     <li><strong>Azonosítás, Hívások, Adatmegőrzés:</strong> az alapértékek a próbaüzemre megfelelnek. Az ügyintézői sikertelen ellenőrzések korlátja alapból 50 óránként.</li>
 </ol>
 <p>Ezután: <em>Tartalom › Üzenetsablonok</em> (próbaküldés), <em>Rendszer › API-kulcsok</em>, <em>Fiókok</em> (munkatársak, szerepkörök), <em>Azonosítás › Kérdések</em>. A felület részletes leírása a felhasználói kézikönyvben található.</p>
@@ -482,7 +482,7 @@ openssl s_client -connect $H:443 -servername $H -tls1_2 -brief &lt;/dev/null    
 <tr><td>A04 kriptográfia, ASVS V12</td><td>Kizárólag TLS 1.3, ML-KEM hibrid kulcscsere, HSTS, indításkori tanúsítvány-ellenőrzés; belső CA a tanúsítványtár mellé, a TLS-ellenőrzés nem kapcsolható ki.</td></tr>
 <tr><td>Titkok, ASVS V13.3</td><td>Az image-ben nincs titok (gitleaks és Trivy titokkeresés). Titok fájlból (<code>*_FILE</code>); konfigurációs gyorsítótár csak memóriában; a migrációs adatbázisfiók jelszava csak a <code>mariadb</code> és a <code>migrate</code> szolgáltatásnál.</td></tr>
 <tr><td>A09 naplózás, ASVS V16</td><td>Adatminimalizált JSON access log, forgatás, központi gyűjtés naplózó-meghajtóval, auditnapló az adatbázisban.</td></tr>
-<tr><td>Nyitott tételek</td><td>A CSP-ben a Livewire/Alpine miatt <code>unsafe-inline</code> és <code>unsafe-eval</code> van. Egyéb nyitott tételek: az alternatív belépési utak és az MFA (az SSO-szolgáltatónál írható elő), az abszolút munkamenetkorlát, az örökölt IVR URL-es kulcsa és módosító GET-hívásai. Ezek értékelése telepítésenként, felelőssel és határidővel történjen.</td></tr>
+<tr><td>Nyitott tételek</td><td>A CSP-ben a Livewire/Alpine miatt <code>unsafe-inline</code> és <code>unsafe-eval</code> van. Egyéb nyitott tételek: az alternatív belépési utak és az MFA (az SSO-szolgáltatónál írható elő), az örökölt IVR URL-es kulcsa és módosító GET-hívásai. Az abszolút munkamenet-korlát, a fiókzárolás és a belépések naplózása a Beállítások › Admin belépés és Ügyfél belépés fülön állítható. Ezek értékelése telepítésenként, felelőssel és határidővel történjen.</td></tr>
 </tbody></table></div>
 
 <h2 id="s13"><span class="num">13</span>Kipróbálás demóadatokkal</h2>
@@ -538,7 +538,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.1 · 2026. szeptember 24. · OpenHDID 1.1.1</div>
+<div class="foot">OpenHDID telepítési útmutató 1.4 · 2026. október 4. · OpenHDID 1.2.0</div>
 </div>
 
 </body>

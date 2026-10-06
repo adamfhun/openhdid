@@ -13,6 +13,7 @@ use App\Filament\Admin\Widgets\OngoingCallsWidget;
 use App\Filament\Admin\Widgets\OverviewStatsWidget;
 use App\Filament\BrandedPanel;
 use App\Filament\Pages\Auth\Login;
+use App\Http\Middleware\EnforceAuthSessions;
 use App\Localization\SetLocale;
 use Filament\Actions\Action;
 use Filament\Http\Middleware\Authenticate;
@@ -96,6 +97,7 @@ class AdminPanelProvider extends PanelProvider
                 AddQueuedCookiesToResponse::class,
                 StartSession::class,
                 SetLocale::class,
+                EnforceAuthSessions::class,
                 AuthenticateSession::class,
                 ShareErrorsFromSession::class,
                 PreventRequestForgery::class,

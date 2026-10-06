@@ -6,6 +6,7 @@ use App\Audit\Auditor;
 use App\Auth\Permission;
 use App\CallCenter\CallCenterService;
 use App\Clients\ClientPhones;
+use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
 use App\Enums\IdChannel;
 use App\Enums\IdMethod;
@@ -436,6 +437,10 @@ class Identify extends Page
             ->color('warning')
             ->outlined()
             ->visible(fn () => $this->canIdentifyManually() && ! $this->getClient()->isClosed())
+            // Like every other method: a client whose package no longer counts
+            // cannot be identified, and the button says so instead of hiding.
+            ->disabled(fn () => ! app(ClientTiers::class)->isEntitled($this->getClient()))
+            ->tooltip(fn () => app(ClientTiers::class)->isEntitled($this->getClient()) ? null : __('The client\'s account is closed or no longer entitled; it cannot be identified.'))
             ->modalHeading(fn () => __('Identify :name manually', ['name' => $this->getClient()->name]))
             ->modalDescription(__('Use this only when the caller could be identified another way (for example a callback to a registered number or a supervisor\'s approval). The reason is recorded in the audit log with your name.'))
             ->schema([
@@ -444,7 +449,14 @@ class Identify extends Page
             ])
             ->modalSubmitActionLabel(__('Record as identified'))
             ->action(function (array $data): void {
-                $session = $this->recordManualIdentification(trim($data['reason']));
+                try {
+                    $session = $this->recordManualIdentification(trim($data['reason']));
+                } catch (IdentificationException $e) {
+                    Notification::make()->title($e->getMessage())->danger()->send();
+
+                    return;
+                }
+
                 $this->notifyOutcome($session);
             });
     }
@@ -453,6 +465,10 @@ class Identify extends Page
     {
         $client = $this->getClient();
         $call = $this->getHeldCall();
+
+        if ($client->isClosed() || ! app(ClientTiers::class)->isEntitled($client)) {
+            throw new IdentificationException(__('The client\'s account is closed or no longer entitled; it cannot be identified.'));
+        }
 
         $session = IdSession::query()->create([
             'client_id' => $client->id,
