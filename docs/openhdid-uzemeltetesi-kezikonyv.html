@@ -312,8 +312,8 @@ tar czf mentes/openhdid-config-$d.tar.gz .env db.env tls ca compose.yaml</code><
 </ul>
 <ol class="steps">
     <li><strong>Az image ellenőrzése</strong> (választható, ajánlott):
-<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.2.0 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.2.0 \
+<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.2.1 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.2.1 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre></li>
     <li><strong>Mentés</strong> a 7. fejezet szerint.</li>
@@ -434,7 +434,7 @@ cosign verify ghcr.io/adamfhun/openhdid:1.2.0 \
 <tr><td>SemVer</td><td>Semantic Versioning – szemantikus verziózás (fő.al.javító).</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID üzemeltetési kézikönyv 1.3 · 2026. október 6. · OpenHDID 1.2.0</div>
+<div class="foot">OpenHDID üzemeltetési kézikönyv 1.3 · 2026. október 6. · OpenHDID 1.2.1</div>
 </div>
 
 </body>

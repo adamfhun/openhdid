@@ -13,7 +13,7 @@
     "license": "AGPL-3.0-or-later",
     "$schema": "https://getcomposer.org/schema.json",
     "require": {
-        "php": "^8.3",
+        "php": "^8.4",
         "dedoc/scramble": "^0.13.43",
         "filament/filament": "^5.8",
         "firebase/php-jwt": "^7.1",

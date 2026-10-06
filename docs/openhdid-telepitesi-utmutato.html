@@ -92,10 +92,10 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.4 · 2026. október 4.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.0.0 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.5 · 2026. október 6.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.2.1 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
-    <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.0, felhasználói kézikönyv 1.23</span></div>
+    <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.3, felhasználói kézikönyv 1.30</span></div>
 </div>
 
 <nav class="toc" aria-label="Tartalom">
@@ -163,16 +163,16 @@ a { color: var(--accent); }
 <h2 id="s3"><span class="num">3</span>Telepítés lépésről lépésre</h2>
 <p>A példák a <code>/opt/openhdid</code> mappát használják. A parancsokat Docker-jogosultságú felhasználó futtatja; az alkalmazás maga nem root felhasználóként fut.</p>
 <ol class="steps">
-<li><strong>A telepítési fájlok letöltése</strong> a választott kiadásból. A <code>.env</code> és a <code>db.env</code> titkokat tartalmaz, ezért csak a tulajdonos olvashatja:
-<pre><code>sudo mkdir -p /opt/openhdid &amp;&amp; sudo chown "$USER" /opt/openhdid &amp;&amp; cd /opt/openhdid
-base=https://github.com/adamfhun/openhdid/releases/download/v1.0.0
+<li><strong>A telepítési fájlok letöltése</strong> a választott kiadásból. A mappa tulajdonosa a parancsokat futtató fiók (<code>id -un</code>; a <code>$USER</code> változót nem minden shell állítja be). A <code>.env</code> és a <code>db.env</code> titkokat tartalmaz, ezért csak a tulajdonos olvashatja:
+<pre><code>sudo mkdir -p /opt/openhdid &amp;&amp; sudo chown "$(id -un)" /opt/openhdid &amp;&amp; cd /opt/openhdid
+base=https://github.com/adamfhun/openhdid/releases/download/v1.2.1
 curl -fsSL -O "$base/compose.yaml"
 curl -fsSL -o .env "$base/env.example"
 curl -fsSL -o db.env "$base/db.env.example"
 chmod 600 .env db.env</code></pre></li>
 <li><strong>Kötelező értékek a <code>.env</code> fájlban:</strong>
 <ul>
-    <li><code>OPENHDID_VERSION</code> (például <code>1.0.0</code>);</li>
+    <li><code>OPENHDID_VERSION</code> (például <code>1.2.1</code>);</li>
     <li><code>APP_URL</code>: a webhely HTTPS-címe, ebből képződik a kiszolgálónév is;</li>
     <li><code>DB_PASSWORD</code>: a futási adatbázis-fiók jelszava;</li>
     <li>a levelezés, az SMS és az ügyféltörzs beállításai (5. fejezet).</li>
@@ -236,7 +236,7 @@ Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, vala
 <div class="tablewrap"><table>
 <thead><tr><th>Kulcs</th><th>Alapérték</th><th>Jelentés</th></tr></thead>
 <tbody>
-<tr><td><code>OPENHDID_VERSION</code></td><td>–</td><td>A futtatott image verziója. Élesben mindig pontos verzió (<code>1.0.0</code>), ne <code>latest</code>.</td></tr>
+<tr><td><code>OPENHDID_VERSION</code></td><td>–</td><td>A futtatott image verziója. Élesben mindig pontos verzió (<code>1.2.1</code>), ne <code>latest</code>.</td></tr>
 <tr><td><code>COMPOSE_PROFILES</code></td><td><code>db</code></td><td>Választható szolgáltatások: <code>db</code> beépített MariaDB, <code>redis</code> Valkey. Külső adatbázisnál üres.</td></tr>
 <tr><td><code>OPENHDID_BIND_IP</code></td><td><code>0.0.0.0</code></td><td>A gazdagép címe, amelyen a 80-as és 443-as port figyel (6.1 pont).</td></tr>
 <tr><td><code>OPENHDID_HTTPS_PORT</code>, <code>OPENHDID_HTTP_PORT</code></td><td><code>443</code>, <code>80</code></td><td>A gazdagép portjai; a konténerben mindig 8443 és 8080.</td></tr>
@@ -308,6 +308,7 @@ OPENHDID_HTTP_PORT=80</code></pre>
 </ul>
 <p>Hibánál a web nem indul, és a napló megmondja az okot. Kézi próba a futó rendszeren:</p>
 <pre><code>docker compose exec web openhdid tls-check</code></pre>
+<p>A parancs az <code>OPENHDID_TLS=on</code> módhoz tartozik: <code>selfsigned</code> és <code>off</code> módban nincs mit ellenőriznie, a hiányzó tanúsítványfájl miatt hibával lép ki.</p>
 <p>A beállítás kizárólag TLS 1.3-at fogad (<code>TLS_AES_256_GCM_SHA384</code>, <code>TLS_CHACHA20_POLY1305_SHA256</code>, <code>TLS_AES_128_GCM_SHA256</code>). Early data és session ticket nincs. A kulcscsere elsődlegesen az X25519MLKEM768 poszt-kvantum hibrid eljárás, ezt a friss böngészők és az OpenSSL 3.5 támogatja, a régebbi kliensek az X25519-re esnek vissza. Minden HTTPS-válasz HSTS-fejlécet kap (1 év, aldomainekkel). A TLS 1.2 engedélyezése csak dokumentált döntéssel és klienspróbával jöhet szóba, régi partner miatt sem kerülhet vissza a TLS 1.0/1.1.</p>
 <p><strong>Tanúsítványcsere:</strong> a fájlok cseréje után kapcsolatbontás nélküli újratöltés, amely előtte ellenőriz:</p>
 <pre><code>docker compose exec web openhdid reload</code></pre>
@@ -329,7 +330,7 @@ OPENHDID_HTTP_PORT=80</code></pre>
     <li><strong>Kulcsok:</strong> a tanúsítvány és a kulcs a terheléselosztón él. Ha a belső szakaszt is titkosítani kell, maradjon <code>OPENHDID_TLS=on</code> a konténerben is (újratitkosítás vagy TLS-átengedés).</li>
 </ul>
 <h3>6.6 Felügyeleti végpontok</h3>
-<p>A <code>/health</code> (az összes ellenőrzés állapota, 200 vagy 503) és a <code>/up</code> csak a helyi gépről és az <code>OPENHDID_MONITORING_ALLOW</code> címeiről érhető el, mások 404-et kapnak. A konténer saját egészség-ellenőrzése egy csak a konténeren belül elérhető porton fut, és nem függ ettől a listától.</p>
+<p>A <code>/health</code> (az összes ellenőrzés állapota, 200 vagy 503) és a <code>/up</code> csak a konténeren belülről (127.0.0.1) és az <code>OPENHDID_MONITORING_ALLOW</code> címeiről érhető el, mások 404-et kapnak. A gazdagépről a közzétett porton érkező kérés a Docker-híd átjárócíméről jön (a <code>docker network inspect openhdid_default</code> mutatja, például 172.18.0.1), ezért ezt a címet kell a listába venni, különben a gazdagépről is 404 a válasz; a <code>docker compose exec web php artisan hdid:health</code> a listától függetlenül működik. A konténer saját egészség-ellenőrzése egy csak a konténeren belül elérhető porton fut, és nem függ ettől a listától.</p>
 
 <h2 id="s7"><span class="num">7</span>Adatbázis (MariaDB)</h2>
 <h3>7.1 Beépített adatbázis</h3>
@@ -453,8 +454,8 @@ docker compose logs -f --tail=100 worker            # élő követés</code></pr
 <h3>12.1 Működés</h3>
 <ul class="check">
     <li><code>docker compose ps</code>: a <code>web</code> <code>healthy</code>, a <code>worker</code>, <code>sync-worker</code>, <code>scheduler</code> és <code>mariadb</code> fut, a <code>migrate</code> <code>exited (0)</code>.</li>
-    <li><code>docker compose exec web php artisan hdid:health</code> kilépési kódja 0; a Rendszerállapot oldalon az adatbázis, gyorsítótár, üzenetsor és ütemező zöld (az ütemező az első percben még piros lehet).</li>
-    <li>A <em>Rendszerállapot</em> fejlécében a futó verzió látszik (például „Verzió: 1.0.0”).</li>
+    <li><code>docker compose exec web php artisan hdid:health</code> kilépési kódja 0; a Rendszerállapot oldalon az adatbázis, gyorsítótár, üzenetsor és ütemező zöld (az ütemező az első percben még piros lehet). Ha az ügyféltörzs API-belépése nincs beállítva (csak fájlimport), a „Belépés az ügyféltörzs API-jába” csempe piros marad, és a kód 2.</li>
+    <li>A <em>Rendszerállapot</em> fejlécében a futó verzió látszik (például „Verzió: 1.2.1”).</li>
     <li>Próbalevél és próba-SMS megérkezik; a <em>Kimenő üzenetek</em> listában „elküldve”.</li>
     <li>Az ügyféltörzs próbafuttatása hihető számokat ad, az éles átvétel sikeres.</li>
     <li>Egy ügyfélnek küldött belépési hivatkozás beléptet a portálra; bekapcsolt SSO-nál a belépés végigmegy.</li>
@@ -500,7 +501,7 @@ SMS_DRIVER=log</code></pre>
     <li>normál ügyfél: <code>bela@example.test</code>;</li>
     <li>két hét hívástörténet.</li>
 </ul>
-<p>Rendszergazdát a 3. fejezet 7. lépése szerint hozzon létre. A böngésző figyelmeztet az önaláírt tanúsítványra. A kimenő e-mailek és SMS-ek a <code>docker compose logs worker</code> kimenetében olvashatók.</p>
+<p>Rendszergazdát a 3. fejezet 7. lépése szerint hozzon létre. A böngésző figyelmeztet az önaláírt tanúsítványra. A kimenő e-mailek és SMS-ek a <code>docker compose logs worker</code> kimenetében olvashatók. Demó módban a <code>hdid:health</code> kilépési kódja 2 (a <code>log</code> illesztők és a bekötetlen ügyféltörzs miatt), a <code>tls-check</code> önaláírt tanúsítványnál nem értelmezhető, a <code>/health</code> a gazdagépről a 6.6 pont szerint 404-et ad; a 12.2 pont többi próbája a <code>-k</code> kapcsolóval (önaláírt tanúsítvány) elvégezhető.</p>
 <div class="callout danger"><p><strong>Csak kipróbáláshoz.</strong> A demófiókok jelszava nyilvános; <code>APP_ENV=production</code> mellett a demóadatok betöltése hibával leáll. Éles telepítéshez új, üres adatbázissal kezdjen.</p></div>
 
 <h2 id="s14"><span class="num">14</span>Frissítés új verzióra</h2>
@@ -514,7 +515,7 @@ docker compose ps</code></pre>
     A <code>migrate</code> lefuttatja az új migrációkat, utána a szolgáltatások az új image-dzsel indulnak újra. Egyetlen webpéldánynál ez néhány másodperces kiesés; kiesés nélküli frissítéshez több példány kell terheléselosztó mögött.</li>
     <li>Ellenőrzés a 12.1 pont szerint.</li>
 </ol>
-<p>A platform frissítése (PHP, nginx, OpenSSL, Alpine) új javítóverzióként jelenik meg, a frissítés menete ugyanez. A kiadott címkék (például <code>1.0.0</code>) soha nem változnak, ezért egy telepítés mindig pontosan reprodukálható.</p>
+<p>A platform frissítése (PHP, nginx, OpenSSL, Alpine) új javítóverzióként jelenik meg, a frissítés menete ugyanez. A kiadott címkék (például <code>1.2.1</code>) soha nem változnak, ezért egy telepítés mindig pontosan reprodukálható.</p>
 
 <h2 id="roviditesek">Rövidítésjegyzék</h2>
 <div class="tablewrap"><table>
@@ -538,7 +539,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.4 · 2026. október 4. · OpenHDID 1.2.0</div>
+<div class="foot">OpenHDID telepítési útmutató 1.5 · 2026. október 6. · OpenHDID 1.2.1</div>
 </div>
 
 </body>

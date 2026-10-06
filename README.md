@@ -118,7 +118,7 @@ The defaults follow OWASP ASVS 5.0 and the OWASP Docker Security Cheat Sheet; th
 docker build -t openhdid:local .
 ```
 
-Development needs PHP 8.3+ (8.5 tested), Composer 2 and Node.js LTS: `composer install`, `npm ci --ignore-scripts && npm run build`, `php artisan test`.
+Development needs PHP 8.4+ (8.5 tested), Composer 2 and Node.js LTS: `composer install`, `npm ci --ignore-scripts && npm run build`, `php artisan test`.
 
 This repository is published from the maintainers' development repository with every release. Issues are welcome; changes are applied upstream and appear with the next release, so pull requests are not merged here directly.
 

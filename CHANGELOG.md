@@ -4,6 +4,18 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.2.1] – 2026-10-06
+
+### Magyar
+- A támogatott PHP legalacsonyabb verziója 8.4 (a `composer.json` `^8.4`-et kér); a 8.3 támogatása megszűnt, mert a rögzített függőségek (Symfony 8) PHP 8.4.1-et követelnek. A kép továbbra is PHP 8.5-öt futtat, az image tartalma nem változott.
+- OpenHDID telepítési útmutató 1.5, a lépések szó szerinti próbatelepítése után: a telepítési mappa tulajdonosa `"$(id -un)"` (a `$USER` nem minden shellben létezik); a `tls-check` csak `OPENHDID_TLS=on` módban értelmes; a `/health` a gazdagépről csak a Docker-híd átjárócímének engedélyezésével (`OPENHDID_MONITORING_ALLOW`) érhető el; bekötetlen ügyféltörzs-API mellett a `hdid:health` kilépési kódja 2; a demó mód ismert eltérései leírva; a példák az aktuális kiadást nevezik.
+- Platform: a MariaDB 12.3.3 és a build Composer 2.10.3 image-digestje a frissen újraépített képekre mutat; az ellenőrző Trivy 0.75.0. Alkalmazáskód nem változott.
+
+### English
+- The minimum supported PHP version is 8.4 (`composer.json` requires `^8.4`); PHP 8.3 is no longer supported because the locked dependencies (Symfony 8) require PHP 8.4.1. The image still runs PHP 8.5 and its contents are unchanged.
+- Installation guide 1.5 (Hungarian), after running every step literally: the install directory is owned by `"$(id -un)"` (`$USER` is not set in every shell); `tls-check` only applies to `OPENHDID_TLS=on`; `/health` is reachable from the host only after allowing the Docker bridge gateway address in `OPENHDID_MONITORING_ALLOW`; without an EMD API login `hdid:health` exits with code 2; the known differences of demo mode are documented; the examples name the current release.
+- Platform: the MariaDB 12.3.3 and build-time Composer 2.10.3 image digests point at the freshly rebuilt images; the Trivy scanner is 0.75.0. No application code changed.
+
 ## [1.2.0] – 2026-10-06
 
 ### Magyar

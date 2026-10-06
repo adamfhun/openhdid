@@ -128,7 +128,7 @@ Az alapbeállítások az OWASP ASVS 5.0 és az OWASP Docker Security Cheat Sheet
 docker build -t openhdid:local .
 ```
 
-Fejlesztéshez PHP 8.3+ (8.5-tel tesztelve), Composer 2 és Node.js LTS kell: `composer install`, `npm ci --ignore-scripts && npm run build`, `php artisan test`.
+Fejlesztéshez PHP 8.4+ (8.5-tel tesztelve), Composer 2 és Node.js LTS kell: `composer install`, `npm ci --ignore-scripts && npm run build`, `php artisan test`.
 
 A repó minden kiadáskor a karbantartók fejlesztési repójából frissül. Hibajegyet szívesen fogadunk. A változtatások a fejlesztési repóban készülnek és a következő kiadással jelennek meg, ezért beolvasztási kérést (pull request) itt közvetlenül nem olvasztunk be.
 
