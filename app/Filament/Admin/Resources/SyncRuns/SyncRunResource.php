@@ -58,7 +58,22 @@ class SyncRunResource extends BaseResource
                 TextEntry::make('stats.samples.closed')->label(__('Closed (sample)'))->listWithLineBreaks()->placeholder('-')->columnSpanFull(),
                 TextEntry::make('stats.samples.closing_next')->label(__('Closes at the next sync (sample)'))->listWithLineBreaks()->placeholder('-')->columnSpanFull()
                     ->helperText(__('Records absent from this run that one more absent run makes missing, closing their accounts.')),
+                TextEntry::make('stats.samples.kind_pending')->label(__('Classification changing (sample)'))->listWithLineBreaks()->placeholder('-')->columnSpanFull()
+                    ->visible(fn (SyncRun $record) => ($record->stats['kind_pending'] ?? 0) > 0)
+                    ->helperText(__('Records whose e-mail domain now belongs to the other list; the old account closes once the new classification was seen in as many runs in a row as the missed-runs threshold.')),
+                TextEntry::make('stats.samples.kind_changed')->label(__('Classification changed (sample)'))->listWithLineBreaks()->placeholder('-')->columnSpanFull()
+                    ->visible(fn (SyncRun $record) => ($record->stats['kind_changed'] ?? 0) > 0)
+                    ->helperText(__('The old account was closed in this run; a staff account is not created automatically, a client account is.')),
             ]),
+            RepeatableEntry::make('stats.email_conflict_samples')->label(__('E-mail conflicts (first :n)', ['n' => 50]))->columnSpanFull()
+                ->visible(fn (SyncRun $record) => ($record->stats['email_conflicts'] ?? 0) > 0)
+                ->helperText(__('The directory renamed the address to one another account already holds. The account kept its old address and cannot sign in until the duplicate is resolved; see the operations manual.'))
+                ->schema([
+                    TextEntry::make('external_id')->label(__('External id')),
+                    TextEntry::make('kind')->label(__('Classification'))->formatStateUsing(fn ($state) => $state === 'user' ? __('Staff') : __('Client')),
+                    TextEntry::make('email')->label(__('New e-mail in EMD')),
+                    TextEntry::make('kept')->label(__('Address kept')),
+                ])->columns(4),
             Section::make(__('EMD requests'))->description(__('Status codes of the ID list query and the export; the ID list status comes from the configured response path, or from HTTP when none is set.'))
                 ->visible(fn (SyncRun $record): bool => ! empty($record->stats['requests'] ?? null))->columns(3)->schema([
                     TextEntry::make('stats.requests.id_list.status')->label(__('ID list status code'))->placeholder('-')

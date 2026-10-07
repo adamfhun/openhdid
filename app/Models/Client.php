@@ -103,6 +103,20 @@ class Client extends Authenticatable implements Principal
         return $this->external_record_id !== null;
     }
 
+    /**
+     * Sponsoring depends on the implicit package alone: a sponsor that loses
+     * its implicit premium (directory sync or an admin edit) stops sponsoring
+     * the moment the change is saved, and its links end (ClientLinks).
+     */
+    protected static function booted(): void
+    {
+        static::updated(function (Client $client): void {
+            if ($client->wasChanged('implicit_package')) {
+                app(ClientLinks::class)->endLinksOfIneligibleSponsor($client);
+            }
+        });
+    }
+
     public function hasPin(): bool
     {
         return $this->pin_hash !== null;

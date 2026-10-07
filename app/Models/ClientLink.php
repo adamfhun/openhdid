@@ -14,7 +14,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * package. When the sponsor's account is closed, the linked accounts are
  * closed with it. Ended links are kept for the record.
  */
-#[Fillable(['sponsor_client_id', 'linked_client_id', 'created_by_user_id', 'ended_by_user_id', 'ended_at'])]
+#[Fillable(['sponsor_client_id', 'linked_client_id', 'created_by_user_id', 'ended_by_user_id', 'ended_at', 'ended_reason'])]
 class ClientLink extends Model
 {
     use Auditable;

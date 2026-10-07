@@ -84,7 +84,8 @@ class LinkedClientsRelationManager extends RelationManager
                     ->state(fn (ClientLink $record) => $record->linked?->isClosed() ? __('Closed (:r)', ['r' => __((string) $record->linked->closed_reason)]) : __('Open'))
                     ->color(fn (ClientLink $record) => $record->linked?->isClosed() ? 'danger' : 'success'),
                 TextColumn::make('created_at')->label(__('Linked on'))->dateTime()->description(fn (ClientLink $record) => $record->createdBy?->name),
-                TextColumn::make('ended_at')->label(__('Ended on'))->dateTime()->placeholder(__('active'))->description(fn (ClientLink $record) => $record->endedBy?->name),
+                TextColumn::make('ended_at')->label(__('Ended on'))->dateTime()->placeholder(__('active'))
+                    ->description(fn (ClientLink $record) => $record->endedBy?->name ?? ($record->ended_reason ? __('link-end.'.$record->ended_reason) : null)),
             ])
             ->filters([
                 TernaryFilter::make('active')->label(__('Active link'))->default(true)->queries(

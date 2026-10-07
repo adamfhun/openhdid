@@ -13,6 +13,7 @@ use App\Models\ClientPhoneNumber;
 use App\Models\ExternalRecord;
 use App\Models\User;
 use App\Support\PhoneNormalizer;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Keeps local accounts in step with an external record: clients are created
@@ -22,6 +23,18 @@ use App\Support\PhoneNormalizer;
 class AccountProvisioner
 {
     public const CLOSE_REASON_MISSING = 'sync.missing';
+
+    /** The record's classification (staff/client) changed; the old kind's account closed. */
+    public const CLOSE_REASON_KIND_CHANGED = 'sync.kind_changed';
+
+    /**
+     * E-mail changes the directory asked for that could not be applied,
+     * because another account already holds the address (one e-mail, one
+     * account). Drained by the run into its report.
+     *
+     * @var list<array{external_id: int, kind: string, email: string, kept: string}>
+     */
+    private array $emailConflicts = [];
 
     public function __construct(
         private readonly PhoneNormalizer $phones,
@@ -50,6 +63,36 @@ class AccountProvisioner
         }
 
         return $closed;
+    }
+
+    /**
+     * The record's classification changed for good: the account of the old
+     * kind closes (reopened by reopenIfClosedBySync() should the kind flip
+     * back), the new kind is provisioned by the usual syncAccount() call.
+     */
+    public function closeAccountOfKind(ExternalRecord $record, PrincipalType $oldKind): int
+    {
+        $principal = $oldKind === PrincipalType::Client ? $record->client : $record->user;
+
+        if (! $principal instanceof Principal || $principal->isClosed()) {
+            return 0;
+        }
+
+        $principal->close(self::CLOSE_REASON_KIND_CHANGED);
+        $this->auditor->record('account.closed', $principal, ['reason' => self::CLOSE_REASON_KIND_CHANGED, 'kind' => $record->kind->value]);
+
+        return 1;
+    }
+
+    /**
+     * @return list<array{external_id: int, kind: string, email: string, kept: string}>
+     */
+    public function takeEmailConflicts(): array
+    {
+        $conflicts = $this->emailConflicts;
+        $this->emailConflicts = [];
+
+        return $conflicts;
     }
 
     /**
@@ -85,15 +128,27 @@ class AccountProvisioner
             ]);
             $this->auditor->record('account.provisioned', $client, ['external_id' => $record->external_id]);
         } else {
+            // The directory may rename the address (same external id): the
+            // account follows it, unless another account already holds the
+            // new address. One e-mail belongs to one account at a time, so
+            // the old address stays and the conflict is reported; the login
+            // rule's e-mail match then refuses this client until it is sorted out.
+            $emailTaken = ! self::sameEmail($client->email, $record->email)
+                && Client::withTrashed()->where('email', $record->email)->whereKeyNot($client->id)->exists();
+
             $client->fill([
                 'name' => $record->name,
-                'email' => $record->email,
+                'email' => $emailTaken ? $client->email : $record->email,
                 'implicit_package' => $record->implicit_package,
                 'explicit_package' => $record->explicit_package,
             ]);
             $client->external_record_id = $record->id;
             $client->save();
             $this->overrides->endIfDirectoryCaughtUp($client);
+
+            if ($emailTaken) {
+                $this->noteEmailConflict($client, $record);
+            }
         }
 
         $this->reopenIfClosedBySync($client);
@@ -130,6 +185,20 @@ class AccountProvisioner
             }
         }
 
+        // Admins own the staff account, but the login rule compares its e-mail
+        // with the record's: a renamed address would lock the colleague out,
+        // so the sync follows the directory here too (same conflict rule as
+        // for clients).
+        if (! self::sameEmail($user->email, $record->email)) {
+            if (User::withTrashed()->where('email', $record->email)->whereKeyNot($user->id)->exists()) {
+                $this->noteEmailConflict($user, $record);
+            } else {
+                $from = $user->email;
+                $user->forceFill(['email' => $record->email])->save();
+                $this->auditor->record('account.email_changed', $user, ['from' => $from, 'to' => $record->email, 'external_id' => $record->external_id]);
+            }
+        }
+
         $this->reopenIfClosedBySync($user);
 
         return $user;
@@ -137,10 +206,37 @@ class AccountProvisioner
 
     private function reopenIfClosedBySync(Principal $principal): void
     {
-        if ($principal->isClosed() && $principal->closed_reason === self::CLOSE_REASON_MISSING) {
-            $principal->reopen();
-            $this->auditor->record('account.reopened', $principal, ['reason' => 'sync.reappeared']);
+        if (! $principal->isClosed()) {
+            return;
         }
+
+        $why = match ($principal->closed_reason) {
+            self::CLOSE_REASON_MISSING => 'sync.reappeared',
+            self::CLOSE_REASON_KIND_CHANGED => 'sync.kind_restored',
+            default => null,
+        };
+
+        if ($why !== null) {
+            $principal->reopen();
+            $this->auditor->record('account.reopened', $principal, ['reason' => $why]);
+        }
+    }
+
+    private static function sameEmail(?string $a, ?string $b): bool
+    {
+        return mb_strtolower(trim((string) $a)) === mb_strtolower(trim((string) $b));
+    }
+
+    /**
+     * Audited on the account, logged for the operator and reported on the
+     * run; the account keeps its current address.
+     */
+    private function noteEmailConflict(Principal $principal, ExternalRecord $record): void
+    {
+        $context = ['external_id' => $record->external_id, 'kind' => $record->kind->value, 'email' => $record->email, 'kept' => $principal->getEmail()];
+        $this->emailConflicts[] = $context;
+        $this->auditor->record('sync.email_conflict', $principal, $context);
+        Log::warning('EMD sync: the directory renamed an account e-mail to an address another account already holds; the old address was kept.', $context);
     }
 
     /**

@@ -92,8 +92,8 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.5 · 2026. október 6.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.2.1 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.8 · 2026. október 7.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.3.0 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.3, felhasználói kézikönyv 1.30</span></div>
 </div>
@@ -163,21 +163,21 @@ a { color: var(--accent); }
 <h2 id="s3"><span class="num">3</span>Telepítés lépésről lépésre</h2>
 <p>A példák a <code>/opt/openhdid</code> mappát használják. A parancsokat Docker-jogosultságú felhasználó futtatja; az alkalmazás maga nem root felhasználóként fut.</p>
 <ol class="steps">
-<li><strong>A telepítési fájlok letöltése</strong> a választott kiadásból. A mappa tulajdonosa a parancsokat futtató fiók (<code>id -un</code>; a <code>$USER</code> változót nem minden shell állítja be). A <code>.env</code> és a <code>db.env</code> titkokat tartalmaz, ezért csak a tulajdonos olvashatja:
+<li><strong>A telepítési fájlok letöltése</strong> a legfrissebb kiadásból. A kiadások böngészhető oldala a <code>https://github.com/adamfhun/openhdid/releases/latest</code>; a lenti alapcím mindig a legfrissebb kiadás mellékleteire mutat, egy adott verzió a <code>https://github.com/adamfhun/openhdid/releases/download/v&lt;verzió&gt;</code> alapcímmel választható. Az alapcím önmagában nem megnyitható oldal (404-et ad), csak a fájlnévvel együtt él. A mappa tulajdonosa a parancsokat futtató fiók (<code>id -un</code>; a <code>$USER</code> változót nem minden shell állítja be). A <code>.env</code> és a <code>db.env</code> titkokat tartalmaz, ezért csak a tulajdonos olvashatja:
 <pre><code>sudo mkdir -p /opt/openhdid &amp;&amp; sudo chown "$(id -un)" /opt/openhdid &amp;&amp; cd /opt/openhdid
-base=https://github.com/adamfhun/openhdid/releases/download/v1.2.1
+base=https://github.com/adamfhun/openhdid/releases/latest/download
 curl -fsSL -O "$base/compose.yaml"
 curl -fsSL -o .env "$base/env.example"
 curl -fsSL -o db.env "$base/db.env.example"
 chmod 600 .env db.env</code></pre></li>
 <li><strong>Kötelező értékek a <code>.env</code> fájlban:</strong>
 <ul>
-    <li><code>OPENHDID_VERSION</code> (például <code>1.2.1</code>);</li>
+    <li><code>OPENHDID_VERSION</code>: a letöltött kiadás pontos verziószáma a Releases oldalról (nem <code>latest</code>);</li>
     <li><code>APP_URL</code>: a webhely HTTPS-címe, ebből képződik a kiszolgálónév is;</li>
     <li><code>DB_PASSWORD</code>: a futási adatbázis-fiók jelszava;</li>
     <li>a levelezés, az SMS és az ügyféltörzs beállításai (5. fejezet).</li>
 </ul>
-A <code>db.env</code> fájlban a <code>MARIADB_ROOT_PASSWORD</code> és a migrációs fiók jelszava (<code>DB_PASSWORD</code>) kell. Mindhárom jelszó egyedi, hosszú és véletlenszerű legyen, például <code>openssl rand -base64 32</code>.</li>
+A <code>db.env</code> fájlban a <code>MARIADB_ROOT_PASSWORD</code> és a migrációs fiók jelszava (<code>DB_PASSWORD</code>) kell. Mindhárom jelszó egyedi, hosszú és véletlenszerű legyen, például <code>openssl rand -base64 32</code>. Mindhárom titok fájlból is megadható (<code>MARIADB_ROOT_PASSWORD_FILE</code>, <code>DB_PASSWORD_FILE</code> a <code>db.env</code>-ben és a <code>.env</code>-ben), lásd a 4. fejezet „Titkok fájlból” pontját.</li>
 <li><strong>Alkalmazáskulcs.</strong> Egyszer kell létrehozni. A kimenetet írja a <code>.env</code> <code>APP_KEY</code> sorába, és őrizze meg a mentésektől elkülönített, védett helyen:
 <pre><code>docker compose run --rm --no-deps web key</code></pre>
 A kulccsal titkosított adatok (biztonsági válaszok, kódmásolatok, API-tokenek) nélküle nem olvashatók vissza. Meglévő telepítésen soha ne cserélje.</li>
@@ -216,7 +216,7 @@ docker compose exec web php artisan hdid:api-key:create "Prémium telefonközpon
 <ol class="steps">
 <li><strong>Átadás.</strong> A Compose a <code>.env</code> minden sorát környezeti változóként adja át a konténereknek (<code>env_file</code>). Ugyanebből a fájlból olvassa a saját változóit is (<code>OPENHDID_VERSION</code>, portok, profilok). A <code>db.env</code>-t csak a <code>mariadb</code> és a <code>migrate</code> szolgáltatás kapja meg. A konténeren belül nincs <code>.env</code> fájl, a Laravel a folyamat környezetét olvassa.</li>
 <li><strong>Biztonságos alapértékek.</strong> Az image-ben beállított alapértékek: <code>APP_ENV=production</code>, <code>APP_DEBUG=false</code>, <code>LOG_CHANNEL=stderr</code>. Amit a <code>.env</code> nem ad meg, az ezekkel indul.</li>
-<li><strong>Titkok fájlból.</strong> Bármely változó megadható fájlként is: <code>NÉV_FILE=/run/secrets/…</code>. Indításkor a <code>NÉV</code> változó a fájl tartalmát kapja; ha a kettőt egyszerre adja meg, az hiba. Docker- és Kubernetes-titkokhoz ajánlott, mert a sima környezeti változót a <code>docker inspect</code> megmutatja.</li>
+<li><strong>Titkok fájlból.</strong> Bármely változó megadható fájlként is: <code>NÉV_FILE=/run/secrets/…</code>. Indításkor a <code>NÉV</code> változó a fájl tartalmát kapja; ha a kettőt egyszerre adja meg, az hiba. Docker- és Kubernetes-titkokhoz ajánlott, mert a sima környezeti változót a <code>docker inspect</code> megmutatja. Ugyanez érvényes a beépített MariaDB fiókjaira: a <code>db.env</code>-ben a <code>MARIADB_ROOT_PASSWORD_FILE</code> és a migrációs fiók <code>DB_PASSWORD_FILE</code> (vagy <code>DB_USERNAME_FILE</code>) kulcsa, a <code>.env</code>-ben a futási fiók <code>DB_PASSWORD_FILE</code> kulcsa használható; az első induláskor a fiókkészítő szkript a fájlok tartalmával hozza létre a fiókokat. A titokfájlt ekkor a <code>mariadb</code> és a <code>migrate</code> konténerbe is csatolni kell ugyanazon az útvonalon (Compose <code>secrets</code> vagy kötet), nem csak az alkalmazás-konténerekbe.</li>
 <li><strong>Ellenőrzés induláskor.</strong> Minden szerepkör indulásakor az indítószkript megnézi a kötelező értékeket, és hibás beállítással a konténer érthető hibaüzenettel leáll (<code>docker compose logs</code>). Hibának számít:
 <ul>
     <li>az érvénytelen <code>APP_KEY</code>;</li>
@@ -236,7 +236,7 @@ Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, vala
 <div class="tablewrap"><table>
 <thead><tr><th>Kulcs</th><th>Alapérték</th><th>Jelentés</th></tr></thead>
 <tbody>
-<tr><td><code>OPENHDID_VERSION</code></td><td>–</td><td>A futtatott image verziója. Élesben mindig pontos verzió (<code>1.2.1</code>), ne <code>latest</code>.</td></tr>
+<tr><td><code>OPENHDID_VERSION</code></td><td>–</td><td>A futtatott image verziója. Élesben mindig pontos verziószám (a Releases oldal szerinti kiadás), ne <code>latest</code>.</td></tr>
 <tr><td><code>COMPOSE_PROFILES</code></td><td><code>db</code></td><td>Választható szolgáltatások: <code>db</code> beépített MariaDB, <code>redis</code> Valkey. Külső adatbázisnál üres.</td></tr>
 <tr><td><code>OPENHDID_BIND_IP</code></td><td><code>0.0.0.0</code></td><td>A gazdagép címe, amelyen a 80-as és 443-as port figyel (6.1 pont).</td></tr>
 <tr><td><code>OPENHDID_HTTPS_PORT</code>, <code>OPENHDID_HTTP_PORT</code></td><td><code>443</code>, <code>80</code></td><td>A gazdagép portjai; a konténerben mindig 8443 és 8080.</td></tr>
@@ -343,7 +343,7 @@ OPENHDID_HTTP_PORT=80</code></pre>
 </ul>
 <p><strong>Ki melyik fiókot használja.</strong> A web, a worker és a scheduler csak a futási fiókot látja, sémát nem módosíthat. A migrációk a migrációs fiókkal futnak.</p>
 <p><strong>Kiszolgálóbeállítás.</strong> Karakterkészlet, <code>skip-name-resolve</code>, puffer (<code>OPENHDID_DB_BUFFER_POOL</code>, a gép memóriájának 25–50%-a) és kapcsolatszám (<code>OPENHDID_DB_MAX_CONNECTIONS</code>).</p>
-<div class="callout"><p><strong>Csak az első induláskor.</strong> A fiókokat és az adatbázist a MariaDB az üres kötet első indításakor hozza létre. Jelszócseréhez később a <code>mariadb</code> konténerben <code>ALTER USER</code> kell, és a <code>.env</code>/<code>db.env</code> ezzel egyezzen.</p></div>
+<div class="callout"><p><strong>Csak az első induláskor.</strong> A fiókokat és az adatbázist a MariaDB az üres kötet első indításakor hozza létre. Jelszócseréhez később a <code>mariadb</code> konténerben <code>ALTER USER</code> kell, és a <code>.env</code>/<code>db.env</code> ezzel egyezzen. Fájlból adott titoknál (<code>*_FILE</code>) a fájl tartalma számít, ezért jelszócserénél a fájlt és az adatbázis-fiókot együtt kell módosítani.</p></div>
 <h3>7.2 Külső adatbázis</h3>
 <p>A <code>COMPOSE_PROFILES</code> üres (vagy csak <code>redis</code>). A <code>DB_HOST</code> a kiszolgáló neve. Az adatbázist és a két fiókot előre kell létrehozni:</p>
 <pre><code>CREATE DATABASE openhdid CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -374,7 +374,7 @@ GRANT ALL PRIVILEGES ON openhdid.* TO 'openhdid_migrate'@'10.0.0.%';</code></pre
 <tbody>
 <tr><td>percenként</td><td>lejárt azonosítási munkamenetek zárása; ütemező- és sor-életjel; elakadt kimenő üzenetek újrasorolása</td></tr>
 <tr><td>15 percenként</td><td><code>hdid:emd-sync-token</code> az ügyféltörzs API-tokenjének frissentartása (fájlos illesztő és bekapcsolt <code>EMD_SYNC_TOKEN_KEEP_ALIVE</code> mellett)</td></tr>
-<tr><td>óránként</td><td>lejárt csomag-felülírások zárása; befejezett hívások tisztítása; végesemény nélkül maradt hívások lezárása</td></tr>
+<tr><td>óránként</td><td>lejárt csomag-felülírások zárása; befejezett hívások tisztítása; végesemény nélkül maradt hívások lezárása; a főügyfél-jogosultságukat vesztett ügyfelek kapcsolatainak megszüntetése (védőháló, a csomagváltozás mentésekor azonnal lefut)</td></tr>
 <tr><td>naponta 03:30</td><td><code>hdid:prune</code> adatmegőrzési tisztítás</td></tr>
 <tr><td><code>EMD_SYNC_CRON</code> szerint</td><td><code>hdid:emd-sync</code> teljes ügyféltörzs-átvétel (alapból 3 óránként)</td></tr>
 </tbody></table></div>
@@ -455,7 +455,7 @@ docker compose logs -f --tail=100 worker            # élő követés</code></pr
 <ul class="check">
     <li><code>docker compose ps</code>: a <code>web</code> <code>healthy</code>, a <code>worker</code>, <code>sync-worker</code>, <code>scheduler</code> és <code>mariadb</code> fut, a <code>migrate</code> <code>exited (0)</code>.</li>
     <li><code>docker compose exec web php artisan hdid:health</code> kilépési kódja 0; a Rendszerállapot oldalon az adatbázis, gyorsítótár, üzenetsor és ütemező zöld (az ütemező az első percben még piros lehet). Ha az ügyféltörzs API-belépése nincs beállítva (csak fájlimport), a „Belépés az ügyféltörzs API-jába” csempe piros marad, és a kód 2.</li>
-    <li>A <em>Rendszerállapot</em> fejlécében a futó verzió látszik (például „Verzió: 1.2.1”).</li>
+    <li>A <em>Rendszerállapot</em> fejlécében a futó verzió látszik (a telepített kiadás száma, „Verzió: …”).</li>
     <li>Próbalevél és próba-SMS megérkezik; a <em>Kimenő üzenetek</em> listában „elküldve”.</li>
     <li>Az ügyféltörzs próbafuttatása hihető számokat ad, az éles átvétel sikeres.</li>
     <li>Egy ügyfélnek küldött belépési hivatkozás beléptet a portálra; bekapcsolt SSO-nál a belépés végigmegy.</li>
@@ -515,7 +515,7 @@ docker compose ps</code></pre>
     A <code>migrate</code> lefuttatja az új migrációkat, utána a szolgáltatások az új image-dzsel indulnak újra. Egyetlen webpéldánynál ez néhány másodperces kiesés; kiesés nélküli frissítéshez több példány kell terheléselosztó mögött.</li>
     <li>Ellenőrzés a 12.1 pont szerint.</li>
 </ol>
-<p>A platform frissítése (PHP, nginx, OpenSSL, Alpine) új javítóverzióként jelenik meg, a frissítés menete ugyanez. A kiadott címkék (például <code>1.2.1</code>) soha nem változnak, ezért egy telepítés mindig pontosan reprodukálható.</p>
+<p>A platform frissítése (PHP, nginx, OpenSSL, Alpine) új javítóverzióként jelenik meg, a frissítés menete ugyanez. A kiadott címkék soha nem változnak, ezért egy telepítés mindig pontosan reprodukálható.</p>
 
 <h2 id="roviditesek">Rövidítésjegyzék</h2>
 <div class="tablewrap"><table>
@@ -539,7 +539,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.5 · 2026. október 6. · OpenHDID 1.2.1</div>
+<div class="foot">OpenHDID telepítési útmutató 1.8 · 2026. október 7. · OpenHDID 1.3.0</div>
 </div>
 
 </body>

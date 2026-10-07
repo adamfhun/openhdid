@@ -39,8 +39,14 @@ class SyncExternalRecordsCommand extends Command
             }
         }
 
-        foreach ($run->stats['samples']['closing_next'] ?? [] as $line) {
-            $this->line("  Closes at the next sync: {$line}");
+        foreach (['closing_next' => 'Closes at the next sync', 'kind_pending' => 'Classification changing', 'kind_changed' => 'Classification changed'] as $key => $label) {
+            foreach ($run->stats['samples'][$key] ?? [] as $line) {
+                $this->line("  {$label}: {$line}");
+            }
+        }
+
+        foreach ($run->stats['email_conflict_samples'] ?? [] as $conflict) {
+            $this->components->warn('E-mail conflict: external id '.$conflict['external_id'].' wants '.$conflict['email'].', kept '.$conflict['kept'].' (another account holds the new address)');
         }
 
         foreach (array_slice($run->skipped_rows ?? [], 0, 10) as $row) {

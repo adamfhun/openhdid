@@ -10,6 +10,8 @@ use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\ClientLink;
 use App\Models\User;
+use App\Settings\SettingKey;
+use App\Settings\Settings;
 use App\Sync\AccountProvisioner;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
@@ -156,4 +158,63 @@ it('closes a sponsor and its linked clients before the sponsor row is removed fr
         ->and(Client::withTrashed()->find($sponsor->id)->isClosed())->toBeTrue()
         ->and($dependent->fresh()->isClosed())->toBeTrue()
         ->and($dependent->fresh()->closed_reason)->toBe('sponsor_closed');
+});
+
+it('ends the links when an admin changes the sponsor implicit package to a standard one', function (): void {
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $dependent = Client::factory()->synced()->create(['implicit_package' => 'Basic', 'explicit_package' => 'Premium']);
+    $link = $links->link($sponsor, $dependent);
+
+    $sponsor->update(['implicit_package' => 'Basic']);
+
+    expect($link->fresh()->isActive())->toBeFalse()
+        ->and($link->fresh()->ended_reason)->toBe(ClientLinks::END_REASON_SPONSOR_INELIGIBLE)
+        ->and($dependent->fresh()->isClosed())->toBeFalse('the dependent keeps its own entitlement')
+        ->and($links->isMissingSponsor($dependent->fresh()))->toBeTrue()
+        ->and(AuditLog::query()->where('event', 'client.unlinked')->where('subject_id', $dependent->id)->exists())->toBeTrue();
+});
+
+it('ends the links of every sponsor whose package left the premium list, by the hourly sweep', function (): void {
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $dependent = Client::factory()->synced()->create(['implicit_package' => 'Basic', 'explicit_package' => 'Premium']);
+    $link = $links->link($sponsor, $dependent);
+
+    app(Settings::class)->set(SettingKey::PackagesPremium, ['Gold']);
+    expect($link->fresh()->isActive())->toBeTrue('a settings change alone does not touch links until the sweep');
+
+    expect($links->endLinksOfIneligibleSponsors())->toBe(1)
+        ->and($link->fresh()->ended_reason)->toBe(ClientLinks::END_REASON_SPONSOR_INELIGIBLE)
+        ->and($dependent->fresh()->isClosed())->toBeFalse();
+});
+
+it('asks for confirmation on the client form before ending links by changing the sponsor package, and refuses a plain submit', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    Filament::setCurrentPanel('admin');
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $dependent = Client::factory()->synced()->create(['implicit_package' => 'Basic', 'explicit_package' => 'Premium']);
+    $link = $links->link($sponsor, $dependent);
+
+    // A plain form submit (Enter) is refused with a warning; nothing changes.
+    Livewire::test(EditClient::class, ['record' => $sponsor->id])
+        ->fillForm(['implicit_package' => 'Basic'])
+        ->call('save')
+        ->assertNotified(__('Confirm the change with the Save button'));
+    expect($sponsor->fresh()->implicit_package)->toBe('Premium')->and($link->fresh()->isActive())->toBeTrue();
+
+    // The Save button asks first, then saves and ends the link.
+    Livewire::test(EditClient::class, ['record' => $sponsor->id])
+        ->fillForm(['implicit_package' => 'Basic'])
+        ->mountAction('save')
+        ->assertActionMounted('save')
+        ->assertMountedActionModalSee(__('End the links of this sponsor?'))
+        ->callMountedAction()
+        ->assertHasNoFormErrors();
+    expect($sponsor->fresh()->implicit_package)->toBe('Basic')
+        ->and($link->fresh()->isActive())->toBeFalse()
+        ->and($link->fresh()->ended_reason)->toBe(ClientLinks::END_REASON_SPONSOR_INELIGIBLE)
+        ->and($dependent->fresh()->isClosed())->toBeFalse();
 });

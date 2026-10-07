@@ -1,6 +1,7 @@
 <?php
 
 use App\CallCenter\CallCenterService;
+use App\Clients\ClientLinks;
 use App\Clients\PackageOverrides;
 use App\Identification\QaSessionEngine;
 use App\Jobs\QueueHeartbeat;
@@ -27,6 +28,12 @@ Schedule::call(fn () => app(QaSessionEngine::class)->expireStale())
 Schedule::call(fn () => app(PackageOverrides::class)->endExpired())
     ->hourly()
     ->name('hdid:expire-package-overrides');
+
+// A sponsor whose package left the premium list (settings change) stops sponsoring.
+Schedule::call(fn () => app(ClientLinks::class)->endLinksOfIneligibleSponsors())
+    ->hourly()
+    ->name('hdid:end-stale-links')
+    ->withoutOverlapping();
 
 Schedule::call(fn () => app(CallCenterService::class)->pruneEnded())
     ->hourly()

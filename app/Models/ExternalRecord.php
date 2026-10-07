@@ -18,7 +18,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * A row from the external directory (API / CSV / XLSX). Both Users and
  * Clients come from the same source; `kind` is decided by the company filter.
  */
-#[Fillable(['external_id', 'kind', 'company', 'title', 'department', 'login_name', 'room', 'employment_status', 'name', 'email', 'email_domain', 'implicit_package', 'explicit_package', 'phones', 'attributes', 'first_seen_run_id', 'last_seen_run_id', 'last_seen_at', 'missed_runs', 'missing_since'])]
+#[Fillable(['external_id', 'kind', 'company', 'title', 'department', 'login_name', 'room', 'employment_status', 'name', 'email', 'email_domain', 'implicit_package', 'explicit_package', 'phones', 'attributes', 'first_seen_run_id', 'last_seen_run_id', 'last_seen_at', 'missed_runs', 'missing_since', 'pending_kind', 'pending_kind_runs'])]
 class ExternalRecord extends Model
 {
     use Auditable;
@@ -43,7 +43,7 @@ class ExternalRecord extends Model
      *
      * @var list<string>
      */
-    protected array $auditExclude = ['first_seen_run_id', 'last_seen_run_id', 'last_seen_at', 'missed_runs'];
+    protected array $auditExclude = ['first_seen_run_id', 'last_seen_run_id', 'last_seen_at', 'missed_runs', 'pending_kind_runs'];
 
     protected function casts(): array
     {
@@ -54,6 +54,8 @@ class ExternalRecord extends Model
             'phones' => 'array',
             'attributes' => 'array',
             'missed_runs' => 'integer',
+            'pending_kind' => PrincipalType::class,
+            'pending_kind_runs' => 'integer',
             'missing_since' => 'datetime',
         ];
     }

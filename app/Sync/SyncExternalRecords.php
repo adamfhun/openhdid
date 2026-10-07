@@ -167,8 +167,13 @@ class SyncExternalRecords
         $stats['preview'] = [];
         $stats['invalid_phones'] = 0;
         $stats['phone_warnings'] = [];
+        $stats['email_conflicts'] = 0;
+        $stats['email_conflict_samples'] = [];
+        $stats['kind_pending'] = 0;
+        $stats['kind_changed'] = 0;
         $skipped = [];
-        $samples = ['created' => [], 'closed' => []];
+        $samples = ['created' => [], 'closed' => [], 'kind_pending' => [], 'kind_changed' => []];
+        $kindThreshold = max(1, $this->settings->int(SettingKey::SyncMissedRunsBeforeClose));
         /** @var array<int, true> $seen external identifiers already imported in this run */
         $seen = [];
         /** @var array<string, true> $seenEmails e-mail addresses already imported in this run */
@@ -222,6 +227,10 @@ class SyncExternalRecords
                     }
                     $seenEmails[$email] = true;
 
+                    $record = ExternalRecord::query()->withTrashed()->firstOrNew(['external_id' => $item->externalId]);
+                    $isNew = ! $record->exists;
+                    [$kind, $oldKind] = $this->settleKind($record, $kind, $kindThreshold, $stats, $samples, $item);
+
                     $stats['incoming'][$kind === PrincipalType::User ? 'users' : 'clients']++;
                     if (count($stats['preview']) < 10) {
                         $stats['preview'][] = [
@@ -229,9 +238,6 @@ class SyncExternalRecords
                             'email' => $item->email, 'kind' => $kind->value,
                         ];
                     }
-
-                    $record = ExternalRecord::query()->withTrashed()->firstOrNew(['external_id' => $item->externalId]);
-                    $isNew = ! $record->exists;
 
                     $record->fill([
                         'kind' => $kind,
@@ -266,9 +272,20 @@ class SyncExternalRecords
                         $samples['created'][] = $item->name.' <'.$item->email.'>';
                     }
 
+                    if ($oldKind !== null) {
+                        $this->provisioner->closeAccountOfKind($record, $oldKind);
+                    }
+
                     $principal = $this->provisioner->syncAccount($record);
                     if ($principal instanceof Client && $principal->wasRecentlyCreated) {
                         $stats['provisioned']++;
+                    }
+
+                    foreach ($this->provisioner->takeEmailConflicts() as $conflict) {
+                        $stats['email_conflicts']++;
+                        if (count($stats['email_conflict_samples']) < self::SKIPPED_SAMPLE_SIZE) {
+                            $stats['email_conflict_samples'][] = $conflict;
+                        }
                     }
                 }
 
@@ -320,6 +337,49 @@ class SyncExternalRecords
         $details = $reader->details();
 
         return $details === [] ? $stats : $stats + ['requests' => $details];
+    }
+
+    /**
+     * A record whose e-mail domain moved it to the other list (staff and
+     * client) keeps its old kind for the configured number of consecutive
+     * runs, so a passing directory error does not close an account at once;
+     * the switch is final once the new kind was seen that many runs in a
+     * row (the same threshold as for a missing record).
+     *
+     * @param  array<string, mixed>  $stats
+     * @param  array<string, list<string>>  $samples
+     * @return array{0: PrincipalType, 1: ?PrincipalType} [kind to store, the old kind when the switch happens in this run]
+     */
+    private function settleKind(ExternalRecord $record, PrincipalType $classified, int $threshold, array &$stats, array &$samples, ExternalRecordDto $item): array
+    {
+        if (! $record->exists || $record->kind === $classified) {
+            $record->pending_kind = null;
+            $record->pending_kind_runs = 0;
+
+            return [$classified, null];
+        }
+
+        $record->pending_kind_runs = $record->pending_kind === $classified ? $record->pending_kind_runs + 1 : 1;
+        $record->pending_kind = $classified;
+
+        if ($record->pending_kind_runs < $threshold) {
+            $stats['kind_pending']++;
+            if (count($samples['kind_pending']) < self::CHANGE_SAMPLE_SIZE) {
+                $samples['kind_pending'][] = $item->name.' <'.$item->email.'> ('.$record->pending_kind_runs.'/'.$threshold.')';
+            }
+
+            return [$record->kind, null];
+        }
+
+        $old = $record->kind;
+        $record->pending_kind = null;
+        $record->pending_kind_runs = 0;
+        $stats['kind_changed']++;
+        if (count($samples['kind_changed']) < self::CHANGE_SAMPLE_SIZE) {
+            $samples['kind_changed'][] = $item->name.' <'.$item->email.'>';
+        }
+
+        return [$classified, $old];
     }
 
     private function normalizePhones(ExternalRecordDto $item, array &$stats): array

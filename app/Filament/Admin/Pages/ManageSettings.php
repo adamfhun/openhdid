@@ -3,6 +3,8 @@
 namespace App\Filament\Admin\Pages;
 
 use App\Auth\Permission;
+use App\Clients\ClientLinks;
+use App\Clients\PackageListImpact;
 use App\Enums\ClientTier;
 use App\Filament\Admin\Clusters\System;
 use App\Identification\MobileOtpService;
@@ -128,6 +130,7 @@ class ManageSettings extends Page
         }
 
         $this->validateValues($values);
+        $impact = $this->assertPackageListsUsable($values);
         $selection = $this->canManageSync() ? array_map('strval', array_values((array) ($state[self::ID_LIST_FIELD] ?? []))) : null;
         $this->assertIdSelectionUsable($values, $selection);
 
@@ -137,6 +140,9 @@ class ManageSettings extends Page
         $replaced = $this->replacedImages($settings, $values);
         $settings->setMany($values);
         $this->deleteImages($replaced);
+        // Entitlement follows the lists at once; the links of sponsors whose
+        // package left the premium list end now, not at the hourly sweep.
+        $endedLinks = $impact['changed'] ? app(ClientLinks::class)->endLinksOfIneligibleSponsors() : 0;
         if ($selection !== null) {
             app(IdList::class)->select($selection);
         }
@@ -144,7 +150,50 @@ class ManageSettings extends Page
             $this->data[static::fieldName($key)] = $settings->array($key);
         }
 
-        Notification::make()->title(__('Settings saved'))->success()->send();
+        $saved = Notification::make()->title(__('Settings saved'))->success();
+        if ($endedLinks > 0 || $impact['downgraded']['count'] > 0 || $impact['upgraded']['count'] > 0) {
+            $saved->body(__('Package lists applied: :links link(s) ended, :down client(s) moved to the standard tier, :up to premium.', [
+                'links' => $endedLinks, 'down' => $impact['downgraded']['count'], 'up' => $impact['upgraded']['count'],
+            ]))->persistent();
+        }
+        $saved->send();
+    }
+
+    /**
+     * Hard errors of the package lists: a name on both lists, or open
+     * clients whose package would be on neither list (they would lose
+     * portal access at once). The impact is returned for the post-save report.
+     *
+     * @param  array<string, mixed>  $values  keyed by SettingKey value
+     * @return array<string, mixed>
+     */
+    private function assertPackageListsUsable(array $values): array
+    {
+        $impact = app(PackageListImpact::class)->estimate(
+            (array) ($values[SettingKey::PackagesPremium->value] ?? []),
+            (array) ($values[SettingKey::PackagesStandard->value] ?? []),
+        );
+        $errors = app(PackageListImpact::class)->errors($impact);
+
+        if ($errors !== []) {
+            Notification::make()->title(__('Settings not saved'))->body(implode(' ', $errors))->danger()->persistent()->send();
+            throw ValidationException::withMessages(['data.'.static::fieldName(SettingKey::PackagesPremium) => $errors]);
+        }
+
+        return $impact;
+    }
+
+    /**
+     * The package-list impact of the form as it stands (for the confirmation).
+     *
+     * @return array<string, mixed>
+     */
+    private function packageImpact(): array
+    {
+        return app(PackageListImpact::class)->estimate(
+            (array) ($this->data[static::fieldName(SettingKey::PackagesPremium)] ?? []),
+            (array) ($this->data[static::fieldName(SettingKey::PackagesStandard)] ?? []),
+        );
     }
 
     /**
@@ -235,13 +284,18 @@ class ManageSettings extends Page
      */
     public function saveAction(): Action
     {
+        $impact = app(PackageListImpact::class);
+
         return Action::make('save')->label(__('Save'))->keyBindings(['mod+s'])
-            ->requiresConfirmation(fn (): bool => $this->idListDeselections() !== [])
-            ->modalHeading(__('Stop sending these IDs?'))
-            ->modalDescription(fn (): string => __('These IDs will no longer be sent in the export: :list. Their EMD records stop arriving, and the linked accounts are closed after :runs missed syncs. Run a trial sync after saving to see the planned closures.', [
-                'list' => implode(', ', $this->idListDeselections()),
-                'runs' => app(Settings::class)->int(SettingKey::SyncMissedRunsBeforeClose),
-            ]))
+            ->requiresConfirmation(fn (): bool => $this->idListDeselections() !== [] || $impact->needsConfirmation($this->packageImpact()))
+            ->modalHeading(fn (): string => $this->idListDeselections() !== [] ? __('Stop sending these IDs?') : __('Apply the package list change?'))
+            ->modalDescription(fn (): string => implode(' ', array_filter([
+                $this->idListDeselections() !== [] ? __('These IDs will no longer be sent in the export: :list. Their EMD records stop arriving, and the linked accounts are closed after :runs missed syncs. Run a trial sync after saving to see the planned closures.', [
+                    'list' => implode(', ', $this->idListDeselections()),
+                    'runs' => app(Settings::class)->int(SettingKey::SyncMissedRunsBeforeClose),
+                ]) : null,
+                $impact->summary($this->packageImpact()),
+            ])))
             ->modalSubmitActionLabel(__('Save'))
             ->action(fn () => $this->save());
     }

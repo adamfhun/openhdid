@@ -22,6 +22,9 @@ class ClientLinks
 {
     public const CLOSE_REASON_SPONSOR = 'sponsor_closed';
 
+    /** Why a link ended on its own: the sponsor no longer has an implicit premium package. */
+    public const END_REASON_SPONSOR_INELIGIBLE = 'sponsor_ineligible';
+
     public function __construct(
         private readonly ClientTiers $tiers,
         private readonly Auditor $auditor,
@@ -166,14 +169,78 @@ class ClientLinks
         $this->auditor->record('client.link_warning_unmuted', $client, ['how' => $how], $by);
     }
 
-    public function unlink(ClientLink $link, ?User $by = null): void
+    public function unlink(ClientLink $link, ?User $by = null, ?string $reason = null): void
     {
         if (! $link->isActive()) {
             return;
         }
 
-        $link->forceFill(['ended_at' => now(), 'ended_by_user_id' => $by?->id])->save();
-        $this->auditor->record('client.unlinked', $link->linked, ['sponsor_id' => $link->sponsor_client_id, 'link_id' => $link->id], $by);
+        $link->forceFill(['ended_at' => now(), 'ended_by_user_id' => $by?->id, 'ended_reason' => $reason])->save();
+        $this->auditor->record('client.unlinked', $link->linked, array_filter(['sponsor_id' => $link->sponsor_client_id, 'link_id' => $link->id, 'reason' => $reason]), $by);
+    }
+
+    /**
+     * A link is only a way for a client to get a higher service level
+     * through a sponsor, and sponsoring rests on the sponsor's implicit
+     * premium package alone. When that package stops being premium (the
+     * directory sync or an admin changed it), every active link ends with
+     * END_REASON_SPONSOR_INELIGIBLE. The linked clients keep whatever their
+     * own packages entitle them to: a dependent closed only because the
+     * sponsor was closed reopens, unless the directory dropped it meanwhile
+     * (then it stays closed as missing, like in reopenLinkedClients()).
+     * Returns the number of links ended.
+     */
+    public function endLinksOfIneligibleSponsor(Client $sponsor): int
+    {
+        if ($this->tiers->hasImplicitPremium($sponsor)) {
+            return 0;
+        }
+
+        $ended = 0;
+
+        $sponsor->activeLinks()->with('linked.externalRecord')->get()->each(function (ClientLink $link) use ($sponsor, &$ended): void {
+            $this->unlink($link, null, self::END_REASON_SPONSOR_INELIGIBLE);
+            $ended++;
+
+            $linked = $link->linked;
+            if ($linked === null || ! $linked->isClosed() || $linked->closed_reason !== self::CLOSE_REASON_SPONSOR) {
+                return;
+            }
+
+            if ($linked->externalRecord?->isMissing()) {
+                $linked->forceFill(['closed_reason' => AccountProvisioner::CLOSE_REASON_MISSING])->save();
+                $this->auditor->record('account.kept_closed', $linked, ['reason' => AccountProvisioner::CLOSE_REASON_MISSING, 'sponsor_id' => $sponsor->id]);
+
+                return;
+            }
+
+            $linked->reopen();
+            $this->auditor->record('account.reopened', $linked, ['reason' => self::END_REASON_SPONSOR_INELIGIBLE, 'sponsor_id' => $sponsor->id]);
+        });
+
+        return $ended;
+    }
+
+    /**
+     * Sweep for the case the package change did not go through a client
+     * save: the premium package list itself changed in the settings.
+     * Returns the number of links ended.
+     */
+    public function endLinksOfIneligibleSponsors(): int
+    {
+        $premium = $this->tiers->packages(ClientTier::Premium);
+        $ended = 0;
+
+        Client::query()
+            ->whereHas('sponsoredLinks', fn (Builder $q) => $q->whereNull('ended_at'))
+            ->where(fn (Builder $q) => $q->whereNull('implicit_package')->orWhereNotIn(DB::raw('lower(trim(implicit_package))'), $premium))
+            ->chunkById(100, function ($sponsors) use (&$ended): void {
+                foreach ($sponsors as $sponsor) {
+                    $ended += $this->endLinksOfIneligibleSponsor($sponsor);
+                }
+            });
+
+        return $ended;
     }
 
     /**
@@ -202,6 +269,14 @@ class ClientLinks
      */
     public function reopenLinkedClients(Client $sponsor): int
     {
+        // Reopened without an implicit premium package (the directory changed
+        // it while the sponsor was away): it does not sponsor anyone any more.
+        if (! $this->tiers->hasImplicitPremium($sponsor)) {
+            $this->endLinksOfIneligibleSponsor($sponsor);
+
+            return 0;
+        }
+
         $count = 0;
 
         $sponsor->activeLinks()->with('linked.externalRecord')->get()->each(function (ClientLink $link) use (&$count): void {

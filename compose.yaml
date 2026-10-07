@@ -91,6 +91,9 @@ services:
       MARIADB_DATABASE: ${DB_DATABASE:-openhdid}
       OPENHDID_RUNTIME_USER: ${DB_USERNAME:-openhdid}
       OPENHDID_RUNTIME_PASSWORD: ${DB_PASSWORD:-}
+      # A futási fiók titka fájlból is jöhet (.env: DB_PASSWORD_FILE); a fájlt a mariadb konténerbe is csatolni kell.
+      OPENHDID_RUNTIME_USER_FILE: ${DB_USERNAME_FILE:-}
+      OPENHDID_RUNTIME_PASSWORD_FILE: ${DB_PASSWORD_FILE:-}
     configs:
       - source: mariadb-server
         target: /etc/mysql/conf.d/openhdid.cnf
@@ -138,8 +141,12 @@ configs:
 
   # First start only: the migration account may change the schema, the runtime
   # account used by web, worker and scheduler may only read and write rows.
+  # Every value may come from a file (NAME_FILE), resolved by the image's file_env helper.
   mariadb-accounts:
     content: |
+      for name in DB_USERNAME DB_PASSWORD OPENHDID_RUNTIME_USER OPENHDID_RUNTIME_PASSWORD; do
+        file_env "$$name"
+      done
       migrate_user="$$(docker_sql_escape_string_literal "$${DB_USERNAME}")"
       migrate_pass="$$(docker_sql_escape_string_literal "$${DB_PASSWORD}")"
       runtime_user="$$(docker_sql_escape_string_literal "$${OPENHDID_RUNTIME_USER}")"

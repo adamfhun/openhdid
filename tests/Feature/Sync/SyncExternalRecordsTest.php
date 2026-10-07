@@ -1,6 +1,9 @@
 <?php
 
+use App\Auth\AccountLogin;
+use App\Auth\LoginRejectedException;
 use App\Auth\Role;
+use App\Clients\ClientLinks;
 use App\Enums\PhoneNumberSource;
 use App\Enums\PhoneVerificationSource;
 use App\Enums\PrincipalType;
@@ -20,6 +23,7 @@ use App\Models\SyncRun;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\Sync\AccountProvisioner;
 use App\Sync\Contracts\SourceReader;
 use App\Sync\EmptySourceException;
 use App\Sync\ExternalRecordDto;
@@ -36,6 +40,7 @@ use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 /**
  * @param  list<ExternalRecordDto>  $rows
@@ -752,4 +757,152 @@ it('forecasts the accounts the next sync closes: run stats, EMD list, client and
     $dry = $sync->run(readerOf([row('1', 'a@x.hu'), row('4', 'c@x.hu')]), dryRun: true);
     expect($dry->stats['closing_next'])->toBe(2)
         ->and(ExternalRecord::query()->where('email', 'b@x.hu')->first()->missed_runs)->toBe(0);
+});
+
+function rowWithPackages(string $id, string $email, ?string $implicit, ?string $explicit, ?string $name = null): ExternalRecordDto
+{
+    return new ExternalRecordDto((int) $id, $name ?? 'Name '.$id, $email, 'Acme', [], [], $implicit, $explicit);
+}
+
+it('ends the links of a sponsor whose implicit package stops being premium and keeps the dependents open', function (): void {
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([rowWithPackages('1', 'fo@x.hu', 'Premium', null), rowWithPackages('2', 'kap@x.hu', 'Basic', 'Premium')]));
+    $sponsor = Client::query()->where('email', 'fo@x.hu')->first();
+    $dependent = Client::query()->where('email', 'kap@x.hu')->first();
+    $link = app(ClientLinks::class)->link($sponsor, $dependent);
+
+    // The directory moves the sponsor to a standard package; the dependent stays in the directory.
+    $sync->run(readerOf([rowWithPackages('1', 'fo@x.hu', 'Basic', null), rowWithPackages('2', 'kap@x.hu', 'Basic', 'Premium')]));
+
+    expect($link->fresh()->isActive())->toBeFalse()
+        ->and($link->fresh()->ended_reason)->toBe(ClientLinks::END_REASON_SPONSOR_INELIGIBLE)
+        ->and($dependent->fresh()->isClosed())->toBeFalse('a dependent keeps whatever its own packages entitle it to')
+        ->and($dependent->fresh()->sponsor())->toBeNull()
+        ->and(app(ClientLinks::class)->isMissingSponsor($dependent->fresh()))->toBeTrue('the warning applies again')
+        ->and(AuditLog::query()->where('event', 'client.unlinked')->where('subject_id', $dependent->id)->exists())->toBeTrue();
+});
+
+it('ends the links when a sponsor returns without implicit premium and reopens the dependents it had closed', function (): void {
+    app(Settings::class)->set(SettingKey::SyncMissedRunsBeforeClose, 1);
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([rowWithPackages('1', 'fo@x.hu', 'Premium', null), rowWithPackages('2', 'kap@x.hu', 'Basic', 'Premium'), rowWithPackages('3', 'masik@x.hu', 'Basic', 'Premium')]));
+    $sponsor = Client::query()->where('email', 'fo@x.hu')->first();
+    $present = Client::query()->where('email', 'kap@x.hu')->first();
+    $absent = Client::query()->where('email', 'masik@x.hu')->first();
+    app(ClientLinks::class)->link($sponsor, $present);
+    app(ClientLinks::class)->link($sponsor, $absent);
+
+    // The sponsor leaves the directory: it closes and takes its dependents with it.
+    $sync->run(readerOf([rowWithPackages('2', 'kap@x.hu', 'Basic', 'Premium'), rowWithPackages('3', 'masik@x.hu', 'Basic', 'Premium')]));
+    expect($sponsor->fresh()->closed_reason)->toBe('sync.missing')
+        ->and($present->fresh()->closed_reason)->toBe(ClientLinks::CLOSE_REASON_SPONSOR);
+
+    // It returns with a standard package, while the third client has left the directory meanwhile.
+    $sync->run(readerOf([rowWithPackages('1', 'fo@x.hu', 'Basic', null), rowWithPackages('2', 'kap@x.hu', 'Basic', 'Premium')]));
+
+    expect($sponsor->fresh()->isClosed())->toBeFalse()
+        ->and($sponsor->fresh()->activeLinks()->count())->toBe(0)
+        ->and($present->fresh()->isClosed())->toBeFalse('present in the directory: entitled on its own')
+        ->and($absent->fresh()->isClosed())->toBeTrue()
+        ->and($absent->fresh()->closed_reason)->toBe('sync.missing')
+        ->and(AuditLog::query()->where('event', 'account.reopened')->where('subject_id', $present->id)->exists())->toBeTrue();
+});
+
+it('follows a staff e-mail change from the directory so the login rule still matches', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $user = User::factory()->withRole(Role::Agent)->create(['email' => 'regi@staff.hu']);
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([row('7', 'regi@staff.hu')]));
+    expect($user->fresh()->external_record_id)->not->toBeNull();
+
+    $sync->run(readerOf([row('7', 'uj@staff.hu')]));
+
+    expect($user->fresh()->email)->toBe('uj@staff.hu')
+        ->and(app(AccountLogin::class)->resolveByEmail(PrincipalType::User, 'uj@staff.hu', 'password')->is($user))->toBeTrue()
+        ->and(AuditLog::query()->where('event', 'account.email_changed')->where('subject_id', $user->id)->exists())->toBeTrue();
+});
+
+it('keeps a staff e-mail and reports a conflict when another user already holds the new address', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $user = User::factory()->withRole(Role::Agent)->create(['email' => 'regi@staff.hu']);
+    User::factory()->withRole(Role::Agent)->create(['email' => 'foglalt@staff.hu']);
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([row('7', 'regi@staff.hu')]));
+    Log::spy();
+
+    $run = $sync->run(readerOf([row('7', 'foglalt@staff.hu')]));
+
+    expect($run->status)->toBe(SyncRunStatus::Completed)
+        ->and($run->stats['email_conflicts'])->toBe(1)
+        ->and($run->stats['email_conflict_samples'][0])->toMatchArray(['external_id' => 7, 'kind' => 'user', 'email' => 'foglalt@staff.hu', 'kept' => 'regi@staff.hu'])
+        ->and($user->fresh()->email)->toBe('regi@staff.hu')
+        ->and(AuditLog::query()->where('event', 'sync.email_conflict')->where('subject_id', $user->id)->exists())->toBeTrue();
+    Log::shouldHaveReceived('warning')->once();
+});
+
+it('keeps a client e-mail and reports the conflict when the new address belongs to another client, without closing anyone', function (): void {
+    app(Settings::class)->set(SettingKey::SyncMissedRunsBeforeClose, 1);
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([row('1', 'a@x.hu'), row('2', 'b@x.hu')]));
+    $a = Client::query()->where('email', 'a@x.hu')->first();
+    Log::spy();
+
+    // The directory now gives b@x.hu to record 1 while client 2 still holds it.
+    $run = $sync->run(readerOf([row('1', 'b@x.hu')]));
+
+    expect($run->status)->toBe(SyncRunStatus::Completed)
+        ->and($run->stats['email_conflicts'])->toBe(1)
+        ->and($a->fresh()->email)->toBe('a@x.hu')
+        ->and($a->fresh()->isClosed())->toBeFalse('the record was seen; a conflict never closes the account')
+        ->and($a->fresh()->externalRecord->email)->toBe('b@x.hu')
+        ->and(app(HealthChecks::class)->syncApi()->status)->toBe(CheckStatus::Warn);
+    Log::shouldHaveReceived('warning')->once();
+
+    // The login rule refuses the mismatch until the duplicate is sorted out.
+    expect(fn () => app(AccountLogin::class)->resolveByEmail(PrincipalType::Client, 'a@x.hu', 'magic_link'))->toThrow(LoginRejectedException::class);
+});
+
+it('changes a record classification only after the grace runs, closing the old account and provisioning the new kind', function (): void {
+    app(Settings::class)->set(SettingKey::SyncMissedRunsBeforeClose, 2);
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([row('1', 'a@x.hu')]));
+    $client = Client::query()->where('email', 'a@x.hu')->first();
+
+    // The person moved to the staff domain: the first run only counts.
+    $run = $sync->run(readerOf([row('1', 'a@staff.hu')]));
+    $record = ExternalRecord::query()->where('external_id', 1)->first();
+    expect($run->stats['kind_pending'])->toBe(1)
+        ->and($run->stats['samples']['kind_pending'][0])->toContain('(1/2)')
+        ->and($record->kind)->toBe(PrincipalType::Client)
+        ->and($record->pending_kind)->toBe(PrincipalType::User)
+        ->and($client->fresh()->isClosed())->toBeFalse()
+        ->and($client->fresh()->email)->toBe('a@staff.hu', 'the client follows the e-mail while the classification is pending');
+
+    // The second consecutive run makes the switch final.
+    $run = $sync->run(readerOf([row('1', 'a@staff.hu')]));
+    expect($run->stats['kind_changed'])->toBe(1)
+        ->and($record->fresh()->kind)->toBe(PrincipalType::User)
+        ->and($record->fresh()->pending_kind)->toBeNull()
+        ->and($client->fresh()->isClosed())->toBeTrue()
+        ->and($client->fresh()->closed_reason)->toBe(AccountProvisioner::CLOSE_REASON_KIND_CHANGED)
+        ->and(User::query()->where('email', 'a@staff.hu')->exists())->toBeFalse('staff accounts are never created by the sync');
+
+    // Flipping back takes the same grace, then the client account reopens.
+    $sync->run(readerOf([row('1', 'a@x.hu')]));
+    expect($client->fresh()->isClosed())->toBeTrue('one run back is only a pending change');
+    $sync->run(readerOf([row('1', 'a@x.hu')]));
+    expect($record->fresh()->kind)->toBe(PrincipalType::Client)
+        ->and($client->fresh()->isClosed())->toBeFalse()
+        ->and(AuditLog::query()->where('event', 'account.reopened')->where('subject_id', $client->id)->exists())->toBeTrue();
+});
+
+it('does not persist a pending classification change in a trial run', function (): void {
+    app(Settings::class)->set(SettingKey::SyncMissedRunsBeforeClose, 2);
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([row('1', 'a@x.hu')]));
+
+    $run = $sync->run(readerOf([row('1', 'a@staff.hu')]), dryRun: true);
+
+    expect($run->stats['kind_pending'])->toBe(1)
+        ->and(ExternalRecord::query()->where('external_id', 1)->first()->pending_kind)->toBeNull();
 });
