@@ -4,6 +4,20 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.3.1] – 2026-10-08
+
+### Magyar
+Szabályváltozások egy mondatban: nincs, a működés nem változott.
+
+Részletek:
+- Telepítési útmutató 1.9 és a README-k: a `tls` és `ca` mappa létrehozása és a `docker compose pull` az alkalmazáskulcs lépése elé került, mert a kulcsot az image készíti (a `docker compose run … web key` első futása töltötte le az image-et a ghcr.io-ról, és a hiányzó csatolt mappákat a Docker root tulajdonnal hozta létre, amitől a tanúsítvány másolása elbukhatott); image nélküli alternatíva a kulcsra: `echo "base64:$(openssl rand -base64 32)"`. A `compose.yaml` fejléc-megjegyzése és a `.env.example` ugyanezt mondja; az image nem változott.
+
+### English
+Rule changes in one sentence each: none, behaviour is unchanged.
+
+Details:
+- Installation guide 1.9 (Hungarian) and the READMEs: creating the `tls` and `ca` directories and `docker compose pull` now precede the application-key step, because the key is produced by the image (the first `docker compose run … web key` pulled the image from ghcr.io, and Docker created the missing bind-mount directories as root, so copying the certificate could fail); an image-free alternative for the key: `echo "base64:$(openssl rand -base64 32)"`. The `compose.yaml` header comment and `.env.example` say the same; the image is unchanged.
+
 ## [1.3.0] – 2026-10-07
 
 ### Magyar

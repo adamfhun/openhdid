@@ -4,7 +4,8 @@
 # (adatbázis-rendszergazda és migrációs fiók, a db.env.example mintájára) kell;
 # a saját tanúsítvány a ./tls, a belső CA-k a ./ca mappába kerülnek.
 #
-#   docker compose run --rm --no-deps web key     # egyszer: új APP_KEY a .env-be
+#   mkdir -p tls ca && docker compose pull        # egyszer: mappák a saját tulajdonban, image letöltése
+#   docker compose run --rm --no-deps web key     # egyszer: új APP_KEY a .env-be (az image készíti)
 #   docker compose up -d                          # indítás és frissítés
 #   docker compose logs -f web                    # napló
 #

@@ -29,18 +29,24 @@ curl -fsSL -o db.env "$base/db.env.example"
 chmod 600 .env db.env
 
 # 1. Settings: APP_URL, passwords in .env and db.env, OPENHDID_VERSION.
-# 2. A new application key, pasted into APP_KEY in .env (keep a protected copy):
+# 2. The certificate and internal-CA directories owned by you (Docker would otherwise create them
+#    as root), then pull the image from ghcr.io (it also produces the application key):
+mkdir -p tls ca
+docker compose pull
+
+# 3. A new application key (without the image: echo "base64:$(openssl rand -base64 32)");
+#    paste the output into APP_KEY in .env and keep a protected copy:
 docker compose run --rm --no-deps web key
 
-# 3. Your certificate (full chain) and key, readable by the container user (uid 82):
-mkdir -p tls && cp /path/to/fullchain.pem /path/to/privkey.pem tls/
+# 4. Your certificate (full chain) and key, readable by the container user (uid 82):
+cp /path/to/fullchain.pem /path/to/privkey.pem tls/
 sudo chown 82:82 tls/*.pem && sudo chmod 400 tls/privkey.pem
 
-# 4. Start: database, migrations, web, workers, scheduler.
+# 5. Start: database, migrations, web, workers, scheduler.
 docker compose up -d
 docker compose ps
 
-# 5. The first administrator (asks for a password):
+# 6. The first administrator (asks for a password):
 docker compose exec web php artisan hdid:make-admin admin@example.org --name="Administrator"
 ```
 

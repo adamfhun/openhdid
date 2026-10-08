@@ -29,18 +29,24 @@ curl -fsSL -o db.env "$base/db.env.example"
 chmod 600 .env db.env
 
 # 1. Beállítások: APP_URL, jelszavak a .env és a db.env fájlban, OPENHDID_VERSION.
-# 2. Új alkalmazáskulcs; a kimenetet a .env APP_KEY sorába írja, és őrizze meg védett helyen is:
+# 2. A tanúsítvány és a belső CA-k mappája a saját tulajdonában (a Docker különben root tulajdonú
+#    mappát hozna létre), majd az image letöltése a ghcr.io-ról (az alkalmazáskulcsot is ez készíti):
+mkdir -p tls ca
+docker compose pull
+
+# 3. Új alkalmazáskulcs (image nélkül ugyanilyen: echo "base64:$(openssl rand -base64 32)");
+#    a kimenetet a .env APP_KEY sorába írja, és őrizze meg védett helyen is:
 docker compose run --rm --no-deps web key
 
-# 3. A saját tanúsítvány (teljes lánc) és kulcs, a konténer felhasználója (uid 82) számára olvashatóan:
-mkdir -p tls && cp /utvonal/fullchain.pem /utvonal/privkey.pem tls/
+# 4. A saját tanúsítvány (teljes lánc) és kulcs, a konténer felhasználója (uid 82) számára olvashatóan:
+cp /utvonal/fullchain.pem /utvonal/privkey.pem tls/
 sudo chown 82:82 tls/*.pem && sudo chmod 400 tls/privkey.pem
 
-# 4. Indítás: adatbázis, migrációk, web, háttérfolyamatok, ütemező.
+# 5. Indítás: adatbázis, migrációk, web, háttérfolyamatok, ütemező.
 docker compose up -d
 docker compose ps
 
-# 5. Az első rendszergazda (jelszót kér):
+# 6. Az első rendszergazda (jelszót kér):
 docker compose exec web php artisan hdid:make-admin admin@example.org --name="Rendszergazda"
 ```
 

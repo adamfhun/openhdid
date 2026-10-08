@@ -92,8 +92,8 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.8 · 2026. október 7.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.3.0 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.9 · 2026. október 8.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.3.1 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.3, felhasználói kézikönyv 1.30</span></div>
 </div>
@@ -178,18 +178,19 @@ chmod 600 .env db.env</code></pre></li>
     <li>a levelezés, az SMS és az ügyféltörzs beállításai (5. fejezet).</li>
 </ul>
 A <code>db.env</code> fájlban a <code>MARIADB_ROOT_PASSWORD</code> és a migrációs fiók jelszava (<code>DB_PASSWORD</code>) kell. Mindhárom jelszó egyedi, hosszú és véletlenszerű legyen, például <code>openssl rand -base64 32</code>. Mindhárom titok fájlból is megadható (<code>MARIADB_ROOT_PASSWORD_FILE</code>, <code>DB_PASSWORD_FILE</code> a <code>db.env</code>-ben és a <code>.env</code>-ben), lásd a 4. fejezet „Titkok fájlból” pontját.</li>
+<li><strong>Mappák és az image letöltése.</strong> A tanúsítvány (<code>tls</code>) és a belső tanúsítványkiadók (<code>ca</code>) mappáját a telepítő fiók hozza létre: a Compose a hiányzó csatolt mappát root tulajdonnal hozná létre, és a tanúsítvány másolása a következő lépésben elbukna. Az image a <code>ghcr.io</code>-ról jön (zárt hálózatban a 2. fejezet szerint tükrözött registryből); az alkalmazáskulcsot is ez az image készíti, ezért a letöltés már itt kell:
+<pre><code>mkdir -p tls ca
+docker compose pull</code></pre></li>
 <li><strong>Alkalmazáskulcs.</strong> Egyszer kell létrehozni. A kimenetet írja a <code>.env</code> <code>APP_KEY</code> sorába, és őrizze meg a mentésektől elkülönített, védett helyen:
 <pre><code>docker compose run --rm --no-deps web key</code></pre>
-A kulccsal titkosított adatok (biztonsági válaszok, kódmásolatok, API-tokenek) nélküle nem olvashatók vissza. Meglévő telepítésen soha ne cserélje.</li>
+Image nélkül ugyanilyen kulcsot ad: <code>echo "base64:$(openssl rand -base64 32)"</code>. A kulccsal titkosított adatok (biztonsági válaszok, kódmásolatok, API-tokenek) nélküle nem olvashatók vissza. Meglévő telepítésen soha ne cserélje.</li>
 <li><strong>Tanúsítvány.</strong> A teljes lánc és a kulcs a <code>tls</code> mappába kerül. A konténer felhasználójának (uid 82) olvashatónak kell lennie:
-<pre><code>mkdir -p tls
-cp /utvonal/fullchain.pem /utvonal/privkey.pem tls/
+<pre><code>cp /utvonal/fullchain.pem /utvonal/privkey.pem tls/
 sudo chown 82:82 tls/fullchain.pem tls/privkey.pem
 sudo chmod 444 tls/fullchain.pem &amp;&amp; sudo chmod 400 tls/privkey.pem</code></pre></li>
 <li><strong>Belső tanúsítványkiadók</strong> (választható). Ha az Exchange, az ADFS, az ügyféltörzs vagy a külső adatbázis belső CA-val hitelesít, a CA-tanúsítványt tegye a <code>ca</code> mappába (<code>*.crt</code> vagy <code>*.pem</code>). Indításkor a rendszer tanúsítványtára mellé kerül; a TLS-ellenőrzés kikapcsolására nincs szükség.</li>
-<li><strong>Indítás:</strong>
-<pre><code>docker compose pull
-docker compose up -d
+<li><strong>Indítás</strong> (az image a 3. lépésben már letöltődött):
+<pre><code>docker compose up -d
 docker compose ps</code></pre>
 Az első indításkor sorrendben:
 <ol>
@@ -501,7 +502,7 @@ SMS_DRIVER=log</code></pre>
     <li>normál ügyfél: <code>bela@example.test</code>;</li>
     <li>két hét hívástörténet.</li>
 </ul>
-<p>Rendszergazdát a 3. fejezet 7. lépése szerint hozzon létre. A böngésző figyelmeztet az önaláírt tanúsítványra. A kimenő e-mailek és SMS-ek a <code>docker compose logs worker</code> kimenetében olvashatók. Demó módban a <code>hdid:health</code> kilépési kódja 2 (a <code>log</code> illesztők és a bekötetlen ügyféltörzs miatt), a <code>tls-check</code> önaláírt tanúsítványnál nem értelmezhető, a <code>/health</code> a gazdagépről a 6.6 pont szerint 404-et ad; a 12.2 pont többi próbája a <code>-k</code> kapcsolóval (önaláírt tanúsítvány) elvégezhető.</p>
+<p>Rendszergazdát a 3. fejezet 8. lépése szerint hozzon létre. A böngésző figyelmeztet az önaláírt tanúsítványra. A kimenő e-mailek és SMS-ek a <code>docker compose logs worker</code> kimenetében olvashatók. Demó módban a <code>hdid:health</code> kilépési kódja 2 (a <code>log</code> illesztők és a bekötetlen ügyféltörzs miatt), a <code>tls-check</code> önaláírt tanúsítványnál nem értelmezhető, a <code>/health</code> a gazdagépről a 6.6 pont szerint 404-et ad; a 12.2 pont többi próbája a <code>-k</code> kapcsolóval (önaláírt tanúsítvány) elvégezhető.</p>
 <div class="callout danger"><p><strong>Csak kipróbáláshoz.</strong> A demófiókok jelszava nyilvános; <code>APP_ENV=production</code> mellett a demóadatok betöltése hibával leáll. Éles telepítéshez új, üres adatbázissal kezdjen.</p></div>
 
 <h2 id="s14"><span class="num">14</span>Frissítés új verzióra</h2>
@@ -539,7 +540,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.8 · 2026. október 7. · OpenHDID 1.3.0</div>
+<div class="foot">OpenHDID telepítési útmutató 1.9 · 2026. október 8. · OpenHDID 1.3.1</div>
 </div>
 
 </body>
