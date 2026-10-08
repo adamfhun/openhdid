@@ -4,6 +4,22 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.3.2] – 2026-10-08
+
+### Magyar
+Szabályváltozások egy mondatban: nincs, a működés nem változott.
+
+Részletek:
+- A kiadás `env.example` melléklete az `OPENHDID_VERSION` sorban a kiadás verziószámát hordozza (a kiadási folyamat írja be; az 1.2.0 óta `1.2.0` állt benne), így a telepítőnek nem kell kikeresnie az aktuális verziót. Telepítési útmutató 1.10 és a README-k ennek megfelelően; a két dokumentum fejlécének „Kapcsolódó” sora a jelenlegi dokumentumverziókat mondja. Az image nem változott.
+- A `compose.yaml` naplózó-meghajtója `json-file` a Docker saját `local` meghajtója helyett: a Podman a `local`-t „invalid log driver” hibával utasította el, a `json-file`-t `k8s-file`-ként kezeli; a forgatás Dockeren változatlan (szolgáltatásonként 10 × 20 MB). Telepítési útmutató 1.10: Podman-megjegyzések (kipróbálva csak Dockerrel; docker-compose szolgáltató a Podman socketjén, rootless `podman unshare chown`, 80-as port); üzemeltetési kézikönyv 1.5 a meghajtó nevével.
+
+### English
+Rule changes in one sentence each: none, behaviour is unchanged.
+
+Details:
+- The release's `env.example` asset carries the release's version number in `OPENHDID_VERSION` (written by the release process; it had said `1.2.0` since 1.2.0), so installers no longer have to look up the current version. Installation guide 1.10 (Hungarian) and the READMEs follow; the "Related" header row of both documents names the current document versions. The image is unchanged.
+- The `compose.yaml` logging driver is `json-file` instead of Docker's own `local`: Podman rejected `local` with "invalid log driver" and treats `json-file` as `k8s-file`; rotation on Docker is unchanged (10 × 20 MB per service). Installation guide 1.10 adds Podman notes (tested only with Docker; docker-compose provider over the Podman socket, rootless `podman unshare chown`, port 80), operations manual 1.5 names the driver.
+
 ## [1.3.1] – 2026-10-08
 
 ### Magyar

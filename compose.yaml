@@ -13,8 +13,10 @@
 
 name: openhdid
 
+# Naplóforgatás. A json-file meghajtót a Docker és a Podman is ismeri (a Podman k8s-file-ként,
+# csak a max-size-t veszi figyelembe); a Docker saját local meghajtóját a Podman elutasítja.
 x-logging: &logging
-  driver: local
+  driver: json-file
   options:
     max-size: 20m
     max-file: "10"

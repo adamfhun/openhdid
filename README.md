@@ -18,7 +18,7 @@ OpenHDID is published as a ready-to-run container image. This repository holds t
 
 ## Quick start
 
-Requirements: a Linux host with Docker Engine 27+ and Docker Compose 2.24+, 2 vCPU, 4 GB RAM, a DNS name and a TLS certificate for it (full chain and key in PEM).
+Requirements: a Linux host with Docker Engine 27+ and Docker Compose 2.24+ (for Podman see the notes in the installation guide's requirements table), 2 vCPU, 4 GB RAM, a DNS name and a TLS certificate for it (full chain and key in PEM).
 
 ```sh
 mkdir openhdid && cd openhdid
@@ -28,7 +28,8 @@ curl -fsSL -o .env "$base/env.example"
 curl -fsSL -o db.env "$base/db.env.example"
 chmod 600 .env db.env
 
-# 1. Settings: APP_URL, passwords in .env and db.env, OPENHDID_VERSION.
+# 1. Settings: APP_URL, passwords in .env and db.env (OPENHDID_VERSION in the downloaded file
+#    is already this release's number).
 # 2. The certificate and internal-CA directories owned by you (Docker would otherwise create them
 #    as root), then pull the image from ghcr.io (it also produces the application key):
 mkdir -p tls ca
@@ -67,7 +68,7 @@ Then sign in at `https://<your host>/admin` and continue with *Administration â€
 | `valkey` | â€“ | shared cache, sessions and queue for several web instances (profile `redis`) |
 
 - **Configuration** lives in environment variables (`.env`); business settings are edited in the panel and stored in the database. Any variable can come from a file instead (`DB_PASSWORD_FILE=/run/secrets/db_password`) for Docker or Kubernetes secrets. After a change: `docker compose up -d`.
-- **Logs** go to standard output in a compact JSON access log (no URLs, queries or cookies): `docker compose logs -f web`. The Compose file rotates them; ship them to your log platform with a Docker logging driver.
+- **Logs** go to standard output in a compact JSON access log (no URLs, queries or cookies): `docker compose logs -f web`. The Compose file rotates them (`json-file` driver, on Docker and Podman alike); ship them to your log platform with the engine's logging driver.
 - **Health**: `GET /health` (from the addresses in `OPENHDID_MONITORING_ALLOW`), `docker compose exec web php artisan hdid:health`, and the *System status* page.
 - **Upgrades**: set the new `OPENHDID_VERSION`, back up, then `docker compose pull && docker compose up -d`. Migrations run automatically and only move forward.
 

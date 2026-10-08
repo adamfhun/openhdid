@@ -92,10 +92,10 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.9 · 2026. október 8.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.3.1 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.10 · 2026. október 8.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.3.2 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
-    <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.3, felhasználói kézikönyv 1.30</span></div>
+    <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.5, felhasználói kézikönyv 1.32</span></div>
 </div>
 
 <nav class="toc" aria-label="Tartalom">
@@ -147,7 +147,7 @@ a { color: var(--accent); }
 <thead><tr><th>Összetevő</th><th>Követelmény</th><th>Megjegyzés</th></tr></thead>
 <tbody>
 <tr><td>Kiszolgáló</td><td>Biztonsági támogatást kapó Linux, x86_64 vagy arm64</td><td>rendszeres OS-frissítéssel, szinkronizált órával (NTP): a HMAC-aláírás 300 mp-es időablaka és az SSO-tokenek ellenőrzése is erre épül</td></tr>
-<tr><td>Docker</td><td>Docker Engine 27+ és Docker Compose 2.24+</td><td>a Compose-fájl a beépített <code>configs.content</code> és a <code>depends_on.required</code> elemet használja; rootless Docker is megfelelő</td></tr>
+<tr><td>Docker</td><td>Docker Engine 27+ és Docker Compose 2.24+</td><td>a Compose-fájl a beépített <code>configs.content</code> és a <code>depends_on.required</code> elemet használja; rootless Docker is megfelelő. <strong>Podman:</strong> kipróbálva csak Dockerrel. A Compose-fájl naplózó-meghajtója a Podmanon is ismert <code>json-file</code>; a <code>podman compose</code> a docker-compose szolgáltatót használja a Podman socketjén (a python <code>podman-compose</code> a fenti elemeket nem biztosan ismeri); rootless Podmannál a tanúsítvány tulajdonosát <code>podman unshare chown 82:82 tls/*.pem</code> állítja, és a 80-as port csak a <code>net.ipv4.ip_unprivileged_port_start=80</code> sysctl-lel vagy másik <code>OPENHDID_HTTP_PORT</code>-tal köthető</td></tr>
 <tr><td>Erőforrás</td><td>2 vCPU, 4 GB RAM, 20 GB lemez</td><td>néhány ezer ügyfél és napi több ezer hívás mellett elegendő; a méretezést az üzemeltetési kézikönyv 9. fejezete írja le</td></tr>
 <tr><td>Név és tanúsítvány</td><td>DNS-név, hozzá tanúsítvány teljes lánccal és kulccsal (PEM)</td><td>ECDSA P-256 vagy legalább 2048 bites RSA; jelszóval védett kulcs nem használható</td></tr>
 <tr><td>Adatbázis</td><td>beépített MariaDB 12.3 LTS vagy külső MariaDB/MySQL</td><td>utf8mb4; külső kiszolgálóhoz TLS-kapcsolat ajánlott</td></tr>
@@ -172,7 +172,7 @@ curl -fsSL -o db.env "$base/db.env.example"
 chmod 600 .env db.env</code></pre></li>
 <li><strong>Kötelező értékek a <code>.env</code> fájlban:</strong>
 <ul>
-    <li><code>OPENHDID_VERSION</code>: a letöltött kiadás pontos verziószáma a Releases oldalról (nem <code>latest</code>);</li>
+    <li><code>OPENHDID_VERSION</code>: a letöltött <code>env.example</code>-ben már a kiadás pontos verziószáma áll (a <code>releases/latest</code> mindig a legfrissebb kiadás fájljait adja), ezt nem kell kikeresni; <code>latest</code>-re ne írja át;</li>
     <li><code>APP_URL</code>: a webhely HTTPS-címe, ebből képződik a kiszolgálónév is;</li>
     <li><code>DB_PASSWORD</code>: a futási adatbázis-fiók jelszava;</li>
     <li>a levelezés, az SMS és az ügyféltörzs beállításai (5. fejezet).</li>
@@ -187,7 +187,8 @@ Image nélkül ugyanilyen kulcsot ad: <code>echo "base64:$(openssl rand -base64 
 <li><strong>Tanúsítvány.</strong> A teljes lánc és a kulcs a <code>tls</code> mappába kerül. A konténer felhasználójának (uid 82) olvashatónak kell lennie:
 <pre><code>cp /utvonal/fullchain.pem /utvonal/privkey.pem tls/
 sudo chown 82:82 tls/fullchain.pem tls/privkey.pem
-sudo chmod 444 tls/fullchain.pem &amp;&amp; sudo chmod 400 tls/privkey.pem</code></pre></li>
+sudo chmod 444 tls/fullchain.pem &amp;&amp; sudo chmod 400 tls/privkey.pem</code></pre>
+Rootless Podman alatt a <code>sudo chown</code> helyett <code>podman unshare chown 82:82 tls/fullchain.pem tls/privkey.pem</code> kell, mert a gazdagép 82-es azonosítója a konténerben másra képződik.</li>
 <li><strong>Belső tanúsítványkiadók</strong> (választható). Ha az Exchange, az ADFS, az ügyféltörzs vagy a külső adatbázis belső CA-val hitelesít, a CA-tanúsítványt tegye a <code>ca</code> mappába (<code>*.crt</code> vagy <code>*.pem</code>). Indításkor a rendszer tanúsítványtára mellé kerül; a TLS-ellenőrzés kikapcsolására nincs szükség.</li>
 <li><strong>Indítás</strong> (az image a 3. lépésben már letöltődött):
 <pre><code>docker compose up -d
@@ -237,7 +238,7 @@ Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, vala
 <div class="tablewrap"><table>
 <thead><tr><th>Kulcs</th><th>Alapérték</th><th>Jelentés</th></tr></thead>
 <tbody>
-<tr><td><code>OPENHDID_VERSION</code></td><td>–</td><td>A futtatott image verziója. Élesben mindig pontos verziószám (a Releases oldal szerinti kiadás), ne <code>latest</code>.</td></tr>
+<tr><td><code>OPENHDID_VERSION</code></td><td>–</td><td>A futtatott image verziója. A letöltött <code>env.example</code>-ben a kiadás száma áll, a kiadási folyamat írja be; élesben mindig pontos verziószám, ne <code>latest</code>. Frissítésnél ezt kell átírni (14. fejezet).</td></tr>
 <tr><td><code>COMPOSE_PROFILES</code></td><td><code>db</code></td><td>Választható szolgáltatások: <code>db</code> beépített MariaDB, <code>redis</code> Valkey. Külső adatbázisnál üres.</td></tr>
 <tr><td><code>OPENHDID_BIND_IP</code></td><td><code>0.0.0.0</code></td><td>A gazdagép címe, amelyen a 80-as és 443-as port figyel (6.1 pont).</td></tr>
 <tr><td><code>OPENHDID_HTTPS_PORT</code>, <code>OPENHDID_HTTP_PORT</code></td><td><code>443</code>, <code>80</code></td><td>A gazdagép portjai; a konténerben mindig 8443 és 8080.</td></tr>
@@ -389,7 +390,7 @@ GRANT ALL PRIVILEGES ON openhdid.* TO 'openhdid_migrate'@'10.0.0.%';</code></pre
 </ul>
 
 <h2 id="s9"><span class="num">9</span>Naplók</h2>
-<p>Minden folyamat a konténer szabványos kimenetére ír, fájlba nem. A Docker gyűjti és forgatja a naplókat: a <code>compose.yaml</code> <code>local</code> naplózó-meghajtót használ, szolgáltatásonként legfeljebb 10 × 20 MB-tal. A Docker alapértelmezett <code>json-file</code> meghajtója korlátlanul nőne.</p>
+<p>Minden folyamat a konténer szabványos kimenetére ír, fájlba nem. A konténermotor gyűjti és forgatja a naplókat: a <code>compose.yaml</code> <code>json-file</code> naplózó-meghajtót használ, szolgáltatásonként legfeljebb 10 × 20 MB-tal (Podman alatt ez a <code>k8s-file</code>, ott csak a méretkorlát él). Beállítás nélkül a naplók korlátlanul nőnének; a Docker saját <code>local</code> meghajtóját a Podman nem ismeri.</p>
 <div class="tablewrap"><table>
 <thead><tr><th>Forrás</th><th>Formátum</th><th>Olvasás</th></tr></thead>
 <tbody>
@@ -540,7 +541,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.9 · 2026. október 8. · OpenHDID 1.3.1</div>
+<div class="foot">OpenHDID telepítési útmutató 1.10 · 2026. október 8. · OpenHDID 1.3.2</div>
 </div>
 
 </body>

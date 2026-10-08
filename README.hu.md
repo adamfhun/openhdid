@@ -18,7 +18,7 @@ Az OpenHDID futtatásra kész konténer-image-ként jelenik meg. Ez a repó a te
 
 ## Gyors indítás
 
-Feltételek: Linux-kiszolgáló Docker Engine 27+ és Docker Compose 2.24+ verzióval, 2 vCPU, 4 GB RAM, egy DNS-név és hozzá TLS-tanúsítvány (teljes lánc és kulcs PEM-formátumban).
+Feltételek: Linux-kiszolgáló Docker Engine 27+ és Docker Compose 2.24+ verzióval (Podmanhoz a telepítési útmutató követelmény-táblázatának megjegyzései), 2 vCPU, 4 GB RAM, egy DNS-név és hozzá TLS-tanúsítvány (teljes lánc és kulcs PEM-formátumban).
 
 ```sh
 mkdir openhdid && cd openhdid
@@ -28,7 +28,8 @@ curl -fsSL -o .env "$base/env.example"
 curl -fsSL -o db.env "$base/db.env.example"
 chmod 600 .env db.env
 
-# 1. Beállítások: APP_URL, jelszavak a .env és a db.env fájlban, OPENHDID_VERSION.
+# 1. Beállítások: APP_URL, jelszavak a .env és a db.env fájlban (az OPENHDID_VERSION a letöltött
+#    fájlban már a kiadás száma).
 # 2. A tanúsítvány és a belső CA-k mappája a saját tulajdonában (a Docker különben root tulajdonú
 #    mappát hozna létre), majd az image letöltése a ghcr.io-ról (az alkalmazáskulcsot is ez készíti):
 mkdir -p tls ca
@@ -67,7 +68,7 @@ Ezután lépjen be a `https://<kiszolgáló>/admin` címen, és folytassa az *Ad
 | `valkey` | – | közös gyorsítótár, munkamenet és üzenetsor több webpéldányhoz (`redis` profil) |
 
 - **Beállítások**: a telepítési értékek környezeti változók (`.env`), az üzleti paraméterek a panelen szerkeszthetők és az adatbázisban élnek. Bármely változó fájlból is jöhet (`DB_PASSWORD_FILE=/run/secrets/db_password`), Docker- vagy Kubernetes-titokként. Módosítás után: `docker compose up -d`.
-- **Naplók**: a szabványos kimenetre kerülnek, az access log tömör JSON (URL, lekérdezés és süti nélkül). Olvasás: `docker compose logs -f web`. A Compose-fájl forgatja őket; központi naplógyűjtéshez Docker naplózó-meghajtó kell.
+- **Naplók**: a szabványos kimenetre kerülnek, az access log tömör JSON (URL, lekérdezés és süti nélkül). Olvasás: `docker compose logs -f web`. A Compose-fájl forgatja őket (`json-file` meghajtó, Dockeren és Podmanon is); központi naplógyűjtéshez a konténermotor naplózó-meghajtója kell.
 - **Rendszerállapot**: `GET /health` (az `OPENHDID_MONITORING_ALLOW` címeiről), `docker compose exec web php artisan hdid:health`, valamint a *Rendszerállapot* oldal.
 - **Frissítés**: új `OPENHDID_VERSION`, mentés, majd `docker compose pull && docker compose up -d`. A migrációk automatikusan és csak előre futnak.
 
