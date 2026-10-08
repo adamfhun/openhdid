@@ -7,6 +7,17 @@ Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és 
 ## [1.3.0] – 2026-10-07
 
 ### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- ÜZ-01: egy csomagnév csak egy listán szerepelhet; a két listán közös név mentése hiba.
+- ÜZ-01: olyan csomaglista-változás, amely nyitott ügyfelet hozzáférés nélkül hagyna, hiba; egy csomag a normál listán át vezethető ki, vagy a viselők lezárása után.
+- ÜZ-01: főügyfelek kiesése a szerepből és szintváltás csak megerősítés után menthető, a számokkal és névmintával; a hatásbecslés a nyitott ügyfeleket nézi, csoportonként legfeljebb tíz nevet mutat, és a mentés pillanatának állapotából készül.
+- NYT-06.3: a főügyfélség kizárólag az implicit prémium csomagon áll; elvesztésekor a kapcsolatok azonnal megszűnnek (az óránkénti feladat csak védőháló), a kapcsolt ügyfelek nem zárulnak le.
+- NYT-06: a magától megszűnt kapcsolatnál a Kapcsolt ügyfelek fülön személy helyett az ok látszik („megszűnt: a főügyfél már nem implicit prémium”).
+- ADM-01: a főügyfél implicit csomagjának nem prémiumra írása az adatlapon megerősítést kér a megszűnő kapcsolatok számával; megerősítés nélkül (Enterrel beküldve) nem menthető.
+- NYT-03: az ügyféltörzsben változó e-mail-címet a fiók követi, munkatársnál is; egy e-mail egyszerre egy fiókhoz tartozhat, ütközésnél a régi cím marad és a fiók nem tud belépni, amíg rendezik.
+- NYT-04.3: a besorolás (ügyfél–munkatárs) váltása ugyanannyi türelmi futást kap, mint a hiányzás.
+
+Részletek:
 - Beállítások › Csomagok: a mentés előre kiszámolja a hatást. Ugyanaz a csomagnév mindkét listán, illetve nyitott ügyfelet hozzáférés nélkül hagyó változás nem menthető (a nevek felsorolásával); a főügyfelek kiesése a szerepből (a megszűnő kapcsolatok és az érintett kapcsolt ügyfelek számával) és a szintváltások megerősítést kérnek; a kapcsolatok a mentéskor azonnal megszűnnek. A főügyfél implicit csomagjának átírása az adatlapon is megerősítést kér.
 - Ügyfélkapcsolatok: a főügyfélség kizárólag az implicit prémium csomagon áll. Ha a főügyfél implicit csomagja már nem prémium (átvétel, szerkesztés vagy a csomaglista változása), a kapcsolatai magától megszűnnek „a főügyfél már nem implicit prémium” okkal; a kapcsolt ügyfelek nem zárulnak le, jogosultságuk a saját csomagjuk szerinti; az ügyféltörzsből így visszatérő főügyfél csak miatta lezárt kapcsolt ügyfelei újranyílnak, ha a tételük jelen van. Új óránkénti feladat a csomaglista változására.
 - Ügyféltörzs-átvétel: a munkatárs e-mail-változását is követi a fiók; ha az új cím már másik fiókon áll, a régi cím marad, a futás nem bukik és a fiók nem zárul le, az ütközést a futás részletei, az eseménynapló, a napló és a Rendszerállapot jelzi (a belépés az eltérés miatt elutasítva az ütközés rendezéséig). A besorolás (ügyfél–munkatárs) váltása ugyanannyi türelmi futást kap, mint a hiányzás; utána a régi fiók lezárul, visszaváltáskor újranyílik. Új migráció (kapcsolat-megszűnés oka, függőben lévő besorolás).
@@ -14,6 +25,17 @@ Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és 
 - Telepítési útmutató 1.6: a mellékletek letöltési alapcíme a mindig friss `releases/latest/download` (a `releases/download/v<verzió>` előtag önmagában 404-et ad, és két kiadás között elavult); a verziópéldák semlegesek, a kiadások böngészhető oldala és az adott verzió választása le van írva. Az image nem változott.
 
 ### English
+Rule changes in one sentence each (with the specification's identifiers):
+- ÜZ-01: a package name may be on one list only; saving a name shared by both lists is an error.
+- ÜZ-01: a package-list change that would leave an open client without access is an error; a package is retired through the standard list, or after its wearers were closed.
+- ÜZ-01: sponsors losing their role and tier moves are saved only after confirmation with the counts and name samples; the estimate looks at open clients, shows at most ten names per group and reflects the state at the moment of saving.
+- NYT-06.3: sponsorship rests solely on the implicit premium package; losing it ends the links at once (the hourly task is only a safety net) and never closes the linked clients.
+- NYT-06: a link that ended on its own shows the reason instead of a person on the Linked clients tab ("ended: the sponsor is no longer implicit premium").
+- ADM-01: changing a sponsor's implicit package to a non-premium one on the client form asks for confirmation with the number of ending links; without confirmation (Enter submit) it cannot be saved.
+- NYT-03: an e-mail changed in the directory is followed by the account, for staff too; one e-mail belongs to one account at a time, on a conflict the old address stays and the account cannot sign in until it is resolved.
+- NYT-04.3: a classification change (client/staff) gets the same grace runs as a missing record.
+
+Details:
 - Settings › Packages: saving estimates the impact first. The same package name on both lists, or a change that would leave an open client without access, cannot be saved (the names are listed); sponsors losing their role (with the number of ending links and indirectly affected linked clients) and tier moves require confirmation; links end immediately on save. Changing a sponsor's implicit package on the client form asks for confirmation too.
 - Client links: sponsorship rests solely on the implicit premium package. When a sponsor's implicit package stops being premium (sync, edit or a package-list change), its links end automatically with the reason "sponsor no longer implicit premium"; the linked clients are not closed and keep whatever their own packages entitle them to; a sponsor returning from the directory like that reopens the dependents closed only because of it, if their records are present. New hourly task for package-list changes.
 - EMD sync: a staff e-mail change now follows the directory too; when the new address already belongs to another account, the old address is kept, the run does not fail and the account is not closed, and the conflict is shown in the run details, the audit log, the log and the system status (login is refused for the mismatch until it is resolved). A classification change (client/staff) gets the same grace runs as a missing record before the old account closes; flipping back reopens it. New migration (link end reason, pending classification).
