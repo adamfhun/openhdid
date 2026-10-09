@@ -92,10 +92,10 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">A konténeres OpenHDID napi üzemeltetése: ellenőrzés, szolgáltatások kezelése, naplók és felügyelet, ütemezett feladatok, a leggyakoribb helyzetek, mentés és visszaállítás, frissítés, skálázás és biztonsági karbantartás.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.6 · 2026. október 9.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.0 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.7 · 2026. október 9.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.1 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
-    <div><span class="k">Kapcsolódó</span><span>telepítési útmutató 1.11, felhasználói kézikönyv 1.32</span></div>
+    <div><span class="k">Kapcsolódó</span><span>telepítési útmutató 1.12, felhasználói kézikönyv 1.33</span></div>
 </div>
 
 <nav class="toc" aria-label="Tartalom">
@@ -290,40 +290,40 @@ docker info | grep -i proxy</code></pre>
 </ol>
 
 <h2 id="s7"><span class="num">7</span>Mentés és visszaállítás</h2>
-<p>Négy dolgot kell menteni, egyszerre és rendszeresen (naponta ajánlott):</p>
+<p>A kiadás <code>backup.sh</code> szkriptje egy paranccsal ment és állít vissza. A telepítési mappában, a <code>compose.yaml</code> mellett él, bárhonnan indítható, és root nélkül fut: sem <code>sudo</code>, sem root jogú konténer nem kell, rootful és rootless Dockerrel egyaránt működik. Egy mentés egyszerre fogja össze azt, ami a helyreállításhoz kell:</p>
 <ol>
-    <li><strong>az adatbázist;</strong></li>
+    <li><strong>az adatbázist</strong> (a beépített MariaDB-ét, konzisztens pillanatképként);</li>
     <li><strong>a <code>storage</code> kötetet</strong> (arculati képek, feltöltések);</li>
-    <li><strong>a <code>.env</code> és a <code>db.env</code> fájlt</strong>, benne az <code>APP_KEY</code>-jel;</li>
-    <li><strong>a <code>tls</code> és a <code>ca</code> mappát.</strong></li>
+    <li><strong>a beállításokat:</strong> <code>.env</code>, <code>db.env</code> (benne az <code>APP_KEY</code> és minden jelszó), <code>compose.yaml</code>, <code>compose.override.yaml</code>, a <code>ca</code> mappa;</li>
+    <li><strong>a <code>tls</code> mappát</strong> (tanúsítvány és kulcs).</li>
 </ol>
 <pre><code>cd /opt/openhdid
-d=$(date +%F)
-# Adatbázis, a migrációs fiókkal, konzisztens pillanatképként:
-docker compose exec -T mariadb sh -c 'MYSQL_PWD="$DB_PASSWORD" exec mariadb-dump -u"$DB_USERNAME" --single-transaction --routines --triggers "$MARIADB_DATABASE"' | gzip &gt; mentes/openhdid-db-$d.sql.gz
-# Feltöltött fájlok:
-docker run --rm -v openhdid_storage:/data:ro -v "$PWD/mentes":/backup alpine:3.24 tar czf /backup/openhdid-storage-$d.tar.gz -C /data .
-# Beállítások és kulcsok (külön, szigorúbb hozzáféréssel):
-tar czf mentes/openhdid-config-$d.tar.gz .env db.env tls ca compose.yaml</code></pre>
+./backup.sh                          # mentés: backup/2026-10-09_023000
+./backup.sh list                     # a mentések listája (verzió, adatbázis, méret)
+./backup.sh restore                  # visszaállítás a legutóbbi mentésből
+./backup.sh restore 2026-10-09_023000</code></pre>
+<p><strong>A mentés.</strong> A szkript a saját mappájában létrehozza a <code>backup</code> almappát (700-as jog), és abba egy időbélyeges mappát: <code>database.sql.gz</code>, <code>storage.tar.gz</code>, <code>config.tar.gz</code>, <code>tls.tar.gz</code>, <code>info.txt</code> (időpont, OpenHDID-verzió, image) és <code>SHA256SUMS</code>; minden fájl 600-as jogú. A mentés futó vermen készül (a <code>mariadb</code> szolgáltatásnak futnia kell), kiesés nélkül. Alapból a legutóbbi 14 mentés marad, a régebbieket a szkript törli (<code>--keep N</code>, <code>0</code> = mind marad). A <code>tls</code> kulcsát az alkalmazás saját felhasználója olvassa ki, mert az üzemeltető számára nem olvasható.</p>
+<p><strong>Ütemezve</strong> (cron, naponta 2:30-kor; a <code>--quiet</code> csak hibánál ír, a cron ezt levélben küldi):</p>
+<pre><code>30 2 * * * /opt/openhdid/backup.sh --quiet</code></pre>
+<h3>Visszaállítás</h3>
+<p>A <code>./backup.sh restore [név]</code> egy megerősítés (<code>igen</code>) után végigviszi a teljes helyreállítást; nem interaktív futtatáshoz <code>--yes</code>. A lépések:</p>
+<ol class="steps">
+    <li><strong>Ellenőrzés:</strong> a mentés ellenőrzőösszegei; sérült vagy módosított mentésből nem állít vissza.</li>
+    <li><strong>Biztonsági mentés</strong> a jelenlegi állapotról (<code>…_visszaallitas-elott</code>), így a visszaállítás is visszavonható. Ha a jelenlegi verem már nem menthető, <code>--no-safety-backup</code>.</li>
+    <li><strong>Az alkalmazás leáll</strong> (<code>web</code>, <code>worker</code>, <code>sync-worker</code>, <code>scheduler</code>); innentől a végéig kiesés van.</li>
+    <li><strong>Beállítások és <code>tls</code>:</strong> a mentett <code>.env</code> és a többi fájl kerül vissza, a mentés <code>OPENHDID_VERSION</code>-jével együtt; a kulcsot az alkalmazás felhasználója írja vissza, a mappa erre a pillanatra nyílik meg.</li>
+    <li><strong>Adatbázis:</strong> a táblák törlése, majd a mentés visszatöltése a migrációs fiókkal.</li>
+    <li><strong>Storage kötet</strong>, majd <strong>indítás</strong> és rendszerállapot.</li>
+</ol>
+<p><strong>Ellenőrzés utána:</strong> belépés; egy ügyfél adatlapján a válaszok száma és egy kérdés-válasz próba. Ez bizonyítja, hogy a titkosított adatok az <code>APP_KEY</code>-jel olvashatók.</p>
+<p><strong>Új gépre.</strong> Docker telepítése (telepítési útmutató 2. fejezet), a telepítési mappa létrehozása, benne a kiadás <code>compose.yaml</code> és <code>backup.sh</code> fájlja és a <code>tls</code>, <code>ca</code> mappa (<code>mkdir -p tls ca</code>), majd a mentés mappájának átmásolása a <code>backup</code> alá, végül <code>./backup.sh restore &lt;név&gt;</code>. A beépített adatbázist és a két fiókot az első induló <code>mariadb</code> a visszaállított jelszavakkal hozza létre.</p>
 <p><strong>Követelmények a mentéssel szemben.</strong></p>
 <ul>
-    <li>A mentés titkosított, a gazdagéptől elkülönített és módosítás ellen védett legyen.</li>
-    <li>A konfigurációs mentés (kulcsok) más hozzáférési szabállyal kerüljön tárolásra, mint az adatbázisé.</li>
-    <li>Határozza meg a megengedett adatvesztést (RPO) és a helyreállítási időt (RTO), és rendszeres visszaállítási próbával mérje.</li>
-    <li>Külső adatbázisnál az adatbázis mentését az adatbázis üzemeltetője végzi; a többi tétel ugyanez.</li>
+    <li>A <code>backup</code> mappát rendszeresen másolja a gazdagépen kívülre, titkosítva és módosítás ellen védve; a helyi mentés a gép elvesztése ellen nem véd.</li>
+    <li>A <code>config.tar.gz</code> (kulcsok, jelszavak) más hozzáférési szabállyal kerüljön tárolásra, mint az adatbázis.</li>
+    <li>Határozza meg a megengedett adatvesztést (RPO) és a helyreállítási időt (RTO), és rendszeres visszaállítási próbával mérje; a próba egy másik gépen a fenti „Új gépre” lépésekkel végezhető.</li>
+    <li>Külső adatbázisnál (a <code>db</code> profil nélkül) az adatbázist az adatbázis üzemeltetője menti és állítja vissza, a mentéssel egyidejű állapotra; a szkript a többit kezeli, és ezt az <code>info.txt</code>-ben jelzi.</li>
 </ul>
-<h3>Visszaállítás</h3>
-<ol class="steps">
-    <li><strong>Előkészítés:</strong> állítsa vissza a konfigurációs mentést a telepítési mappába. Ugyanaz az <code>OPENHDID_VERSION</code> legyen, mint a mentéskor.</li>
-    <li><strong>Csak az adatbázis indul:</strong> <code>docker compose up -d mariadb</code>, és várja meg, hogy <code>healthy</code> legyen.</li>
-    <li><strong>Adatbázis:</strong>
-<pre><code>gunzip -c mentes/openhdid-db-DATUM.sql.gz | docker compose exec -T mariadb sh -c 'MYSQL_PWD="$DB_PASSWORD" exec mariadb -u"$DB_USERNAME" "$MARIADB_DATABASE"'</code></pre></li>
-    <li><strong>Fájlok:</strong>
-<pre><code>docker run --rm -v openhdid_storage:/data -v "$PWD/mentes":/backup alpine:3.24 sh -c 'tar xzf /backup/openhdid-storage-DATUM.tar.gz -C /data &amp;&amp; chown -R 82:82 /data'</code></pre></li>
-    <li><strong>Indítás:</strong> <code>docker compose up -d</code>.</li>
-    <li><strong>Ellenőrzés:</strong> Rendszerállapot; belépés; egy ügyfél adatlapján a válaszok száma és egy kérdés-válasz próba. Ez bizonyítja, hogy a titkosított adatok az <code>APP_KEY</code>-jel olvashatók.</li>
-</ol>
-
 <h2 id="s8"><span class="num">8</span>Frissítés és visszaállás</h2>
 <p><strong>Kiadások.</strong> A kiadások a <a href="https://github.com/adamfhun/openhdid/releases">GitHub Releases</a> oldalon jelennek meg, jegyzettel, dokumentumokkal és ellenőrzőösszegekkel.</p>
 <ul>
@@ -332,18 +332,18 @@ tar czf mentes/openhdid-config-$d.tar.gz .env db.env tls ca compose.yaml</code><
 </ul>
 <ol class="steps">
     <li><strong>Az image ellenőrzése</strong> (választható, ajánlott):
-<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.4.0 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.4.0 \
+<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.4.1 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.4.1 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre></li>
-    <li><strong>Mentés</strong> a 7. fejezet szerint.</li>
+    <li><strong>Mentés:</strong> <code>./backup.sh</code> (7. fejezet).</li>
     <li><strong>Frissítés:</strong> az <code>OPENHDID_VERSION</code> átírása, majd <code>docker compose pull &amp;&amp; docker compose up -d</code>. A migrációk automatikusan lefutnak, a szolgáltatások az új image-dzsel indulnak.</li>
     <li><strong>Ellenőrzés:</strong> <code>docker compose ps</code>, Rendszerállapot (a fejlécben az új verzió), a telepítési útmutató 12. fejezetének próbái.</li>
 </ol>
 <h3>Visszaállás sikertelen frissítés után</h3>
 <ol class="steps">
     <li><strong>Ha nem futott migráció:</strong> az <code>OPENHDID_VERSION</code> visszaírása az előző verzióra, majd <code>docker compose up -d</code>.</li>
-    <li><strong>Ha futott migráció:</strong> a migrációk csak előre futnak. Állítsa vissza az adatbázist a frissítés előtti mentésből (7. fejezet), majd indítsa az előző verziót. A mentés óta keletkezett adatok elvesznek.</li>
+    <li><strong>Ha futott migráció:</strong> a migrációk csak előre futnak. Állítsa vissza a frissítés előtti mentést: <code>./backup.sh restore &lt;név&gt;</code> (7. fejezet); ez a mentett <code>.env</code>-vel az előző verziót is visszahozza és elindítja. A mentés óta keletkezett adatok elvesznek.</li>
 </ol>
 
 <h2 id="s9"><span class="num">9</span>Skálázás és teljesítmény</h2>
@@ -424,6 +424,7 @@ cosign verify ghcr.io/adamfhun/openhdid:1.4.0 \
 <div class="tablewrap"><table>
 <thead><tr><th>Parancs</th><th>Mit tesz</th></tr></thead>
 <tbody>
+<tr><td><code>./backup.sh</code> / <code>list</code> / <code>restore [név]</code></td><td>Mentés a <code>backup</code> mappába / a mentések listája / visszaállítás (7. fejezet).</td></tr>
 <tr><td><code>docker compose run --rm --no-deps web key</code></td><td>Új <code>APP_KEY</code> kiírása, csak új telepítéshez.</td></tr>
 <tr><td><code>docker compose exec web openhdid tls-check</code> / <code>reload</code> / <code>version</code></td><td>Tanúsítvány ellenőrzése / nginx újratöltése ellenőrzéssel / verzió.</td></tr>
 <tr><td><code>hdid:make-admin email [--name=]</code></td><td>Főrendszergazda létrehozása vagy előléptetése (jelszót kér).</td></tr>
@@ -454,7 +455,7 @@ cosign verify ghcr.io/adamfhun/openhdid:1.4.0 \
 <tr><td>SemVer</td><td>Semantic Versioning – szemantikus verziózás (fő.al.javító).</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID üzemeltetési kézikönyv 1.6 · 2026. október 9. · OpenHDID 1.4.0</div>
+<div class="foot">OpenHDID üzemeltetési kézikönyv 1.7 · 2026. október 9. · OpenHDID 1.4.1</div>
 </div>
 
 </body>

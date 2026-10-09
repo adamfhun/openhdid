@@ -92,10 +92,10 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.11 · 2026. október 9.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.0 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.12 · 2026. október 9.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.1 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
-    <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.6, felhasználói kézikönyv 1.32</span></div>
+    <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.7, felhasználói kézikönyv 1.33</span></div>
 </div>
 
 <nav class="toc" aria-label="Tartalom">
@@ -178,7 +178,10 @@ base=https://github.com/adamfhun/openhdid/releases/latest/download
 curl -fsSL -O "$base/compose.yaml"
 curl -fsSL -o .env "$base/env.example"
 curl -fsSL -o db.env "$base/db.env.example"
-chmod 600 .env db.env</code></pre></li>
+curl -fsSL -O "$base/backup.sh"
+chmod 600 .env db.env
+chmod 755 backup.sh</code></pre>
+A <code>backup.sh</code> a mentés és a visszaállítás szkriptje (üzemeltetési kézikönyv 7. fejezet).</li>
 <li><strong>Kötelező értékek a <code>.env</code> fájlban:</strong>
 <ul>
     <li><code>OPENHDID_VERSION</code>: a letöltött <code>env.example</code>-ben már a kiadás pontos verziószáma áll (a <code>releases/latest</code> mindig a legfrissebb kiadás fájljait adja), ezt nem kell kikeresni; <code>latest</code>-re ne írja át;</li>
@@ -196,7 +199,12 @@ Image nélkül ugyanilyen kulcsot ad: <code>echo "base64:$(openssl rand -base64 
 <li><strong>Tanúsítvány.</strong> A teljes lánc és a kulcs a <code>tls</code> mappába kerül. A konténer felhasználójának (uid 82) olvashatónak kell lennie:
 <pre><code>cp /utvonal/fullchain.pem /utvonal/privkey.pem tls/
 sudo chown 82:82 tls/fullchain.pem tls/privkey.pem
-sudo chmod 444 tls/fullchain.pem &amp;&amp; sudo chmod 400 tls/privkey.pem</code></pre></li>
+sudo chmod 444 tls/fullchain.pem &amp;&amp; sudo chmod 400 tls/privkey.pem</code></pre>
+<strong>Sudo nélkül vagy rootless Dockerrel</strong> a fájlokat az alkalmazás saját felhasználója írja a mappába, így a tulajdonos az lesz, akit a konténer lát (rootless Dockernél a 82-es felhasználó a gazdagépen egy névtér-azonosító, ezért ott a <code>sudo chown 82:82</code> nem jó). A mappa csak erre az időre nyílik meg:
+<pre><code>chmod 777 tls
+docker compose run --rm --no-deps -T -v "$PWD/tls":/t --entrypoint sh web -c 'cat &gt; /t/fullchain.pem &amp;&amp; chmod 444 /t/fullchain.pem' &lt; /utvonal/fullchain.pem
+docker compose run --rm --no-deps -T -v "$PWD/tls":/t --entrypoint sh web -c 'cat &gt; /t/privkey.pem &amp;&amp; chmod 400 /t/privkey.pem' &lt; /utvonal/privkey.pem
+chmod 755 tls</code></pre></li>
 <li><strong>Belső tanúsítványkiadók</strong> (választható). Ha az Exchange, az ADFS, az ügyféltörzs vagy a külső adatbázis belső CA-val hitelesít, a CA-tanúsítványt tegye a <code>ca</code> mappába (<code>*.crt</code> vagy <code>*.pem</code>). Indításkor a rendszer tanúsítványtára mellé kerül; a TLS-ellenőrzés kikapcsolására nincs szükség.</li>
 <li><strong>Indítás</strong> (az image a 3. lépésben már letöltődött):
 <pre><code>docker compose up -d
@@ -532,7 +540,7 @@ SMS_DRIVER=log</code></pre>
 <h2 id="s14"><span class="num">14</span>Frissítés új verzióra</h2>
 <ol class="steps">
     <li>Olvassa el a kiadási jegyzetet (<a href="https://github.com/adamfhun/openhdid/releases">GitHub Releases</a>, <code>CHANGELOG.md</code>). Választhatóan ellenőrizze az image aláírását (üzemeltetési kézikönyv 8. fejezet).</li>
-    <li>Mentés: adatbázis, <code>storage</code> kötet, <code>.env</code>, <code>db.env</code>, <code>tls</code> (üzemeltetési kézikönyv 7. fejezet).</li>
+    <li>Mentés: <code>./backup.sh</code> (adatbázis, <code>storage</code> kötet, beállítások, <code>tls</code>; üzemeltetési kézikönyv 7. fejezet). Ha a frissítés után vissza kell lépni: <code>./backup.sh restore</code>.</li>
     <li>Az <code>OPENHDID_VERSION</code> átírása az új verzióra, majd:
 <pre><code>docker compose pull
 docker compose up -d
@@ -564,7 +572,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.11 · 2026. október 9. · OpenHDID 1.4.0</div>
+<div class="foot">OpenHDID telepítési útmutató 1.12 · 2026. október 9. · OpenHDID 1.4.1</div>
 </div>
 
 </body>

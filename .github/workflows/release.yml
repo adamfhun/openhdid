@@ -194,7 +194,7 @@ jobs:
         run: |
           assets="$RUNNER_TEMP/assets"
           mkdir -p "$assets"
-          cp docs/*.pdf compose.yaml db.env.example "$assets/"
+          cp docs/*.pdf compose.yaml db.env.example backup.sh "$assets/"
           cp .env.example "$assets/env.example"
           cp "$RUNNER_TEMP/openhdid-$VERSION.spdx.json" "$assets/"
           (cd "$assets" && sha256sum -- * > SHA256SUMS)

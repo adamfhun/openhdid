@@ -4,6 +4,22 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.4.1] – 2026-10-09
+
+### Magyar
+Szabályváltozások egy mondatban: nincs, az alkalmazás működése nem változott.
+
+Részletek:
+- Új melléklet: `backup.sh`, mentés és visszaállítás egy paranccsal. A szkript a saját mappájában `backup/ÉÉÉÉ-HH-NN_óóppmm` mappába ment (adatbázis konzisztens pillanatképként, storage kötet, beállítások, tls; 700/600-as jogok, ellenőrzőösszegek, a legutóbbi 14 marad), a `restore` megerősítés és biztonsági mentés után visszaállítja a teljes telepítést a mentett verzióval, a `--quiet` cronhoz való. Root nem kell (sem sudo, sem root jogú konténer): a tls kulcsát az alkalmazás saját felhasználója olvassa és írja, így rootful és rootless Dockerrel is a konténer által látott tulajdonos áll vissza. A kiadás füsttesztje a teljes kört lefuttatja.
+- Telepítési útmutató 1.12: a `backup.sh` letöltése; a tanúsítvány elhelyezése sudo nélkül, rootless Dockerrel is (ott a `sudo chown 82:82` nem jó). Üzemeltetési kézikönyv 1.7: a mentés fejezete a szkriptre épül, új gépre történő visszaállítással.
+
+### English
+Rule changes in one sentence each: none, the application's behaviour is unchanged.
+
+Details:
+- New release asset: `backup.sh`, backup and restore in one command. The script writes into `backup/YYYY-MM-DD_hhmmss` next to itself (database as a consistent snapshot, storage volume, settings, tls; 700/600 permissions, checksums, the latest 14 kept); `restore` brings back the whole installation with the saved version after a confirmation and a safety backup; `--quiet` suits cron. No root is needed (neither sudo nor a root container): the application's own user reads and writes the TLS key, so rootful and rootless Docker alike get back the owner the container sees. The release smoke test runs the full round trip.
+- Installation guide 1.12 (Hungarian): downloading `backup.sh`; placing the certificate without sudo, also under rootless Docker (where `sudo chown 82:82` is wrong). Operations manual 1.7: the backup chapter builds on the script, including a restore onto a new machine.
+
 ## [1.4.0] – 2026-10-09
 
 ### Magyar

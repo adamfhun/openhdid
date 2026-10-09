@@ -26,7 +26,9 @@ base=https://github.com/adamfhun/openhdid/releases/latest/download
 curl -fsSL -O "$base/compose.yaml"
 curl -fsSL -o .env "$base/env.example"
 curl -fsSL -o db.env "$base/db.env.example"
+curl -fsSL -O "$base/backup.sh"
 chmod 600 .env db.env
+chmod 755 backup.sh
 
 # 1. Settings: APP_URL, passwords in .env and db.env (OPENHDID_VERSION in the downloaded file
 #    is already this release's number).
@@ -70,7 +72,8 @@ Then sign in at `https://<your host>/admin` and continue with *Administration â€
 - **Configuration** lives in environment variables (`.env`); business settings are edited in the panel and stored in the database. Any variable can come from a file instead (`DB_PASSWORD_FILE=/run/secrets/db_password`) for Docker or Kubernetes secrets. After a change: `docker compose up -d`.
 - **Logs** go to standard output in a compact JSON access log (no URLs, queries or cookies): `docker compose logs -f web`. The Compose file rotates them (`json-file` driver, on Docker and Podman alike); ship them to your log platform with the engine's logging driver.
 - **Health**: `GET /health` (from the addresses in `OPENHDID_MONITORING_ALLOW`), `docker compose exec web php artisan hdid:health`, and the *System status* page.
-- **Upgrades**: set the new `OPENHDID_VERSION`, back up, then `docker compose pull && docker compose up -d`. Migrations run automatically and only move forward.
+- **Upgrades**: back up (`./backup.sh`), set the new `OPENHDID_VERSION`, then `docker compose pull && docker compose up -d`. Migrations run automatically and only move forward.
+- **Backup and restore** in one command, without root: `./backup.sh` (into the `backup` folder, time-stamped: database, storage volume, settings, tls), `./backup.sh list`, `./backup.sh restore [name]`. Daily cron: `30 2 * * * /opt/openhdid/backup.sh --quiet`; copy the backups off the host.
 
 ## Container image
 

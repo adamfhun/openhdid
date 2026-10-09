@@ -26,7 +26,9 @@ base=https://github.com/adamfhun/openhdid/releases/latest/download
 curl -fsSL -O "$base/compose.yaml"
 curl -fsSL -o .env "$base/env.example"
 curl -fsSL -o db.env "$base/db.env.example"
+curl -fsSL -O "$base/backup.sh"
 chmod 600 .env db.env
+chmod 755 backup.sh
 
 # 1. Beállítások: APP_URL, jelszavak a .env és a db.env fájlban (az OPENHDID_VERSION a letöltött
 #    fájlban már a kiadás száma).
@@ -70,7 +72,8 @@ Ezután lépjen be a `https://<kiszolgáló>/admin` címen, és folytassa az *Ad
 - **Beállítások**: a telepítési értékek környezeti változók (`.env`), az üzleti paraméterek a panelen szerkeszthetők és az adatbázisban élnek. Bármely változó fájlból is jöhet (`DB_PASSWORD_FILE=/run/secrets/db_password`), Docker- vagy Kubernetes-titokként. Módosítás után: `docker compose up -d`.
 - **Naplók**: a szabványos kimenetre kerülnek, az access log tömör JSON (URL, lekérdezés és süti nélkül). Olvasás: `docker compose logs -f web`. A Compose-fájl forgatja őket (`json-file` meghajtó, Dockeren és Podmanon is); központi naplógyűjtéshez a konténermotor naplózó-meghajtója kell.
 - **Rendszerállapot**: `GET /health` (az `OPENHDID_MONITORING_ALLOW` címeiről), `docker compose exec web php artisan hdid:health`, valamint a *Rendszerállapot* oldal.
-- **Frissítés**: új `OPENHDID_VERSION`, mentés, majd `docker compose pull && docker compose up -d`. A migrációk automatikusan és csak előre futnak.
+- **Frissítés**: mentés (`./backup.sh`), új `OPENHDID_VERSION`, majd `docker compose pull && docker compose up -d`. A migrációk automatikusan és csak előre futnak.
+- **Mentés és visszaállítás** egy paranccsal, root nélkül: `./backup.sh` (a `backup` almappába, időbélyeggel: adatbázis, storage kötet, beállítások, tls), `./backup.sh list`, `./backup.sh restore [név]`. Napi cron: `30 2 * * * /opt/openhdid/backup.sh --quiet`; a mentéseket másolja a gazdagépen kívülre.
 
 ## Konténer-image
 
