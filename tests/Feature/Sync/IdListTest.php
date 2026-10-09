@@ -12,6 +12,7 @@ use App\Sync\ReaderFactory;
 use App\Sync\SourceFormatException;
 use App\Sync\SyncExternalRecords;
 use Carbon\CarbonImmutable;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\ResponseSequence;
 use Illuminate\Support\Facades\Http;
@@ -201,7 +202,7 @@ it('marks IDs leaving the list and restores them with their selection, audited',
         ->push(organizations([[2, 'Kettő']]))
         ->push(organizations([[1, 'Egy új néven'], [2, 'Kettő']])));
     app(IdList::class)->refresh();
-    app(IdList::class)->select(['1']);
+    app(IdList::class)->setSelected(['1'], true);
     $item = SyncIdListItem::query()->where('external_id', '1')->sole();
 
     expect(app(IdList::class)->refresh())->toMatchArray(['removed' => 1])
@@ -215,5 +216,26 @@ it('marks IDs leaving the list and restores them with their selection, audited',
 
     $changes = AuditLog::query()->where('event', 'sync_id_list_item.updated')->where('subject_id', $item->id)->orderBy('id')->get();
     expect($changes->map(fn (AuditLog $log): array => array_keys($log->context['to']))->all())
-        ->toBe([['selected'], ['removed_at'], ['name', 'removed_at']]);
+        ->toBe([['removed_at'], ['name', 'removed_at']])
+        ->and(AuditLog::query()->where('event', 'sync.id_list.selection_changed')->sole()->context)
+        ->toBe(['action' => 'select', 'count' => 1, 'ids' => ['1'], 'truncated' => false]);
+});
+
+it('keeps the reason of a connection failure in the ID list status and the audit log', function (): void {
+    Http::fake([
+        'https://directory.test/login' => fn () => throw new ConnectionException('cURL error 6: Could not resolve host: directory.test'),
+    ]);
+
+    expect(fn () => app(IdList::class)->fetchNow())->toThrow(IdListException::class, 'directory.test:443');
+    expect(app(IdList::class)->status()['error'])->toContain('DNS')
+        ->and(AuditLog::query()->where('event', 'sync.id_list.fetch_failed')->sole()->context['error'])->toContain('directory.test:443');
+});
+
+it('names an unverifiable certificate of the ID list endpoint with the ca folder hint', function (): void {
+    Http::fake([
+        'https://directory.test/login' => Http::response(['access_token' => 'access', 'refresh_token' => 'refresh']),
+        'https://directory.test/organizations' => fn () => throw new ConnectionException('cURL error 60: SSL certificate problem: unable to get local issuer certificate'),
+    ]);
+
+    expect(fn () => app(IdList::class)->refresh())->toThrow(IdListException::class, 'ca folder');
 });

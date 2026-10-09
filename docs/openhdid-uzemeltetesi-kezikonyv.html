@@ -92,10 +92,10 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">A konténeres OpenHDID napi üzemeltetése: ellenőrzés, szolgáltatások kezelése, naplók és felügyelet, ütemezett feladatok, a leggyakoribb helyzetek, mentés és visszaállítás, frissítés, skálázás és biztonsági karbantartás.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.7 · 2026. október 9.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.1 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.4.2 · 2026. október 9.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.2 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
-    <div><span class="k">Kapcsolódó</span><span>telepítési útmutató 1.12, felhasználói kézikönyv 1.33</span></div>
+    <div><span class="k">Kapcsolódó</span><span>telepítési útmutató, felhasználói kézikönyv</span></div>
 </div>
 
 <nav class="toc" aria-label="Tartalom">
@@ -226,6 +226,7 @@ docker compose logs --no-log-prefix web | grep '"status":429' | wc -l  # forgalo
 
 <h2 id="s6"><span class="num">6</span>Üzemeltetési helyzetek</h2>
 <p>Az alkalmazás működésével kapcsolatos helyzetek (belépés, azonosítás, hívások, jogosultságok) a felhasználói kézikönyvben és a Rendszerállapot kártyáinak tanácsaiban szerepelnek. Ez a fejezet a konténeres üzemre jellemző eseteket írja le.</p>
+<p>Az összes diagnosztikai parancs egy helyen, másolható formában: a kiadás <code>TROUBLESHOOTING.md</code> mellékletében (állapot, újrainduló szolgáltatás, proxy, Docker-jogosultság, fájltulajdonos, ügyféltörzs-elérés és -belépés, tanúsítvány-lánc és belső CA, egyszeri bejelentkezés, a belépés elutasításának oka, levél és SMS, mentés).</p>
 <h3>A konténer nem indul el vagy újraindulgat</h3>
 <ol class="steps">
     <li><code>docker compose ps</code> és <code>docker compose logs --tail=50 &lt;szolgáltatás&gt;</code>. Az indítószkript <code>openhdid: ERROR:</code> sora megnevezi az okot: hiányzó vagy hibás <code>APP_KEY</code>, nem https <code>APP_URL</code>, hiányzó adatbázis-adat, élesben tiltott beállítás, tanúsítványhiba, nem írható <code>storage</code> kötet.</li>
@@ -261,7 +262,7 @@ docker info | grep -i proxy</code></pre>
 <ol class="steps">
     <li><em>Tartalom › Kimenő üzenetek</em>: „várakozik” állapotnál a <code>worker</code> nem fut (<code>docker compose ps worker</code>); „sikertelen”-nél a sor hibaszövege mondja meg az okot.</li>
     <li>Kapcsolatpróba az ügyfelek érintése nélkül: <code>docker compose exec web php artisan hdid:test-mail cim@example.org --now</code>, illetve <code>hdid:test-sms +36301234567 --now</code>.</li>
-    <li>Belső CA-val hitelesítő Exchange-nél a CA-fájl a <code>ca</code> mappába kerüljön, majd <code>docker compose up -d</code>; a TLS-ellenőrzést ne kapcsolja ki.</li>
+    <li>Belső CA-val hitelesítő Exchange-nél a CA-fájl a <code>ca</code> mappába kerüljön, majd <code>docker compose restart web worker sync-worker scheduler</code> (a CA-kat a konténer induláskor olvassa be, a <code>docker compose up -d</code> változatlan beállításnál nem indít újra); a TLS-ellenőrzést ne kapcsolja ki.</li>
     <li>A kimenő tűzfal engedje a konténerek felől az EWS/SMTP és az Ozeki címét.</li>
 </ol>
 <h3>Az ügyféltörzs-átvétel hibát jelez</h3>
@@ -269,6 +270,32 @@ docker info | grep -i proxy</code></pre>
 <ul>
     <li><strong>„Üres forrás” és „Gyanús forrás”:</strong> a védőkorlát megállította a futást, senki nem zárult le. Ellenőrizze az export teljességét.</li>
     <li><strong>Hitelesítési hiba:</strong> <code>docker compose exec web php artisan hdid:emd-sync-token</code>.</li>
+    <li><strong>„Hibás belépési válasz”:</strong> A belépés <code>POST</code> az <code>EMD_SYNC_LOGIN_URL</code> címre, JSON-törzzsel: <code>{"Password": "…", "Username": "…"}</code>; a rendszer 2xx választ vár, a törzs legfelső szintjén nem üres <code>access_token</code> és <code>refresh_token</code> mezővel. „Hibás belépési válasznál” a hibaszöveg a HTTP-státuszt és a kapott mezők nevét mondja (értékek nélkül), vagy azt, hogy a válasz nem JSON. Kézi próba ugyanazzal a kéréssel: megmutatja, hogyan érkezett meg a felhasználónév (JSON-ban egy backslash <code>\\</code> alakban látszik) és a jelszó (hossza, <code>=</code>-re végződik-e, van-e benne szóköz vagy idézőjel), majd a válasz státuszát és szerkezetét a tokenek értéke nélkül:
+<pre><code>docker compose exec web php artisan tinker --execute '$u = config("hdid.sync.username"); $p = (string) config("hdid.sync.password"); echo "Username: ".json_encode($u)."
+Password: ".strlen($p)." karakter; =-re végződik: ".(str_ends_with($p, "=") ? "igen" : "nem")."; szóköz vagy idézőjel benne: ".(preg_match("/[\s\"']/", $p) ? "IGEN" : "nem")."
+Kérés: POST ".config("hdid.sync.login_url")."
+  ".json_encode(["Password" =&gt; "***", "Username" =&gt; $u], JSON_UNESCAPED_UNICODE)."
+"; $r = Illuminate\Support\Facades\Http::acceptJson()-&gt;asJson()-&gt;withoutRedirecting()-&gt;timeout(20)-&gt;post(config("hdid.sync.login_url"), ["Password" =&gt; $p, "Username" =&gt; $u]); echo "Válasz: HTTP ".$r-&gt;status().", ".$r-&gt;header("Content-Type")."
+"; $walk = function ($v, $path) use (&amp;$walk) { if (is_array($v)) { foreach ($v as $k =&gt; $x) { $walk($x, $path === "" ? (string) $k : "$path.$k"); } return; } echo "  $path: ".gettype($v).(is_string($v) ? " (".strlen($v)." karakter)" : "")."
+"; }; $j = $r-&gt;json(); if (is_array($j)) { $walk($j, ""); } else { echo "  nem JSON: ".mb_substr(trim(strip_tags($r-&gt;body())), 0, 200)."
+"; }'</code></pre></li>
+    <li><strong>„Nem tudott kapcsolódni”</strong> (belépés, ID-lista vagy export): a hibaszöveg zárójelben megnevezi a kiszolgálót és az okot. A kérés adatai nem kerülnek bele.
+    <ul>
+        <li><em>a név a konténerből nem oldható fel (DNS)</em>: a konténer a gazdagép DNS-kiszolgálóit kérdezi, a gazdagép <code>/etc/hosts</code>-át nem látja. Csak ott szereplő névhez <code>extra_hosts</code> kell a <code>compose.override.yaml</code>-ban; helyi feloldós vagy VPN-es gazdagépnél a belső DNS-t a <code>/etc/docker/daemon.json</code> <code>dns</code> kulcsa adja (telepítési útmutató 6.7);</li>
+        <li><em>a kapcsolatot elutasították, vagy a cím nem érhető el</em>: tűzfal a Docker-hálózat (a <code>docker network inspect openhdid_default</code> szerinti alhálózat) és a kiszolgáló között, útválasztás vagy rossz port;</li>
+        <li><em>nem jött válasz időben</em>: jellemzően csendben eldobó tűzfal;</li>
+        <li><em>a tanúsítvány nem ellenőrizhető</em> (OpenSSL 20, „unable to get local issuer certificate”): a kiszolgáló tanúsítványát belső tanúsítványkiadó írta alá. A lánc a gazdagépről:
+<pre><code>openssl s_client -connect emd.ceg.local:443 -servername emd.ceg.local -showcerts &lt;/dev/null 2&gt;/dev/null | grep -E '^ *[0-9]+ s:|^ *i:'</code></pre>
+        Az utolsó <code>i:</code> sor a hiányzó kiadó (jellemzően a vállalati gyökér-CA). A tanúsítványa PEM-formátumban (<code>-----BEGIN CERTIFICATE-----</code>; Windows-ból „Base-64 kódolású X.509”, DER-ből <code>openssl x509 -inform der -in ca.cer -out ca.crt</code>) a <code>ca</code> mappába kerül <code>.crt</code> vagy <code>.pem</code> kiterjesztéssel, mindenki számára olvashatóan (644); ha a kiszolgáló a köztes tanúsítványt sem küldi, az is. Ha a gazdagép maga már megbízik benne (a <code>curl https://emd.ceg.local/</code> a gazdagépről hiba nélkül fut), a gazdagép tanúsítványtárában (<code>/etc/pki/ca-trust/source/anchors/</code>) megvan. Utána <code>docker compose restart web worker sync-worker scheduler</code>; a <code>docker compose logs web | grep "extra CA"</code> mutatja, hány CA-fájlt vett fel.</li>
+    </ul>
+    A konténer szemszögéből minden beállított ügyféltörzs-címet egyszerre ellenőriz ez a parancs (DNS, TCP és HTTPS, a nyers hibaüzenettel):
+<pre><code>docker compose exec web php artisan tinker --execute 'foreach (["login_url","refresh_url","id_list_url","api_url"] as $k) { $u = config("hdid.sync.$k"); if (! $u) { echo "$k: nincs beállítva
+"; continue; } $h = parse_url($u, PHP_URL_HOST); $p = parse_url($u, PHP_URL_PORT) ?: (parse_url($u, PHP_URL_SCHEME) === "http" ? 80 : 443); $ip = filter_var($h, FILTER_VALIDATE_IP) ? $h : gethostbyname($h); echo "$k: $h:$p
+  DNS:   ".($ip === $h &amp;&amp; ! filter_var($h, FILTER_VALIDATE_IP) ? "NEM OLDÓDIK FEL" : $ip)."
+"; $s = @fsockopen($ip, $p, $en, $es, 5); echo "  TCP:   ".($s ? "kapcsolódik" : "HIBA ($es)")."
+"; try { $r = Illuminate\Support\Facades\Http::timeout(10)-&gt;connectTimeout(5)-&gt;get($u); echo "  HTTPS: válaszol (HTTP ".$r-&gt;status().")
+"; } catch (Throwable $e) { echo "  HTTPS: ".preg_replace("/ \(see .*\$/s", "", $e-&gt;getMessage())."
+"; } }'</code></pre></li>
     <li><strong>Próbafuttatás javítás után:</strong> <code>docker compose exec web php artisan hdid:emd-sync --dry-run</code>.</li>
     <li><strong>Túl régi utolsó sikeres futás:</strong> <code>docker compose exec scheduler php artisan schedule:list</code> mutatja, ütemezve van-e a <code>hdid:emd-sync</code> (<code>EMD_SYNC_CRON</code>).</li>
     <li><strong>E-mail-ütközés:</strong> a Rendszerállapot sárga, a futás részleteinek „E-mail-ütközések” blokkja mutatja, kinek a címét nem lehetett átírni, mert másik fiókon áll; a fiók a régi címmel marad, és nem tud belépni, amíg az ütközést az ügyféltörzsben nem rendezik, vagy a másik fiókot nem törlik. A naplóban (<code>docker compose logs sync-worker</code>) figyelmeztető sor.</li>
@@ -332,8 +359,8 @@ docker info | grep -i proxy</code></pre>
 </ul>
 <ol class="steps">
     <li><strong>Az image ellenőrzése</strong> (választható, ajánlott):
-<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.4.1 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.4.1 \
+<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.4.2 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.4.2 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre></li>
     <li><strong>Mentés:</strong> <code>./backup.sh</code> (7. fejezet).</li>
@@ -455,7 +482,7 @@ cosign verify ghcr.io/adamfhun/openhdid:1.4.1 \
 <tr><td>SemVer</td><td>Semantic Versioning – szemantikus verziózás (fő.al.javító).</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID üzemeltetési kézikönyv 1.7 · 2026. október 9. · OpenHDID 1.4.1</div>
+<div class="foot">OpenHDID üzemeltetési kézikönyv 1.4.2 · 2026. október 9.</div>
 </div>
 
 </body>

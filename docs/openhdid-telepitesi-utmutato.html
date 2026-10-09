@@ -92,10 +92,10 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.12 · 2026. október 9.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.1 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.4.2 · 2026. október 9.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.2 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
-    <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.7, felhasználói kézikönyv 1.33</span></div>
+    <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv, felhasználói kézikönyv</span></div>
 </div>
 
 <nav class="toc" aria-label="Tartalom">
@@ -364,6 +364,13 @@ OPENHDID_HTTP_PORT=80</code></pre>
 </ul>
 <h3>6.6 Felügyeleti végpontok</h3>
 <p>A <code>/health</code> (az összes ellenőrzés állapota, 200 vagy 503) és a <code>/up</code> csak a konténeren belülről (127.0.0.1) és az <code>OPENHDID_MONITORING_ALLOW</code> címeiről érhető el, mások 404-et kapnak. A gazdagépről a közzétett porton érkező kérés a Docker-híd átjárócíméről jön (a <code>docker network inspect openhdid_default</code> mutatja, például 172.18.0.1), ezért ezt a címet kell a listába venni, különben a gazdagépről is 404 a válasz; a <code>docker compose exec web php artisan hdid:health</code> a listától függetlenül működik. A konténer saját egészség-ellenőrzése egy csak a konténeren belül elérhető porton fut, és nem függ ettől a listától.</p>
+<h3>6.7 Belső nevek feloldása a konténerből</h3>
+<p>A konténer a Docker beépített DNS-én át a gazdagép DNS-kiszolgálóit kérdezi, ezért a belső DNS-ben szereplő nevet (Exchange, ADFS, ügyféltörzs, SMS-átjáró, külső adatbázis) magától feloldja; nem kell minden nevet felvenni. A gazdagép <code>/etc/hosts</code> bejegyzéseit viszont nem látja.</p>
+<ul>
+    <li><strong>A név csak a gazdagép <code>/etc/hosts</code>-ában van</strong> (teszt gépen gyakori): <code>extra_hosts</code> egy, a <code>compose.yaml</code> mellé tett <code>compose.override.yaml</code>-ban a <code>web</code>, <code>worker</code>, <code>sync-worker</code> és <code>scheduler</code> szolgáltatásnak, majd <code>docker compose up -d</code>. A Compose a felülíró fájlt magától összefésüli, a kiadott <code>compose.yaml</code> érintetlen marad. Tartósan jobb, ha a név a belső DNS-be kerül.</li>
+    <li><strong>A gazdagép helyi feloldót használ</strong> (a <code>/etc/resolv.conf</code>-ban csak <code>127.0.0.x</code> áll, például systemd-resolved), vagy a belső DNS csak VPN-en át érhető el: a Dockernek a <code>/etc/docker/daemon.json</code> <code>dns</code> kulcsában egyszer kell megadni a belső DNS-kiszolgálókat (meglévő fájlnál abba felvéve), majd <code>sudo systemctl restart docker</code> és <code>docker compose up -d --force-recreate</code>. Így egyetlen nevet sem kell egyenként felvenni.</li>
+</ul>
+<p>Egy név vizsgálata (gazdagép kontra konténer), a <code>compose.override.yaml</code>-minta és a <code>daemon.json</code>-parancsok a kiadás <code>TROUBLESHOOTING.md</code> mellékletében.</p>
 
 <h2 id="s7"><span class="num">7</span>Adatbázis (MariaDB)</h2>
 <h3>7.1 Beépített adatbázis</h3>
@@ -538,6 +545,7 @@ SMS_DRIVER=log</code></pre>
 <div class="callout danger"><p><strong>Csak kipróbáláshoz.</strong> A demófiókok jelszava nyilvános; <code>APP_ENV=production</code> mellett a demóadatok betöltése hibával leáll. Éles telepítéshez új, üres adatbázissal kezdjen.</p></div>
 
 <h2 id="s14"><span class="num">14</span>Frissítés új verzióra</h2>
+<p>Minden kiadás mellékleteként jön egy <code>UPGRADE.md</code>: ugyanezek a lépések másolható parancsokkal, az adott kiadás verziószámával kitöltve (letöltés ellenőrzőösszeggel, az új telepítési kulcsok listája, visszalépés).</p>
 <ol class="steps">
     <li>Olvassa el a kiadási jegyzetet (<a href="https://github.com/adamfhun/openhdid/releases">GitHub Releases</a>, <code>CHANGELOG.md</code>). Választhatóan ellenőrizze az image aláírását (üzemeltetési kézikönyv 8. fejezet).</li>
     <li>Mentés: <code>./backup.sh</code> (adatbázis, <code>storage</code> kötet, beállítások, <code>tls</code>; üzemeltetési kézikönyv 7. fejezet). Ha a frissítés után vissza kell lépni: <code>./backup.sh restore</code>.</li>
@@ -572,7 +580,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.12 · 2026. október 9. · OpenHDID 1.4.1</div>
+<div class="foot">OpenHDID telepítési útmutató 1.4.2 · 2026. október 9.</div>
 </div>
 
 </body>

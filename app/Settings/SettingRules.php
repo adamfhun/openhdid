@@ -115,13 +115,8 @@ class SettingRules
             }
         }
 
-        if (! isset($errors[SettingKey::SyncExportPayload->value]) && RequestPayload::uses(is_string($export) ? $export : null, 'ids')) {
-            if (blank(config('hdid.sync.id_list_url'))) {
-                $errors[SettingKey::SyncExportPayload->value] = __('The export payload uses {{ ids }}, but EMD_SYNC_ID_LIST_URL is not configured.');
-            } elseif (! RequestPayload::isJsonObject(is_string($idList) ? $idList : null)) {
-                $errors[SettingKey::SyncExportPayload->value] = __('The export payload uses {{ ids }}: fill in the ID list request payload too.');
-            }
-        }
+        // An export with {{ ids }} saves in any order; the settings page lists what the
+        // sync still needs, and the sync itself refuses to run until the ID list is usable.
 
         return $errors;
     }

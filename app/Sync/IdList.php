@@ -12,6 +12,7 @@ use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use RuntimeException;
 
 /**
  * The EMD ID list (e.g. organizations): queried with the export's token and
@@ -142,50 +143,114 @@ class IdList
     }
 
     /**
-     * Listed, selected IDs the given selection would drop, for the warning
-     * before saving.
-     *
-     * @param  array<int, string|int>  $externalIds
-     * @return list<string>
+     * IDs listed in the audit context of one selection change at most; the
+     * count is always complete.
      */
-    public function wouldDeselect(array $externalIds): array
-    {
-        return SyncIdListItem::query()->listed()->where('selected', true)
-            ->whereNotIn('external_id', array_map('strval', $externalIds))->orderBy('name')->get()
-            ->map(fn (SyncIdListItem $item): string => $item->name.' ('.$item->external_id.')')->all();
-    }
+    public const AUDIT_ID_SAMPLE = 100;
 
     /**
-     * The reason a selection would leave `{{ ids }}` empty, or null.
+     * Selects or deselects the given IDs at once, as one audited change.
+     * Only listed IDs can be selected; a deselection also clears an ID that
+     * has left the list, so it does not come back selected.
      *
      * @param  array<int, string|int>  $externalIds
+     * @return int the number of IDs whose selection changed
      */
-    public function emptySelectionMessage(array $externalIds): ?string
+    public function setSelected(array $externalIds, bool $selected): int
     {
-        $selected = $externalIds === [] ? 0
-            : SyncIdListItem::query()->listed()->whereIn('external_id', array_map('strval', $externalIds))->count();
+        $ids = array_values(array_unique(array_map('strval', $externalIds)));
+        if ($ids === []) {
+            return 0;
+        }
 
-        return $selected === 0 ? __('The export payload uses {{ ids }}: select at least one ID of the ID list.') : null;
-    }
-
-    /**
-     * Stores the selection of the listed IDs; each change is audited. IDs off
-     * the list keep their earlier choice.
-     *
-     * @param  array<int, string|int>  $externalIds
-     */
-    public function select(array $externalIds): void
-    {
-        $wanted = array_flip(array_map('strval', $externalIds));
-
-        Cache::lock(self::LOCK, 60)->block(10, fn () => DB::transaction(function () use ($wanted): void {
-            foreach (SyncIdListItem::query()->listed()->get() as $item) {
-                $item->selected = array_key_exists($item->external_id, $wanted);
-                if ($item->isDirty('selected')) {
-                    $item->save();
-                }
+        return Cache::lock(self::LOCK, 60)->block(10, fn (): int => DB::transaction(function () use ($ids, $selected): int {
+            $query = SyncIdListItem::query()->whereIn('external_id', $ids)->where('selected', ! $selected);
+            if ($selected) {
+                $query->listed();
             }
+            $changed = $query->pluck('external_id')->map(fn ($id): string => (string) $id)->sort(SORT_NATURAL)->values()->all();
+            if ($changed === []) {
+                return 0;
+            }
+
+            // One query and one audit row for the whole change: a model save per item
+            // would write thousands of audit rows for a large selection.
+            SyncIdListItem::query()->whereIn('external_id', $changed)->update(['selected' => $selected, 'updated_at' => now()]);
+            $this->auditSelection($selected ? 'select' : 'deselect', $changed);
+
+            return count($changed);
         }));
+    }
+
+    /**
+     * Makes exactly the given listed IDs selected: the others listed are
+     * deselected. Returns how many were added and removed.
+     *
+     * @param  array<int, string|int>  $externalIds
+     * @return array{added: int, removed: int}
+     */
+    public function replaceSelection(array $externalIds): array
+    {
+        $wanted = array_values(array_unique(array_map('strval', $externalIds)));
+        $drop = SyncIdListItem::query()->listed()->where('selected', true)->whereNotIn('external_id', $wanted)
+            ->pluck('external_id')->map(fn ($id): string => (string) $id)->all();
+
+        return ['added' => $this->setSelected($wanted, true), 'removed' => $this->setSelected($drop, false)];
+    }
+
+    /**
+     * IDs typed or pasted by hand, separated by commas, semicolons or white
+     * space, split into those on the list and those that are not.
+     *
+     * @return array{known: list<string>, unknown: list<string>}
+     */
+    public function parseIds(string $text): array
+    {
+        $ids = array_values(array_unique(array_filter(preg_split('/[\s,;]+/u', $text) ?: [], fn (string $id): bool => $id !== '')));
+        $known = SyncIdListItem::query()->listed()->whereIn('external_id', $ids)->pluck('external_id')
+            ->map(fn ($id): string => (string) $id)->all();
+
+        return ['known' => array_values(array_intersect($ids, $known)), 'unknown' => array_values(array_diff($ids, $known))];
+    }
+
+    /**
+     * "Name (ID)" of the given IDs, for a confirmation: at most `$limit`, plus
+     * how many more there are.
+     *
+     * @param  array<int, string|int>  $externalIds
+     */
+    public function describe(array $externalIds, int $limit = 10): string
+    {
+        $ids = array_values(array_unique(array_map('strval', $externalIds)));
+        $names = SyncIdListItem::query()->whereIn('external_id', array_slice($ids, 0, $limit))->orderBy('name')->get()
+            ->map(fn (SyncIdListItem $item): string => $item->name.' ('.$item->external_id.')')->all();
+        $more = count($ids) - count($names);
+
+        return implode(', ', $names).($more > 0 ? ' '.__('and :n more', ['n' => $more]) : '');
+    }
+
+    /**
+     * @return array{selected: int, listed: int}
+     */
+    public function counts(): array
+    {
+        return [
+            'selected' => SyncIdListItem::query()->listed()->where('selected', true)->count(),
+            'listed' => SyncIdListItem::query()->listed()->count(),
+        ];
+    }
+
+    /**
+     * @param  list<string>  $ids
+     */
+    private function auditSelection(string $action, array $ids): void
+    {
+        $this->auditor->record('sync.id_list.selection_changed', context: [
+            'action' => $action,
+            'count' => count($ids),
+            'ids' => array_slice($ids, 0, self::AUDIT_ID_SAMPLE),
+            'truncated' => count($ids) > self::AUDIT_ID_SAMPLE,
+        ]);
     }
 
     /**
@@ -208,15 +273,21 @@ class IdList
             throw new IdListException($unknown);
         }
 
-        $token ??= $this->tokens->accessToken();
+        // A failed login is this query's failure too: kept in its status and in the
+        // audit log, with the reason, like any other ID list error.
+        try {
+            $token ??= $this->tokens->accessToken();
+        } catch (RuntimeException $exception) {
+            throw new IdListException($exception->getMessage());
+        }
 
         try {
             $response = $this->http->withToken($token)->acceptJson()->withoutRedirecting()
                 ->withBody(RequestPayload::render($payload), 'application/json')
                 ->connectTimeout(10)->timeout((int) config('hdid.sync.export_timeout', 600))
                 ->post($url);
-        } catch (ConnectionException) {
-            throw new IdListException(__('The EMD ID list query could not connect or timed out.'));
+        } catch (ConnectionException $exception) {
+            throw new IdListException(__('The EMD ID list query could not connect (:reason).', ['reason' => ConnectionFailure::describe($exception, $url)]));
         }
 
         $httpStatus = $response->status();

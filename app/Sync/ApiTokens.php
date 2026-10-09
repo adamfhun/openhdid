@@ -133,7 +133,15 @@ class ApiTokens
         $body = $response->json();
         if (! is_array($body) || ! is_string($body['access_token'] ?? null) || trim($body['access_token']) === ''
             || ! is_string($body['refresh_token'] ?? null) || trim($body['refresh_token']) === '') {
-            throw new RuntimeException(__('EMD API authentication returned an invalid token response.'));
+            // What arrived instead, by field names only: the values may be tokens.
+            $received = is_array($body)
+                ? __('received fields: :fields', ['fields' => implode(', ', array_slice(array_map('strval', array_keys($body)), 0, 12)) ?: '-'])
+                : __('the answer is not JSON (:type)', ['type' => $response->header('Content-Type') ?: '-']);
+
+            throw new RuntimeException(__('EMD API authentication returned an invalid token response (HTTP :status; :received); access_token and refresh_token are expected at the top level.', [
+                'status' => $response->status(),
+                'received' => $received,
+            ]));
         }
 
         return [
@@ -158,9 +166,11 @@ class ApiTokens
             return $this->http->acceptJson()->asJson()->withoutRedirecting()
                 ->connectTimeout(10)->timeout((int) config('hdid.sync.auth_timeout', 20))
                 ->post(config('hdid.sync.'.$route), $payload);
-        } catch (ConnectionException) {
-            // Do not retain the exception: its request can contain credentials.
-            throw new RuntimeException(__('EMD API authentication could not connect or timed out.'));
+        } catch (ConnectionException $exception) {
+            // Only the reason and the host are kept: the request can contain credentials.
+            throw new RuntimeException(__('EMD API authentication could not connect (:reason).', [
+                'reason' => ConnectionFailure::describe($exception, config('hdid.sync.'.$route)),
+            ]));
         }
     }
 

@@ -210,14 +210,15 @@ it('preserves the EMD request settings and the ID selection when a user without 
 
     Livewire::test(ManageSettings::class)
         ->assertFormFieldIsDisabled(ManageSettings::fieldName(SettingKey::SyncExportPayload))
-        ->assertFormFieldIsDisabled('idList.'.ManageSettings::ID_LIST_FIELD)
         ->set('data.'.ManageSettings::fieldName(SettingKey::SyncExportPayload), '{"ids":"tampered"}')
         ->set('data.'.ManageSettings::fieldName(SettingKey::SyncIdListPayload), '{"list":"tampered"}')
         ->set('data.'.ManageSettings::fieldName(SettingKey::SyncIdListIdPath), 'tampered.id')
-        ->set('data.'.ManageSettings::ID_LIST_FIELD, [])
         ->fillForm([ManageSettings::fieldName(SettingKey::SyncExpectedIntervalHours) => 3])
         ->call('save')->assertHasNoFormErrors()
-        ->assertActionDoesNotExist(TestAction::make('fetchIdList')->schemaComponent('idList', 'form'));
+        ->assertActionHidden(TestAction::make('fetchIdList')->table())
+        ->assertActionHidden(TestAction::make('selectByIds')->table())
+        ->assertActionHidden(TestAction::make('toggleSelection')->table($item))
+        ->assertActionHidden(TestAction::make('deselectIds')->table()->bulk());
 
     expect($settings->string(SettingKey::SyncExportPayload))->toBe('{"ids":"original"}')
         ->and($settings->string(SettingKey::SyncIdListPayload))->toBe('{"list":"original"}')

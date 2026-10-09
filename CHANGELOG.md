@@ -4,6 +4,44 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.4.2] – 2026-10-09
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- NYT-11: ha az ügyféltörzs nem érhető el (belépés, ID-lista, export), a hibaüzenet megnevezi a kiszolgálót és az okot (DNS, elutasított kapcsolat, időtúllépés, ellenőrizhetetlen tanúsítvány) teendő-tanáccsal, a kérés adatai nélkül.
+- NYT-13: az ID-lista lekérdezésénél a belépés hibája is az ID-lista állapotában és az eseménynaplóban látszik.
+- NYT-13.2: az ID-lista a Beállítások › Ügyféltörzs (EMD) fülön lapozott, kereshető táblázat; a kijelölés azonnal érvényes, soronként, az oldal bejelölt soraira tömegesen, vagy beillesztett ID-kkel (hozzáadás vagy „csak ezek”); levétel előtt megerősítés a nevekkel.
+- NYT-13.3: a beállítások bármilyen sorrendben menthetők, a `{{ ids }}`-s export hiányzó ID-lista vagy kijelölés mellett is; az oldal felsorolja, mi hiányzik, és az átvétel addig nem indul. A kijelölés auditja műveletenként egy összesítő esemény.
+- NYT-11: ha a belépésre adott válasz nem a várt alakú, az üzenet a HTTP-státuszt és a kapott mezők nevét mondja (értékek nélkül), vagy azt, hogy a válasz nem JSON.
+
+Részletek:
+- A három kapcsolódási hiba eddig általános szöveg volt („az ügyféltörzs API-ja nem érhető el”), mert a nyers kivétel a kérés hozzáférési adatait is hordozhatja. Most csak a cURL-hibakód és a cím hosztja, portja kerül ki belőle, magyarázattal (például „a név a konténerből nem oldható fel (DNS); belső névhez … extra_hosts”). Az üzemeltetési kézikönyvek egy bemásolható diagnosztikát is adnak, amely a konténer szemszögéből minden ügyféltörzs-címet ellenőriz (DNS, TCP, HTTPS), és a belépés kézi próbáját.
+- ID-lista: a jelölőnégyzet-lista helyén lapozott táblázat (név, ID, kijelölve, listán), keresés névre és ID-re, szűrők, CSV-export; „Kijelölés”, „Levétel” (megerősítéssel), tömeges művelet az oldal bejelölt soraira, „Kijelölés ID-k alapján” hozzáadás vagy „csak ezek” módban. A lekérő gomb a táblázat fejlécébe került. Az auditnaplóban a kijelölés változása mostantól műveletenként egy `sync.id_list.selection_changed` esemény (darabszám, legfeljebb 100 ID) a korábbi tételenkénti `sync_id_list_item.updated` sorok helyett; aki ezekre szűr, annak ez változás.
+- Mentési sorrend: a `{{ ids }}`-s export akkor is menthető, ha az ID-lista címe, kéréstörzse, letöltése vagy a kijelölés még hiányzik; a szakasz és a mentés utáni figyelmeztetés felsorolja a hiányzó lépéseket, az átvétel addig nem indul.
+- Üzemeltetési kézikönyv: a `ca` mappába tett belső CA után `docker compose restart web worker sync-worker scheduler` kell; a kézikönyv eddig tévesen `docker compose up -d`-t írt, ami változatlan beállításnál nem indít újra. A lánc kiolvasása és a PEM/DER-átalakítás is leírva.
+- Dokumentumok: mostantól mind a termék verzióját viselik (1.4.2), külön dokumentumverzió nincs.
+- Új melléklet: `TROUBLESHOOTING.md`, másolható diagnosztikai parancsok egy helyen (állapot, naplók, proxy, Docker-jogosultság, fájltulajdonos, ügyféltörzs-elérés és -belépés, tanúsítvány-lánc és belső CA, ADFS/Entra-felfedezés, a belépés elutasításának oka, levél és SMS, mentés); titkot egyik sem ír ki.
+- Belső nevek feloldása (telepítési útmutató 6.7, `TROUBLESHOOTING.md`): a konténer a gazdagép DNS-kiszolgálóit kérdezi, a gazdagép `/etc/hosts`-át nem látja; `extra_hosts` csak az ott szereplő nevekhez kell, helyi feloldós vagy VPN-es gazdagépnél a belső DNS-t a `/etc/docker/daemon.json` `dns` kulcsa adja. A DNS-hiba üzenete ugyanezt tanácsolja.
+- Új melléklet: `UPGRADE.md`, a frissítés lépései másolható parancsokkal, a kiadás verziójával kitöltve (mentés, letöltés ellenőrzőösszeggel, az új telepítési kulcsok listája, frissítés, ellenőrzés, visszalépés).
+
+### English
+Rule changes in one sentence each (with the specification's identifiers):
+- NYT-11: when the master-data system cannot be reached (login, ID list, export), the message names the host and the reason (DNS, refused connection, timeout, unverifiable certificate) with a hint, without the request's data.
+- NYT-13: a failed login during the ID list query also shows in the ID list status and the audit log.
+- NYT-13.2: the ID list on Settings › Master data (EMD) is a paged, searchable table; selection takes effect at once, per row, in bulk for the checked rows of the page, or by pasted IDs (add, or "only these"); a deselection asks first, naming the IDs.
+- NYT-13.3: settings save in any order, an export with `{{ ids }}` too while the ID list or the selection is still missing; the page lists what is missing and the sync does not run until then. A selection change is audited as one summary event.
+- NYT-11: an unusable login answer is reported with its HTTP status and the received field names (no values), or as not being JSON.
+
+Details:
+- The three connection errors were a generic text ("the EMD API is not reachable"), because the raw exception can carry the request's credentials. Now only the cURL error code and the address's host and port are taken from it, with an explanation (for example "the name does not resolve inside the container (DNS); an internal name needs … extra_hosts"). The operations manuals add a copy-paste diagnostic that checks every master-data address from inside the container (DNS, TCP, HTTPS), and a manual login test.
+- ID list: a paged table replaces the checkbox list (name, ID, selected, listed), with search by name and ID, filters, CSV export; Select, Deselect (with a confirmation), bulk actions on the checked rows of the page, and Select by IDs in add or "only these" mode. The fetch button moved to the table header. In the audit log a selection change is now one `sync.id_list.selection_changed` event per action (count, at most 100 IDs) instead of one `sync_id_list_item.updated` row per item; filters on the latter need updating.
+- Save order: an export with `{{ ids }}` saves even while the ID list address, payload, fetch or selection is missing; the section and a warning after saving list the missing steps, and the sync does not run until then.
+- Operations manual (Hungarian): after adding an internal CA to the ca folder, `docker compose restart web worker sync-worker scheduler` is needed; the manual wrongly said `docker compose up -d`, which does not restart unchanged services. Reading the chain and converting PEM/DER are described too.
+- Documents now all carry the product version (1.4.2); there are no separate document versions.
+- New release asset: `TROUBLESHOOTING.md`, copyable diagnostic commands in one place (state, logs, proxy, Docker permissions, file ownership, master-data reachability and login, certificate chain and internal CA, ADFS/Entra discovery, why a sign-in was refused, mail and SMS, backup); none prints a secret.
+- Internal names (installation guide 6.7, `TROUBLESHOOTING.md`): the container asks the host's DNS servers but does not see the host's `/etc/hosts`; `extra_hosts` is only needed for names listed there, and a host with a local resolver or VPN DNS gives Docker the internal DNS through the `dns` key of `/etc/docker/daemon.json`. The DNS error message says the same.
+- New release asset: `UPGRADE.md`, the upgrade steps as copyable commands with the release version filled in (backup, verified download, list of new deployment keys, upgrade, check, going back).
+
 ## [1.4.1] – 2026-10-09
 
 ### Magyar

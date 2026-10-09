@@ -6,6 +6,7 @@ use App\Enums\SyncSource;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Sync\ApiTokens;
+use App\Sync\ConnectionFailure;
 use App\Sync\Contracts\SourceReader;
 use App\Sync\IdList;
 use App\Sync\IdListException;
@@ -74,8 +75,8 @@ class ApiSpreadsheetReader implements SourceReader
                     ->withBody(RequestPayload::render($payload, $values), 'application/json')
                     ->connectTimeout(10)->timeout((int) config('hdid.sync.export_timeout', 600))
                     ->sink($path)->post($this->url);
-            } catch (ConnectionException) {
-                throw new SourceFormatException(__('EMD export could not connect or timed out.'));
+            } catch (ConnectionException $exception) {
+                throw new SourceFormatException(__('EMD export could not connect (:reason).', ['reason' => ConnectionFailure::describe($exception, $this->url)]));
             }
 
             $this->details['export'] = ['status' => $response->status()];

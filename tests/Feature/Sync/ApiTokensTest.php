@@ -4,6 +4,7 @@ use App\Sync\ApiTokens;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
@@ -132,6 +133,16 @@ it('rejects malformed token responses', function (array $response): void {
     [['access_token' => ['unexpected'], 'refresh_token' => 'r']],
 ]);
 
+it('names the status and the received field names of an unusable login answer, never the values', function (mixed $body, array $headers, string $expected): void {
+    Http::fake(['https://directory.test/login' => Http::response($body, 200, $headers)]);
+
+    expect(fn () => app(ApiTokens::class)->accessToken())->toThrow(RuntimeException::class, $expected);
+    expect(app(ApiTokens::class)->status()['error'])->not->toContain('secret-access');
+})->with([
+    'nested tokens' => [['result' => ['accessToken' => 'secret-access'], 'message' => 'ok'], [], 'HTTP 200; received fields: result, message'],
+    'an HTML page' => ['<html>Sign in</html>', ['Content-Type' => 'text/html'], 'the answer is not JSON (text/html)'],
+]);
+
 it('reports refresh availability and staleness without making a health-check request', function (): void {
     Http::fake(['https://directory.test/login' => Http::response(['access_token' => 'a', 'refresh_token' => 'r'])]);
     $checks = app(HealthChecks::class);
@@ -202,3 +213,24 @@ it('keeps the former command names as aliases', function (): void {
     $this->artisan('hdid:sync-token')->assertSuccessful();
     expect(app(ApiTokens::class)->status()['error'])->toBeNull();
 });
+
+it('names the host and the reason when the EMD login cannot connect, without the credentials', function (string $curl, string $reason): void {
+    Http::fake(fn () => throw new ConnectionException($curl.' for https://directory.test/login'));
+
+    $tokens = app(ApiTokens::class);
+
+    try {
+        $tokens->accessToken();
+        $this->fail('the login should not connect');
+    } catch (RuntimeException $exception) {
+        expect($exception->getMessage())->toContain('directory.test:443')->toContain($reason)
+            ->not->toContain('directory-secret');
+    }
+
+    expect($tokens->status()['error'])->toContain('directory.test:443')->toContain($reason);
+})->with([
+    'unresolvable name' => ['cURL error 6: Could not resolve host: directory.test', 'DNS'],
+    'refused' => ['cURL error 7: Failed to connect to directory.test port 443', 'refused'],
+    'timeout' => ['cURL error 28: Connection timed out after 10001 milliseconds', 'no answer in time'],
+    'unknown CA' => ['cURL error 60: SSL certificate problem: unable to get local issuer certificate', 'ca folder'],
+]);

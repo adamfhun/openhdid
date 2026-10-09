@@ -7,6 +7,7 @@ use App\Models\SyncIdListItem;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\Sync\IdList;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
@@ -30,52 +31,114 @@ beforeEach(function (): void {
 
 function fetchIdListAction(): TestAction
 {
-    return TestAction::make('fetchIdList')->schemaComponent('idList', 'form');
+    return TestAction::make('fetchIdList')->table();
 }
 
-it('shows the stored IDs alphabetically and saves the selection with an audit trail', function (): void {
+function selectionAudits(): array
+{
+    return AuditLog::query()->where('event', 'sync.id_list.selection_changed')->orderBy('created_at')->get()
+        ->map(fn (AuditLog $log): array => $log->context)->all();
+}
+
+it('lists the stored IDs alphabetically in a paged table and searches by name or ID', function (): void {
+    // Sorting is the database's: MariaDB orders accented letters with their base letter;
+    // the test database (SQLite) compares bytes, so the order check uses plain names.
     $zebra = SyncIdListItem::factory()->create(['external_id' => '12', 'name' => 'Zebra Kft.']);
     $ag = SyncIdListItem::factory()->create(['external_id' => '3', 'name' => 'Ág Bt.']);
-    SyncIdListItem::factory()->removed()->create(['external_id' => '9', 'name' => 'Megszűnt Kft.']);
+    $alma = SyncIdListItem::factory()->create(['external_id' => '40', 'name' => 'Alma Zrt.']);
+    $gone = SyncIdListItem::factory()->removed()->create(['external_id' => '9', 'name' => 'Megszűnt Kft.']);
 
     Livewire::test(ManageSettings::class)
-        ->assertSeeInOrder(['Ág Bt. (3)', 'Zebra Kft. (12)'])
-        ->assertDontSee('Megszűnt Kft.')
-        ->fillForm([ManageSettings::ID_LIST_FIELD => ['3']])
-        ->call('save')->assertHasNoFormErrors();
-
-    expect($ag->fresh()->selected)->toBeTrue()->and($zebra->fresh()->selected)->toBeFalse();
-    $audit = AuditLog::query()->where('event', 'sync_id_list_item.updated')->sole();
-    expect($audit->subject_id)->toBe($ag->id)
-        ->and($audit->actor_id)->toBe($this->admin->id)
-        ->and($audit->context)->toBe(['from' => ['selected' => false], 'to' => ['selected' => true]]);
+        ->assertCanSeeTableRecords([$alma, $zebra], inOrder: true)
+        ->assertCanSeeTableRecords([$ag])
+        ->assertCanNotSeeTableRecords([$gone])
+        ->searchTable('Zebra')->assertCanSeeTableRecords([$zebra])->assertCanNotSeeTableRecords([$ag])
+        ->searchTable('40')->assertCanSeeTableRecords([$alma])->assertCanNotSeeTableRecords([$zebra, $ag])
+        ->searchTable(null)->filterTable('listed', false)->assertCanSeeTableRecords([$gone])->assertCanNotSeeTableRecords([$ag, $zebra, $alma]);
 });
 
-it('asks for confirmation before saving a selection that drops IDs', function (): void {
-    SyncIdListItem::factory()->selected()->create(['external_id' => '40', 'name' => 'Alma Zrt.']);
+it('selects a row at once, without a dialog, as one audited change', function (): void {
+    $ag = SyncIdListItem::factory()->create(['external_id' => '3', 'name' => 'Ág Bt.']);
+
+    Livewire::test(ManageSettings::class)
+        ->callAction(TestAction::make('toggleSelection')->table($ag))
+        ->assertHasNoActionErrors();
+
+    expect($ag->fresh()->selected)->toBeTrue()
+        ->and(selectionAudits())->toBe([['action' => 'select', 'count' => 1, 'ids' => ['3'], 'truncated' => false]])
+        ->and(AuditLog::query()->where('event', 'sync.id_list.selection_changed')->sole()->actor_id)->toBe($this->admin->id)
+        ->and(AuditLog::query()->where('event', 'sync_id_list_item.updated')->exists())->toBeFalse('one summary row, not one per item');
+});
+
+it('asks before deselecting a row, naming the ID and the consequence', function (): void {
+    $alma = SyncIdListItem::factory()->selected()->create(['external_id' => '40', 'name' => 'Alma Zrt.']);
     SyncIdListItem::factory()->selected()->create(['external_id' => '12', 'name' => 'Zebra Kft.']);
 
     Livewire::test(ManageSettings::class)
-        ->fillForm([ManageSettings::ID_LIST_FIELD => ['12']])
-        ->mountAction('save')
-        ->assertActionMounted('save')
+        ->mountAction(TestAction::make('toggleSelection')->table($alma))
+        ->assertActionMounted(TestAction::make('toggleSelection')->table($alma))
         ->assertMountedActionModalSee('Alma Zrt. (40)')
         ->assertMountedActionModalDontSee('Zebra Kft.')
-        ->callMountedAction()
-        ->assertHasNoFormErrors();
+        ->callMountedAction();
 
-    expect(SyncIdListItem::query()->where('selected', true)->pluck('external_id')->all())->toBe(['12']);
+    expect(SyncIdListItem::query()->where('selected', true)->pluck('external_id')->all())->toBe(['12'])
+        ->and(selectionAudits())->toBe([['action' => 'deselect', 'count' => 1, 'ids' => ['40'], 'truncated' => false]]);
 });
 
-it('saves without confirmation when no selected ID is dropped', function (): void {
-    SyncIdListItem::factory()->create(['external_id' => '40', 'name' => 'Alma Zrt.']);
+it('selects and deselects the checked rows of the page in bulk, the deselection with a warning', function (): void {
+    app(Settings::class)->set(SettingKey::SyncExportPayload, '{"ids":"{{ ids }}"}');
+    $items = collect(['1' => 'Egy Kft.', '2' => 'Kettő Kft.', '3' => 'Három Kft.'])
+        ->map(fn (string $name, string $id) => SyncIdListItem::factory()->create(['external_id' => $id, 'name' => $name]));
 
     Livewire::test(ManageSettings::class)
-        ->fillForm([ManageSettings::ID_LIST_FIELD => ['40']])
-        ->callAction('save')
-        ->assertHasNoFormErrors();
+        ->selectTableRecords($items->only(['1', '2'])->values()->all())
+        ->callAction(TestAction::make('selectIds')->table()->bulk())
+        ->assertNotified(__(':n ID(s) selected', ['n' => 2]));
+    expect(app(IdList::class)->selectedIds())->toBe(['1', '2']);
 
-    expect(SyncIdListItem::query()->sole()->selected)->toBeTrue();
+    Livewire::test(ManageSettings::class)
+        ->selectTableRecords($items->only(['1', '2'])->values()->all())
+        ->mountAction(TestAction::make('deselectIds')->table()->bulk())
+        ->assertMountedActionModalSee(['Egy Kft. (1)', 'Kettő Kft. (2)', __('No ID stays selected: the sync does not run until one is selected again.')])
+        ->callMountedAction();
+    expect(app(IdList::class)->selectedIds())->toBe([])
+        ->and(collect(selectionAudits())->pluck('action')->all())->toBe(['select', 'deselect']);
+});
+
+it('selects by pasted IDs, adding or replacing, and reports the IDs not on the list', function (): void {
+    foreach (['3' => 'Ág Bt.', '12' => 'Zebra Kft.', '40' => 'Alma Zrt.'] as $id => $name) {
+        SyncIdListItem::factory()->create(['external_id' => (string) $id, 'name' => $name, 'selected' => $id === 40]);
+    }
+
+    Livewire::test(ManageSettings::class)
+        ->callAction(TestAction::make('selectByIds')->table(), ['ids' => "3, 12\n999", 'mode' => 'add'])
+        ->assertNotified(__('Selection updated: :added selected, :removed deselected.', ['added' => 2, 'removed' => 0]));
+    expect(app(IdList::class)->selectedIds())->toBe(['3', '12', '40']);
+
+    Livewire::test(ManageSettings::class)
+        ->callAction(TestAction::make('selectByIds')->table(), ['ids' => '12;40', 'mode' => 'only'])
+        ->assertNotified(__('Selection updated: :added selected, :removed deselected.', ['added' => 0, 'removed' => 1]));
+    expect(app(IdList::class)->selectedIds())->toBe(['12', '40']);
+
+    // A typo must not empty the selection.
+    Livewire::test(ManageSettings::class)
+        ->callAction(TestAction::make('selectByIds')->table(), ['ids' => '777', 'mode' => 'only'])
+        ->assertNotified(__('None of the IDs is on the list; nothing changed.'));
+    expect(app(IdList::class)->selectedIds())->toBe(['12', '40']);
+});
+
+it('exports the filtered ID list as CSV', function (): void {
+    SyncIdListItem::factory()->selected()->create(['external_id' => '3', 'name' => 'Ág Bt.']);
+    SyncIdListItem::factory()->create(['external_id' => '12', 'name' => 'Zebra Kft.']);
+
+    $response = Livewire::test(ManageSettings::class)
+        ->filterTable('selected', true)
+        ->callAction(TestAction::make('exportIdList')->table())
+        ->assertFileDownloaded();
+    $body = base64_decode((string) data_get($response->effects, 'download.content'));
+
+    expect($body)->toContain('Ág Bt.')->not->toContain('Zebra Kft.')
+        ->and(explode("\n", trim($body))[0])->toContain(__('ID'), __('Name'), __('Selected'));
 });
 
 it('fetches the ID list from the panel and audits the status code', function (): void {
@@ -103,23 +166,38 @@ it('disables the fetch button with a reason while the ID list URL is missing', f
         ->assertSee('EMD_SYNC_ID_LIST_URL is not configured.');
 });
 
-it('refuses an export payload using ids until the ID list is usable', function (?string $url, ?string $idListPayload, bool $withSelection, string $field): void {
+it('saves an export payload using ids in any order and names what the sync still needs', function (?string $url, ?string $idListPayload, bool $listed, bool $selected, string $missing): void {
     config()->set('hdid.sync.id_list_url', $url);
     app(Settings::class)->set(SettingKey::SyncIdListPayload, $idListPayload);
-    SyncIdListItem::factory()->create(['external_id' => '12']);
+    if ($listed) {
+        SyncIdListItem::factory()->create(['external_id' => '12', 'selected' => $selected]);
+    }
     $exportField = ManageSettings::fieldName(SettingKey::SyncExportPayload);
 
     Livewire::test(ManageSettings::class)
-        ->fillForm([$exportField => '{"ids":"{{ ids }}"}', ManageSettings::ID_LIST_FIELD => $withSelection ? ['12'] : []])
+        ->fillForm([$exportField => '{"ids":"{{ ids }}"}'])
         ->call('save')
-        ->assertHasFormErrors([$field === 'export' ? $exportField : ManageSettings::ID_LIST_FIELD]);
+        ->assertHasNoFormErrors()
+        ->assertNotified(__('The export uses {{ ids }}, but the sync does not run yet'))
+        ->assertSee(__($missing));
 
-    expect(app(Settings::class)->string(SettingKey::SyncExportPayload))->toBeNull();
+    expect(app(Settings::class)->string(SettingKey::SyncExportPayload))->toBe('{"ids":"{{ ids }}"}');
 })->with([
-    'no ID list URL' => [null, '{"a":1}', true, 'export'],
-    'no ID list payload' => ['https://directory.test/organizations', null, true, 'export'],
-    'nothing selected' => ['https://directory.test/organizations', '{"a":1}', false, 'selection'],
+    'no ID list URL' => [null, '{"a":1}', true, true, 'the ID list address (EMD_SYNC_ID_LIST_URL in .env)'],
+    'no ID list payload' => ['https://directory.test/organizations', null, true, true, 'the ID list request payload (above)'],
+    'not fetched yet' => ['https://directory.test/organizations', '{"a":1}', false, false, 'fetching the ID list (button below)'],
+    'nothing selected' => ['https://directory.test/organizations', '{"a":1}', true, false, 'at least one selected ID (table below)'],
 ]);
+
+it('says nothing about readiness once the ID list is usable', function (): void {
+    SyncIdListItem::factory()->selected()->create(['external_id' => '12']);
+
+    Livewire::test(ManageSettings::class)
+        ->fillForm([ManageSettings::fieldName(SettingKey::SyncExportPayload) => '{"ids":"{{ ids }}"}'])
+        ->call('save')
+        ->assertHasNoFormErrors()
+        ->assertNotNotified(__('The export uses {{ ids }}, but the sync does not run yet'));
+});
 
 it('accepts only now in the ID list payload and well-formed response paths', function (string $field, string $value): void {
     Livewire::test(ManageSettings::class)

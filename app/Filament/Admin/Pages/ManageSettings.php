@@ -6,10 +6,12 @@ use App\Auth\Permission;
 use App\Clients\ClientLinks;
 use App\Clients\PackageListImpact;
 use App\Enums\ClientTier;
+use App\Filament\Actions\ExportTableAction;
 use App\Filament\Admin\Clusters\System;
 use App\Identification\MobileOtpService;
 use App\Identification\PinService;
 use App\Models\Call;
+use App\Models\SyncIdListItem;
 use App\Settings\SettingKey;
 use App\Settings\SettingRules;
 use App\Settings\Settings;
@@ -19,10 +21,11 @@ use App\Sync\IdList;
 use App\Sync\RequestPayload;
 use BackedEnum;
 use Filament\Actions\Action;
-use Filament\Forms\Components\CheckboxList;
+use Filament\Actions\BulkAction;
 use Filament\Forms\Components\ColorPicker;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\KeyValue;
+use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TagsInput;
@@ -32,11 +35,21 @@ use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Schemas\Components\Component;
+use Filament\Schemas\Components\EmbeddedTable;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
+use Filament\Schemas\Components\Text;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Columns\IconColumn;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Concerns\InteractsWithTable;
+use Filament\Tables\Contracts\HasTable;
+use Filament\Tables\Filters\TernaryFilter;
+use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
@@ -47,8 +60,10 @@ use RuntimeException;
  * Every runtime business decision, grouped by the first segment of the
  * setting key. Fields are generated from the SettingKey enum.
  */
-class ManageSettings extends Page
+class ManageSettings extends Page implements HasTable
 {
+    use InteractsWithTable;
+
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCog6Tooth;
 
     protected static ?string $cluster = System::class;
@@ -58,9 +73,6 @@ class ManageSettings extends Page
     protected static ?string $slug = 'settings';
 
     protected string $view = 'filament.admin.manage-settings';
-
-    /** Form field of the ID list selection; not a setting, stored by IdList. */
-    public const ID_LIST_FIELD = 'id_list_selection';
 
     /** @var array<string, mixed> */
     public ?array $data = [];
@@ -88,7 +100,6 @@ class ManageSettings extends Page
         foreach (SettingKey::cases() as $key) {
             $values[static::fieldName($key)] = $this->toFormValue($key, $settings->get($key));
         }
-        $values[self::ID_LIST_FIELD] = app(IdList::class)->selectedIds();
 
         $this->form->fill($values);
     }
@@ -131,9 +142,6 @@ class ManageSettings extends Page
 
         $this->validateValues($values);
         $impact = $this->assertPackageListsUsable($values);
-        $selection = $this->canManageSync() ? array_map('strval', array_values((array) ($state[self::ID_LIST_FIELD] ?? []))) : null;
-        $this->assertIdSelectionUsable($values, $selection);
-
         if (! $this->canManageSync()) {
             $values = array_filter($values, fn (string $key): bool => ! SettingKey::from($key)->requiresSyncManage(), ARRAY_FILTER_USE_KEY);
         }
@@ -143,9 +151,6 @@ class ManageSettings extends Page
         // Entitlement follows the lists at once; the links of sponsors whose
         // package left the premium list end now, not at the hourly sweep.
         $endedLinks = $impact['changed'] ? app(ClientLinks::class)->endLinksOfIneligibleSponsors() : 0;
-        if ($selection !== null) {
-            app(IdList::class)->select($selection);
-        }
         foreach ([SettingKey::SyncUserDomains, SettingKey::SyncClientDomains] as $key) {
             $this->data[static::fieldName($key)] = $settings->array($key);
         }
@@ -157,6 +162,15 @@ class ManageSettings extends Page
             ]))->persistent();
         }
         $saved->send();
+
+        // Any order is fine: an export payload with {{ ids }} saves even before the ID
+        // list is ready, and the sync refuses to run until it is. Say what is missing.
+        if ($missing = $this->idsReadiness()) {
+            Notification::make()->warning()->persistent()
+                ->title(__('The export uses {{ ids }}, but the sync does not run yet'))
+                ->body(__('Still missing: :list.', ['list' => implode('; ', $missing)]))
+                ->send();
+        }
     }
 
     /**
@@ -231,27 +245,6 @@ class ManageSettings extends Page
     }
 
     /**
-     * An export payload with `{{ ids }}` needs at least one selected ID on
-     * the list, or every sync would stop before the export.
-     *
-     * @param  array<string, mixed>  $values
-     * @param  list<string>|null  $selection  null when the user cannot change it
-     */
-    private function assertIdSelectionUsable(array $values, ?array $selection): void
-    {
-        $payload = $values[SettingKey::SyncExportPayload->value] ?? null;
-        if ($selection === null || ! RequestPayload::uses(is_string($payload) ? $payload : null, 'ids')) {
-            return;
-        }
-
-        if ($message = app(IdList::class)->emptySelectionMessage($selection)) {
-            Notification::make()->title(__('Settings not saved'))->body($message)->danger()->send();
-
-            throw ValidationException::withMessages(['data.'.self::ID_LIST_FIELD => $message]);
-        }
-    }
-
-    /**
      * Rules that only make sense across fields: a Q-A session must be able
      * to reach its pass threshold, and a client must have answered at least
      * as many questions as the threshold asks for.
@@ -279,8 +272,8 @@ class ManageSettings extends Page
     }
 
     /**
-     * Saving asks for confirmation when it drops selected IDs: their records
-     * stop arriving and their accounts close after the missed runs.
+     * Saving asks for confirmation only when the package lists change who
+     * sponsors or which tier clients get.
      */
     public function saveAction(): Action
     {
@@ -289,40 +282,57 @@ class ManageSettings extends Page
         return Action::make('save')->label(__('Save'))->keyBindings(['mod+s'])
             // A custom heading or description opens the modal on its own in Filament;
             // modal() keeps a plain save one click.
-            ->requiresConfirmation(fn (): bool => $this->idListDeselections() !== [] || $impact->needsConfirmation($this->packageImpact()))
-            ->modal(fn (): bool => $this->idListDeselections() !== [] || $impact->needsConfirmation($this->packageImpact()))
-            ->modalHeading(fn (): string => $this->idListDeselections() !== [] ? __('Stop sending these IDs?') : __('Apply the package list change?'))
-            ->modalDescription(fn (): string => implode(' ', array_filter([
-                $this->idListDeselections() !== [] ? __('These IDs will no longer be sent in the export: :list. Their EMD records stop arriving, and the linked accounts are closed after :runs missed syncs. Run a trial sync after saving to see the planned closures.', [
-                    'list' => implode(', ', $this->idListDeselections()),
-                    'runs' => app(Settings::class)->int(SettingKey::SyncMissedRunsBeforeClose),
-                ]) : null,
-                $impact->summary($this->packageImpact()),
-            ])))
+            ->requiresConfirmation(fn (): bool => $impact->needsConfirmation($this->packageImpact()))
+            ->modal(fn (): bool => $impact->needsConfirmation($this->packageImpact()))
+            ->modalHeading(__('Apply the package list change?'))
+            ->modalDescription(fn (): string => $impact->summary($this->packageImpact()))
             ->modalSubmitActionLabel(__('Save'))
             ->action(fn () => $this->save());
     }
 
     /**
-     * @return list<string>
-     */
-    private function idListDeselections(): array
-    {
-        if (! $this->canManageSync()) {
-            return [];
-        }
-
-        return app(IdList::class)->wouldDeselect(array_values((array) ($this->data[self::ID_LIST_FIELD] ?? [])));
-    }
-
-    /**
-     * The ID list on the EMD tab: the stored list as checkboxes in alphabetical
-     * order with a live name filter, the fetch button and the last status.
+     * The ID list on the EMD tab: its state and what the sync still needs,
+     * then the stored list as a paged, searchable table whose selection
+     * changes take effect at once (EmbeddedTable renders this page's table).
      */
     private function idListSection(): Section
     {
         return Section::make(__('ID list'))->key('idList')
-            ->description(__('The selected IDs still on the list fill {{ ids }} of the export payload, comma-separated. New IDs appear unselected. An ID left out (unticked or gone from the list) is no longer sent, so its records stop arriving and the linked accounts close after the configured number of missed syncs. A selected ID that leaves the list keeps its selection: when it returns, it is sent again without a new decision, and the accounts closed as missing reopen.'))
+            ->description(__('The selected IDs still on the list fill {{ ids }} of the export payload, comma-separated. New IDs appear unselected. An ID left out (unticked or gone from the list) is no longer sent, so its records stop arriving and the linked accounts close after the configured number of missed syncs. A selected ID that leaves the list keeps its selection: when it returns, it is sent again without a new decision, and the accounts closed as missing reopen.').' '.__('Selecting and deselecting in the table takes effect at once; it does not wait for Save.'))
+            ->columnSpanFull()
+            ->schema([
+                Text::make(fn (): string => $this->idListStatus()),
+                EmbeddedTable::make(),
+            ]);
+    }
+
+    public function table(Table $table): Table
+    {
+        return $table
+            ->query(SyncIdListItem::query())
+            ->defaultSort('name')
+            ->selectCurrentPageOnly()
+            ->paginated([25, 50, 100])
+            ->defaultPaginationPageOption(25)
+            ->searchPlaceholder(__('Search by name or ID'))
+            ->emptyStateHeading(__('The ID list is empty'))
+            ->emptyStateDescription(__('Fetch it from the API with the button above.'))
+            ->columns([
+                TextColumn::make('name')->label(__('Name'))->searchable()->sortable()->weight('semibold'),
+                TextColumn::make('external_id')->label(__('ID'))->searchable()->sortable(),
+                IconColumn::make('selected')->label(__('Selected'))->boolean()->falseIcon(Heroicon::OutlinedMinus)->falseColor('gray')->alignCenter(),
+                TextColumn::make('removed_at')->label(__('On the list'))->badge()
+                    ->state(fn (SyncIdListItem $record): string => $record->isListed() ? __('Listed') : __('Left the list'))
+                    ->color(fn (SyncIdListItem $record): string => $record->isListed() ? 'success' : 'gray'),
+                TextColumn::make('last_seen_at')->label(__('Last seen'))->dateTime()->toggleable(isToggledHiddenByDefault: true),
+            ])
+            ->filters([
+                TernaryFilter::make('selected')->label(__('Selected')),
+                TernaryFilter::make('listed')->label(__('On the list'))->default(true)->queries(
+                    true: fn (Builder $query) => $query->whereNull('removed_at'),
+                    false: fn (Builder $query) => $query->whereNotNull('removed_at'),
+                ),
+            ])
             ->headerActions([
                 Action::make('fetchIdList')->label(__('Fetch the ID list from the API'))->icon(Heroicon::OutlinedArrowPath)
                     ->visible(fn (): bool => $this->canManageSync())
@@ -330,17 +340,165 @@ class ManageSettings extends Page
                     ->disabled(fn (): bool => ! app(IdList::class)->isConfigured())
                     ->tooltip(fn (): ?string => app(IdList::class)->isConfigured() ? null : __('EMD_SYNC_ID_LIST_URL is not configured.'))
                     ->action(fn () => $this->fetchIdList()),
+                Action::make('selectByIds')->label(__('Select by IDs'))->icon(Heroicon::OutlinedClipboardDocumentList)->color('gray')
+                    ->visible(fn (): bool => $this->canManageSync())
+                    ->authorize(fn (): bool => $this->canManageSync())
+                    ->modalDescription(__('Paste IDs separated by commas, semicolons, spaces or new lines. IDs not on the list are reported and left out.'))
+                    ->schema([
+                        Textarea::make('ids')->label(__('IDs'))->rows(6)->required(),
+                        Radio::make('mode')->label(__('What should happen?'))->required()->default('add')->options([
+                            'add' => __('Add them to the selection'),
+                            'only' => __('Select only these (the others are deselected)'),
+                        ])->descriptions([
+                            'only' => __('Deselected IDs are no longer sent; their accounts close after the configured number of missed syncs.'),
+                        ]),
+                    ])
+                    ->action(fn (array $data) => $this->selectByIds((string) $data['ids'], (string) $data['mode'])),
+                Action::make('exportIdList')->label(__('Export CSV'))->icon('heroicon-o-arrow-down-tray')->color('gray')
+                    ->action(fn () => ExportTableAction::stream(
+                        $this->getFilteredSortedTableQuery(),
+                        fn (SyncIdListItem $record): array => [
+                            __('ID') => $record->external_id,
+                            __('Name') => $record->name,
+                            __('Selected') => $record->selected ? __('yes') : __('no'),
+                            __('On the list') => $record->isListed() ? __('Listed') : __('Left the list'),
+                            __('First seen') => $record->first_seen_at?->format(HuDate::DATETIME),
+                            __('Last seen') => $record->last_seen_at?->format(HuDate::DATETIME),
+                        ],
+                        'id-lista',
+                    )),
             ])
-            ->columnSpanFull()
-            ->schema([
-                CheckboxList::make(self::ID_LIST_FIELD)->label(__('IDs sent in the export'))
-                    ->options(fn (): array => app(IdList::class)->options())
-                    ->searchable()->searchPrompt(__('Filter by name'))->noSearchResultsMessage(__('No ID matches the filter.'))
-                    ->bulkToggleable()->columns(2)
-                    ->disabled(fn (): bool => ! $this->canManageSync())
-                    ->dehydrated(fn (): bool => $this->canManageSync())
-                    ->helperText(fn (): string => $this->idListStatus()),
+            ->recordActions([
+                Action::make('toggleSelection')
+                    ->label(fn (SyncIdListItem $record): string => $record->selected ? __('Deselect') : __('Select this ID'))
+                    ->icon(fn (SyncIdListItem $record) => $record->selected ? Heroicon::OutlinedMinusCircle : Heroicon::OutlinedPlusCircle)
+                    ->color(fn (SyncIdListItem $record): string => $record->selected ? 'gray' : 'primary')
+                    ->visible(fn (): bool => $this->canManageSync())
+                    ->authorize(fn (): bool => $this->canManageSync())
+                    ->disabled(fn (SyncIdListItem $record): bool => ! $record->selected && ! $record->isListed())
+                    ->tooltip(fn (SyncIdListItem $record): ?string => ! $record->selected && ! $record->isListed() ? __('Not on the list now; it can be selected when it returns.') : null)
+                    // Only a deselection has consequences worth a question.
+                    ->requiresConfirmation(fn (SyncIdListItem $record): bool => $record->selected)
+                    ->modal(fn (SyncIdListItem $record): bool => $record->selected)
+                    ->modalHeading(__('Stop sending this ID?'))
+                    ->modalDescription(fn (SyncIdListItem $record): string => $this->deselectWarning([$record->external_id]))
+                    ->modalSubmitActionLabel(__('Deselect'))
+                    ->action(function (SyncIdListItem $record): void {
+                        abort_unless($this->canManageSync(), 403);
+                        app(IdList::class)->setSelected([$record->external_id], ! $record->selected);
+                    }),
+            ])
+            ->toolbarActions([
+                BulkAction::make('selectIds')->label(__('Select this ID'))->icon(Heroicon::OutlinedPlusCircle)
+                    ->visible(fn (): bool => $this->canManageSync())
+                    ->authorize(fn (): bool => $this->canManageSync())
+                    ->deselectRecordsAfterCompletion()
+                    ->action(fn (Collection $records) => $this->notifySelection(
+                        app(IdList::class)->setSelected($records->pluck('external_id')->all(), true), true,
+                    )),
+                BulkAction::make('deselectIds')->label(__('Deselect'))->icon(Heroicon::OutlinedMinusCircle)->color('gray')
+                    ->visible(fn (): bool => $this->canManageSync())
+                    ->authorize(fn (): bool => $this->canManageSync())
+                    ->deselectRecordsAfterCompletion()
+                    ->requiresConfirmation()
+                    ->modalHeading(__('Stop sending these IDs?'))
+                    ->modalDescription(fn (Collection $records): string => $this->deselectWarning($records->where('selected', true)->pluck('external_id')->all()))
+                    ->modalSubmitActionLabel(__('Deselect'))
+                    ->action(fn (Collection $records) => $this->notifySelection(
+                        app(IdList::class)->setSelected($records->pluck('external_id')->all(), false), false,
+                    )),
             ]);
+    }
+
+    /**
+     * What a deselection means, named: the records stop arriving and the
+     * accounts close after the missed runs; an empty selection stops the sync.
+     *
+     * @param  list<string>  $externalIds
+     */
+    private function deselectWarning(array $externalIds): string
+    {
+        if ($externalIds === []) {
+            return __('None of the chosen IDs is selected; nothing changes.');
+        }
+
+        $idList = app(IdList::class);
+        $parts = [__('These IDs will no longer be sent in the export: :list. Their EMD records stop arriving, and the linked accounts are closed after :runs missed syncs. Run a trial sync after saving to see the planned closures.', [
+            'list' => $idList->describe($externalIds),
+            'runs' => app(Settings::class)->int(SettingKey::SyncMissedRunsBeforeClose),
+        ])];
+
+        if ($this->exportUsesIds() && array_diff($idList->selectedIds(), array_map('strval', $externalIds)) === []) {
+            $parts[] = __('No ID stays selected: the sync does not run until one is selected again.');
+        }
+
+        return implode(' ', $parts);
+    }
+
+    private function notifySelection(int $changed, bool $selected): void
+    {
+        Notification::make()->success()
+            ->title($selected ? __(':n ID(s) selected', ['n' => $changed]) : __(':n ID(s) deselected', ['n' => $changed]))
+            ->send();
+    }
+
+    private function selectByIds(string $text, string $mode): void
+    {
+        abort_unless($this->canManageSync(), 403);
+        $idList = app(IdList::class);
+        ['known' => $known, 'unknown' => $unknown] = $idList->parseIds($text);
+
+        // A typo must not empty the selection: "only these" with no known ID changes nothing.
+        if ($known === []) {
+            Notification::make()->warning()->title(__('None of the IDs is on the list; nothing changed.'))
+                ->body($unknown === [] ? null : __('Not on the list: :list.', ['list' => implode(', ', array_slice($unknown, 0, 30)).(count($unknown) > 30 ? ' …' : '')]))
+                ->send();
+
+            return;
+        }
+
+        $result = $mode === 'only' ? $idList->replaceSelection($known) : ['added' => $idList->setSelected($known, true), 'removed' => 0];
+
+        Notification::make()->success()->persistent()
+            ->title(__('Selection updated: :added selected, :removed deselected.', $result))
+            ->body($unknown === [] ? null : __('Not on the list, left out: :list.', ['list' => implode(', ', array_slice($unknown, 0, 30)).(count($unknown) > 30 ? ' …' : '')]))
+            ->send();
+    }
+
+    private function exportUsesIds(): bool
+    {
+        return RequestPayload::uses(app(Settings::class)->string(SettingKey::SyncExportPayload), 'ids');
+    }
+
+    /**
+     * What the sync still needs before an export with {{ ids }} can run, in
+     * the order the steps are done; empty when ready or when ids is not used.
+     *
+     * @return list<string>
+     */
+    private function idsReadiness(): array
+    {
+        if (! $this->exportUsesIds()) {
+            return [];
+        }
+
+        $idList = app(IdList::class);
+        $missing = [];
+        if (! $idList->isConfigured()) {
+            $missing[] = __('the ID list address (EMD_SYNC_ID_LIST_URL in .env)');
+        }
+        if (! RequestPayload::isJsonObject(app(Settings::class)->string(SettingKey::SyncIdListPayload))) {
+            $missing[] = __('the ID list request payload (above)');
+        }
+        $counts = $idList->counts();
+        if ($counts['listed'] === 0) {
+            $missing[] = __('fetching the ID list (button below)');
+        }
+        if ($counts['selected'] === 0) {
+            $missing[] = __('at least one selected ID (table below)');
+        }
+
+        return $missing;
     }
 
     private function fetchIdList(): void
@@ -379,8 +537,17 @@ class ManageSettings extends Page
                 : __('Last query failed: :at, status :status (HTTP :http).', $replace).' '.$status['error'];
         }
 
+        $counts = $idList->counts();
+        $parts[] = __(':selected of :listed listed IDs selected.', $counts);
+
         if ($removed = $idList->selectedButRemoved()) {
-            $parts[] = __('Selected but no longer on the list, so not sent; if they return, they are sent again automatically: :list.', ['list' => implode(', ', $removed)]);
+            $parts[] = __('Selected but no longer on the list, so not sent; if they return, they are sent again automatically: :list.', [
+                'list' => implode(', ', array_slice($removed, 0, 10)).(count($removed) > 10 ? ' '.__('and :n more', ['n' => count($removed) - 10]) : ''),
+            ]);
+        }
+
+        if ($missing = $this->idsReadiness()) {
+            $parts[] = __('The export uses {{ ids }}; the sync does not run until these are done: :list.', ['list' => implode('; ', $missing)]);
         }
 
         return implode(' ', $parts);
