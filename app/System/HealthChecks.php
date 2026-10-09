@@ -49,6 +49,17 @@ class HealthChecks
     /**
      * @return list<Check>
      */
+    public function loginLinkPreview(): Check
+    {
+        $label = __('Login link preview');
+
+        if (! app(Settings::class)->bool(SettingKey::ClientLoginMagicLinkPreviewInPanel)) {
+            return Check::ok('login_link_preview', $label, __('Off: sent login links are not shown in the panel.'));
+        }
+
+        return Check::warn('login_link_preview', $label, __('On: the panel shows every client login link it sends, so staff could sign in as the client. Switch it off before go-live.'));
+    }
+
     public function all(): array
     {
         $checks = [
@@ -66,6 +77,7 @@ class HealthChecks
             'package_overrides' => [__('Package overrides'), $this->packageOverrides(...)],
             'shared_numbers' => [__('Shared phone numbers'), $this->sharedPhoneNumbers(...)],
             'oidc' => [__('Single sign-on'), $this->oidc(...)],
+            'login_link_preview' => [__('Login link preview'), $this->loginLinkPreview(...)],
             'storage' => [__('Storage'), $this->storage(...)],
             'retention' => [__('Data retention'), $this->retention(...)],
         ];
@@ -90,6 +102,7 @@ class HealthChecks
     public static function hint(string $key): ?string
     {
         return match ($key) {
+            'login_link_preview' => __('Yellow: Settings › Client login › "Magic link preview in panel" is on, so every sent client login link is shown to the staff member who sends it. Meant for test environments only; switch it off for production.'),
             'sync_auth' => config('hdid.sync.token_keep_alive')
                 ? __('EMD API tokens are refreshed every 15 minutes when EMD_SYNC_TOKEN_KEEP_ALIVE is enabled. Check the login/refresh URLs, credentials, scheduler and hdid:emd-sync-token. The EMD sync run checks the export separately.')
                 : __('EMD_SYNC_TOKEN_KEEP_ALIVE is disabled. EMD sync reuses tokens refreshed less than 15 minutes ago, otherwise refreshes them on demand and logs in again when the refresh fails. Check the login/refresh URLs and credentials, or run hdid:emd-sync-token manually.'),

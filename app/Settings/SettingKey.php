@@ -61,6 +61,7 @@ enum SettingKey: string
     // Client login methods
     case ClientLoginMagicLinkEnabled = 'client_login.magic_link.enabled';
     case ClientLoginMagicLinkTtlMinutes = 'client_login.magic_link.ttl_minutes';
+    case ClientLoginMagicLinkPreviewInPanel = 'client_login.magic_link.preview_in_panel';
     case ClientLoginOtpSmsEnabled = 'client_login.otp_sms.enabled';
     case ClientLoginOtpSmsTtlMinutes = 'client_login.otp_sms.ttl_minutes';
     case ClientLoginOtpSmsLength = 'client_login.otp_sms.length';
@@ -148,6 +149,7 @@ enum SettingKey: string
     {
         return match ($this) {
             self::ClientLoginMagicLinkEnabled,
+            self::ClientLoginMagicLinkPreviewInPanel,
             self::ClientLoginOtpSmsEnabled,
             self::UserLoginPasswordEnabled,
             self::PortalNewsOnOverview,
@@ -267,6 +269,7 @@ enum SettingKey: string
             self::PortalSharedNumberNotice => false,
 
             self::ClientLoginMagicLinkEnabled => true,
+            self::ClientLoginMagicLinkPreviewInPanel => false,
             self::ClientLoginMagicLinkTtlMinutes => 720,
             self::ClientLoginOtpSmsEnabled => false,
             self::ClientLoginOtpSmsTtlMinutes => 5,

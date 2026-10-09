@@ -18,7 +18,7 @@ OpenHDID is published as a ready-to-run container image. This repository holds t
 
 ## Quick start
 
-Requirements: a Linux host with Docker Engine 27+ and Docker Compose 2.24+ (for Podman see the notes in the installation guide's requirements table), 2 vCPU, 4 GB RAM, a DNS name and a TLS certificate for it (full chain and key in PEM).
+Requirements: a Linux host with Docker Engine 27+ and Docker Compose 2.24+ (Podman is not supported), 2 vCPU, 4 GB RAM, a DNS name and a TLS certificate for it (full chain and key in PEM).
 
 ```sh
 mkdir openhdid && cd openhdid

@@ -66,6 +66,15 @@ class RequestPayload
     }
 
     /**
+     * The payload with every placeholder replaced by a quoted probe value: valid
+     * JSON here while the original is not means a placeholder stands outside quotes.
+     */
+    public static function withQuotedProbes(string $payload): string
+    {
+        return (string) preg_replace(self::PLACEHOLDER, '"x"', $payload);
+    }
+
+    /**
      * @return list<string>
      */
     private static function placeholdersIn(string $payload): array

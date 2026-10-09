@@ -10,7 +10,6 @@ use App\Models\User;
 use App\Sync\AccountProvisioner;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -110,11 +109,11 @@ class ClientLinks
      */
     public function scopeMissingSponsor(Builder $query): Builder
     {
-        $premium = $this->tiers->packages(ClientTier::Premium);
+        $premium = $this->tiers->rawNames($this->tiers->packages(ClientTier::Premium));
 
         return $query
-            ->whereIn(DB::raw('lower(trim(explicit_package))'), $premium)
-            ->where(fn (Builder $q) => $q->whereNull('implicit_package')->orWhereNotIn(DB::raw('lower(trim(implicit_package))'), $premium))
+            ->whereIn('explicit_package', $premium)
+            ->where(fn (Builder $q) => $q->whereNull('implicit_package')->orWhereNotIn('implicit_package', $premium))
             ->whereDoesntHave('sponsorLinks', fn (Builder $q) => $q->whereNull('ended_at'))
             ->linkWarningMuted(false);
     }
@@ -233,7 +232,7 @@ class ClientLinks
 
         Client::query()
             ->whereHas('sponsoredLinks', fn (Builder $q) => $q->whereNull('ended_at'))
-            ->where(fn (Builder $q) => $q->whereNull('implicit_package')->orWhereNotIn(DB::raw('lower(trim(implicit_package))'), $premium))
+            ->where(fn (Builder $q) => $q->whereNull('implicit_package')->orWhereNotIn('implicit_package', $this->tiers->rawNames($premium)))
             ->chunkById(100, function ($sponsors) use (&$ended): void {
                 foreach ($sponsors as $sponsor) {
                     $ended += $this->endLinksOfIneligibleSponsor($sponsor);

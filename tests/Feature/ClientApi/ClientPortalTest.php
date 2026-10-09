@@ -70,6 +70,9 @@ it('links the published source only when the deployment names it', function (): 
     config()->set('hdid.source_url', 'https://github.com/adamfhun/openhdid/tree/v1.0.0');
     $this->getJson('/api/v1/branding')->assertOk()
         ->assertJsonPath('branding.portal.source_url', 'https://github.com/adamfhun/openhdid/tree/v1.0.0');
+
+    config()->set('hdid.show_source_url', false);
+    $this->getJson('/api/v1/branding')->assertOk()->assertJsonPath('branding.portal.source_url', null);
 });
 
 it('falls back to the shipped icons until a favicon is uploaded', function (): void {

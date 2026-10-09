@@ -43,10 +43,10 @@ class SendMagicLinkAction
 
                 $notification = Notification::make()->title(__('Login link sent to :email', ['email' => $record->email]))->success();
 
-                if (config('app.debug')) {
+                if (app(ClientPasswordlessLogin::class)->revealsLinkInPanel()) {
                     $notification
                         ->persistent()
-                        ->body(new HtmlString('<span class="text-xs">'.__('Debug mode: the link is').'</span><br><code class="break-all text-xs select-all">'.e($url).'</code>'));
+                        ->body(new HtmlString('<span class="text-xs">'.__('Link preview is on; the link is').'</span><br><code class="break-all text-xs select-all">'.e($url).'</code>'));
                 }
 
                 $notification->send();

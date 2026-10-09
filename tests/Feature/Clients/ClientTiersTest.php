@@ -24,6 +24,26 @@ it('derives the tier from either package, ignoring case and whitespace', functio
         ->and($tiers->tierFor(Client::factory()->make(['implicit_package' => null, 'explicit_package' => null])))->toBeNull();
 });
 
+it('matches package names regardless of accents and extra spaces, in PHP and in the database alike', function (): void {
+    app(Settings::class)->set(SettingKey::PackagesPremium, ['Premium', 'Üzleti  Gold']);
+    app(Settings::class)->set(SettingKey::PackagesStandard, ['Alap']);
+    $tiers = app(ClientTiers::class);
+
+    expect($tiers->tierOfPackage('Prémium'))->toBe(ClientTier::Premium)
+        ->and($tiers->tierOfPackage(' uzleti gold '))->toBe(ClientTier::Premium)
+        ->and($tiers->tierOfPackage('ALAP'))->toBe(ClientTier::Standard)
+        ->and($tiers->tierOfPackage('Premium+'))->toBeNull('a special character still tells packages apart');
+
+    $accented = Client::factory()->create(['implicit_package' => 'PRÉMIUM', 'explicit_package' => null]);
+    $spaced = Client::factory()->create(['implicit_package' => null, 'explicit_package' => 'üzleti   gold']);
+    $other = Client::factory()->create(['implicit_package' => 'Premium+', 'explicit_package' => null]);
+
+    $premium = Client::query()->tap(fn ($query) => $tiers->scopeClients($query, [ClientTier::Premium]))->pluck('id');
+
+    expect($premium)->toContain($accented->id, $spaced->id)->not->toContain($other->id)
+        ->and($tiers->rawNames(['premium']))->toContain('PRÉMIUM')->not->toContain('Premium+');
+});
+
 it('rejects logins of clients without a listed package', function (): void {
     $login = app(AccountLogin::class);
     $entitled = Client::factory()->synced()->standard()->create();

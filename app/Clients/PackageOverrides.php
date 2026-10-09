@@ -120,6 +120,6 @@ class PackageOverrides
 
     private function same(?string $a, ?string $b): bool
     {
-        return mb_strtolower(trim((string) $a)) === mb_strtolower(trim((string) $b));
+        return PackageName::same($a, $b);
     }
 }

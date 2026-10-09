@@ -284,6 +284,25 @@ it('saves a wrap-up note on the call and releases it back to the queue', functio
         ->and(AuditLog::query()->where('event', 'call.released')->exists())->toBeTrue();
 });
 
+it('asks before releasing a call only while a question-and-answer session is in progress', function (): void {
+    $call = Call::factory()->create(['client_id' => $this->client->id, 'agent_user_id' => $this->agent->id, 'status' => CallStatus::Active]);
+
+    // No session: one click, the call is back in the queue.
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id])
+        ->mountAction('releaseCall')
+        ->assertRedirect();
+    expect($call->fresh()->agent_user_id)->toBeNull();
+
+    // A session in progress: the modal explains that the caller starts over.
+    $held = Call::factory()->create(['client_id' => $this->client->id, 'agent_user_id' => $this->agent->id, 'status' => CallStatus::Active]);
+    IdSession::factory()->create(['client_id' => $this->client->id, 'agent_user_id' => $this->agent->id, 'call_id' => $held->id]);
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $held->id])
+        ->mountAction('releaseCall')
+        ->assertActionMounted('releaseCall')
+        ->assertMountedActionModalSee(__('Release this call?'));
+    expect($held->fresh()->agent_user_id)->toBe($this->agent->id);
+});
+
 it('cancels the open session of the previous client when the call is reassigned', function (): void {
     $wrong = Client::factory()->synced()->create(['name' => 'Rossz Réka']);
     $call = Call::factory()->create(['client_id' => $wrong->id, 'agent_user_id' => $this->agent->id]);

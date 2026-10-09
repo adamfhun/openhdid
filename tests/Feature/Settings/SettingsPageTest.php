@@ -176,6 +176,17 @@ it('lets a sync manager edit the complete export payload and validates its JSON 
     }
 });
 
+it('explains a placeholder written outside quotes and names the parser error otherwise', function (): void {
+    $field = ManageSettings::fieldName(SettingKey::SyncExportPayload);
+
+    Livewire::test(ManageSettings::class)->fillForm([$field => '{"filter": {"ids": {{ ids }}}}'])->call('save')
+        ->assertHasFormErrors([$field])->assertSee('A placeholder stands outside quotes');
+    expect(app(Settings::class)->string(SettingKey::SyncExportPayload))->toBeNull();
+
+    Livewire::test(ManageSettings::class)->fillForm([$field => '{"filter": {"ids": "{{ ids }}"},}'])->call('save')
+        ->assertHasFormErrors([$field])->assertSee('Line 1, column 33')->assertSee('a comma before the closing');
+});
+
 it('accepts the now placeholder in the export payload and rejects unknown placeholders', function (): void {
     $field = ManageSettings::fieldName(SettingKey::SyncExportPayload);
     $payload = '{"ids":"12,34","from":"{{ now }}"}';

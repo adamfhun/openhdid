@@ -6,6 +6,8 @@ use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
 use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Models\Client;
+use App\Settings\SettingKey;
+use App\Settings\Settings;
 use Filament\Actions\Action;
 use Filament\Actions\ForceDeleteAction;
 use Filament\Actions\RestoreAction;
@@ -44,9 +46,17 @@ class EditClient extends EditRecord
     {
         return parent::getSaveFormAction()
             ->submit(null)
+            // A custom heading or description opens the modal on its own in Filament;
+            // modal() keeps it closed unless a link would really end.
             ->requiresConfirmation(fn (): bool => $this->endingSponsorLinks() > 0)
+            ->modal(fn (): bool => $this->endingSponsorLinks() > 0)
             ->modalHeading(__('End the links of this sponsor?'))
-            ->modalDescription(fn (): string => __('The chosen implicit package is not premium, so this client can no longer sponsor others: its :n active link(s) end on save. The linked clients are not closed; they keep whatever their own packages entitle them to.', ['n' => $this->endingSponsorLinks()]))
+            ->modalDescription(fn (): string => __('The chosen implicit package ":package" is not on the premium package list (:list), so this client can no longer sponsor others: its :n active link(s) end on save (:names). The linked clients are not closed; they keep whatever their own packages entitle them to.', [
+                'package' => $this->chosenImplicitPackage() ?? '—',
+                'list' => implode(', ', array_map(fn ($name): string => trim((string) $name), app(Settings::class)->array(SettingKey::PackagesPremium))) ?: '—',
+                'n' => $this->endingSponsorLinks(),
+                'names' => $this->endingLinkNames(),
+            ]))
             ->modalSubmitActionLabel(__('Save'))
             ->action(function (): void {
                 $this->sponsorChangeConfirmed = true;
@@ -77,15 +87,43 @@ class EditClient extends EditRecord
      */
     public function endingSponsorLinks(): int
     {
-        /** @var Client $client */
-        $client = $this->getRecord();
-        $implicit = $this->data['implicit_package'] ?? $client->implicit_package;
-
-        if (app(ClientTiers::class)->tierOfPackage(is_string($implicit) ? $implicit : null) === ClientTier::Premium) {
+        if (app(ClientTiers::class)->tierOfPackage($this->chosenImplicitPackage()) === ClientTier::Premium) {
             return 0;
         }
 
+        /** @var Client $client */
+        $client = $this->getRecord();
+
         return $client->activeLinks()->count();
+    }
+
+    /**
+     * The implicit package as the form stands: a cleared field counts as
+     * "none", only a field the form does not carry falls back to the record.
+     */
+    private function chosenImplicitPackage(): ?string
+    {
+        /** @var Client $client */
+        $client = $this->getRecord();
+        $implicit = array_key_exists('implicit_package', $this->data ?? []) ? $this->data['implicit_package'] : $client->implicit_package;
+
+        return is_string($implicit) && trim($implicit) !== '' ? $implicit : null;
+    }
+
+    /**
+     * The linked clients whose link would end, by name, so the dialog can be
+     * checked against the Linked clients tab.
+     */
+    private function endingLinkNames(): string
+    {
+        /** @var Client $client */
+        $client = $this->getRecord();
+        $names = $client->activeLinks()->with('linked')->get()
+            ->map(fn ($link): string => $link->linked?->name ?? __('deleted client'))
+            ->sort(fn (string $a, string $b): int => strcoll($a, $b))
+            ->values();
+
+        return $names->take(10)->implode(', ').($names->count() > 10 ? ' …' : '');
     }
 
     /**

@@ -7,7 +7,6 @@ use App\Models\Client;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\DB;
 
 /**
  * Decides whether a client may use the portal and at which service level.
@@ -102,16 +101,18 @@ class ClientTiers
             $names = [...$names, ...$this->packages($tier)];
         }
 
-        if ($names === []) {
+        $raw = $this->rawNames($names);
+
+        if ($raw === []) {
             $query->whereRaw('1 = 0');
 
             return;
         }
 
         $query->where(fn (Builder $q) => $q
-            ->whereIn(DB::raw('lower(trim(implicit_package))'), $names)
-            ->orWhereIn(DB::raw('lower(trim(explicit_package))'), $names)
-            ->orWhere(fn (Builder $o) => $o->whereIn(DB::raw('lower(trim(package_override))'), $names)->where('package_override_until', '>=', now())));
+            ->whereIn('implicit_package', $raw)
+            ->orWhereIn('explicit_package', $raw)
+            ->orWhere(fn (Builder $o) => $o->whereIn('package_override', $raw)->where('package_override_until', '>=', now())));
     }
 
     /**
@@ -220,8 +221,34 @@ class ClientTiers
 
     private function normalize(?string $package): ?string
     {
-        $package = mb_strtolower(trim((string) $package));
+        return PackageName::normalize($package);
+    }
 
-        return $package === '' ? null : $package;
+    /**
+     * The package names as they stand in the clients table whose normalized
+     * form is among the given names. SQL compares raw strings, so the case-,
+     * accent- and space-insensitive matching happens here and the queries get
+     * exact values.
+     *
+     * @param  list<string>  $normalized
+     * @return list<string>
+     */
+    public function rawNames(array $normalized): array
+    {
+        if ($normalized === []) {
+            return [];
+        }
+
+        $raw = collect();
+
+        foreach (['implicit_package', 'explicit_package', 'package_override'] as $column) {
+            $raw = $raw->merge(Client::query()->withTrashed()->whereNotNull($column)->distinct()->pluck($column));
+        }
+
+        return $raw
+            ->filter(fn ($name): bool => in_array(PackageName::normalize(is_string($name) ? $name : null), $normalized, true))
+            ->unique()
+            ->values()
+            ->all();
     }
 }

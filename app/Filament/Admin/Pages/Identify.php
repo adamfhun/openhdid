@@ -525,9 +525,12 @@ class Identify extends Page
             ->icon('heroicon-o-arrow-uturn-left')
             ->color('gray')
             ->outlined()
-            ->requiresConfirmation()
+            // A plain release is one click; only a question-and-answer session in
+            // progress is worth a confirmation, because the caller would start over.
+            ->requiresConfirmation(fn (): bool => $this->getSession() !== null)
+            ->modal(fn (): bool => $this->getSession() !== null)
             ->modalHeading(__('Release this call?'))
-            ->modalDescription(__('The call goes back to the queue without an agent; the identification attempts made so far stay recorded.'))
+            ->modalDescription(__('The call goes back to the queue without an agent; the question-and-answer session in progress closes and the caller starts over, the attempts made so far stay recorded.'))
             ->visible(fn () => ($call = $this->getHeldCall()) !== null && ! $call->status->isOver())
             ->disabled(fn () => $this->getHeldCall()?->isIdentified() ?? false)
             ->tooltip(fn () => ($this->getHeldCall()?->isIdentified() ?? false) ? __('The caller is identified: the call stays with the agent who handled it.') : null)

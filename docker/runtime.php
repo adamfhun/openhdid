@@ -128,7 +128,7 @@ function check_env(string $role): void
     }
 
     if ($production && env_bool('APP_DEBUG', false)) {
-        $errors[] = 'APP_DEBUG=true is not allowed with APP_ENV=production: error pages would show internals.';
+        $errors[] = 'APP_DEBUG=true is not allowed with APP_ENV=production: error pages would show internals. For a debugging session set APP_ENV=staging together with APP_DEBUG=true and revert both afterwards; LOG_LEVEL=debug widens the log without exposing details.';
     }
 
     $connection = env_value('DB_CONNECTION');

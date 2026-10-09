@@ -132,10 +132,12 @@ class UserResource extends BaseResource
                 EditAction::make(),
                 ActionGroup::make([
                     Action::make('close')->label(__('Close account'))->icon('heroicon-o-lock-closed')->color('danger')->requiresConfirmation()
+                        ->modalHeading(fn (User $record) => __('Close the account of :name?', ['name' => $record->name]))
+                        ->modalDescription(__('The staff member is signed out of every browser and device at once and cannot sign in by any method; the account can be reopened later.'))
                         ->authorize(fn (User $record) => static::canEdit($record))
                         ->visible(fn (User $record) => ! $record->isClosed())
                         ->action(fn (User $record) => $record->close('admin')),
-                    Action::make('reopen')->label(__('Reopen'))->icon('heroicon-o-lock-open')->color('success')->requiresConfirmation()
+                    Action::make('reopen')->label(__('Reopen'))->icon('heroicon-o-lock-open')->color('success')
                         ->authorize(fn (User $record) => static::canEdit($record))
                         ->visible(fn (User $record) => $record->isClosed())
                         ->action(fn (User $record) => $record->reopen()),

@@ -129,6 +129,19 @@ it('shows the source link in the panel footer only when the deployment names it'
         ->assertSee(__('Source code'));
 });
 
+it('hides the source link in the panel footer when the deployment switches it off', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    Filament::setCurrentPanel('admin');
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+
+    config()->set('hdid.source_url', 'https://github.com/adamfhun/openhdid/tree/v1.0.0');
+    config()->set('hdid.show_source_url', false);
+
+    $this->get(SystemStatus::getUrl())->assertOk()
+        ->assertDontSee('hdid-source-link')
+        ->assertDontSee('https://github.com/adamfhun/openhdid/tree/v1.0.0');
+});
+
 it('renders the status page for an admin only', function (): void {
     $this->seed(RolesAndPermissionsSeeder::class);
     Filament::setCurrentPanel('admin');

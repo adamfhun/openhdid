@@ -62,6 +62,15 @@ class ClientPasswordlessLogin
         private readonly LoginLockout $lockout,
     ) {}
 
+    /**
+     * Whether the panel may show a sent login link to the staff member who sent
+     * it: a test-environment switch (or debug mode), never meant for production.
+     */
+    public function revealsLinkInPanel(): bool
+    {
+        return (bool) config('app.debug') || $this->settings->bool(SettingKey::ClientLoginMagicLinkPreviewInPanel);
+    }
+
     public function magicLinkEnabled(): bool
     {
         return $this->settings->bool(SettingKey::ClientLoginMagicLinkEnabled);

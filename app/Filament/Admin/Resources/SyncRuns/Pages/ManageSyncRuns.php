@@ -4,6 +4,7 @@ namespace App\Filament\Admin\Resources\SyncRuns\Pages;
 
 use App\Auth\Permission;
 use App\Filament\Admin\Resources\SyncRuns\SyncRunResource;
+use App\Sync\ApiTokens;
 use App\Sync\QueuedSyncs;
 use Filament\Actions\Action;
 use Filament\Forms\Components\FileUpload;
@@ -19,6 +20,14 @@ class ManageSyncRuns extends ManageRecords
     protected static string $resource = SyncRunResource::class;
 
     protected ?Alignment $headerActionsAlignment = Alignment::End;
+
+    /**
+     * The token state next to the run buttons, so nobody starts a sync blind.
+     */
+    public function getSubheading(): ?string
+    {
+        return app(ApiTokens::class)->describe();
+    }
 
     protected function getHeaderActions(): array
     {
@@ -53,6 +62,8 @@ class ManageSyncRuns extends ManageRecords
                 ->label(__('EMD sync from API now'))
                 ->icon('heroicon-o-cloud-arrow-down')
                 ->requiresConfirmation()
+                ->modalHeading(__('Run the EMD sync now?'))
+                ->modalDescription(__('The live sync downloads the export and creates, updates and closes accounts within the configured safeguards; it runs in the background and the run details show the result. A trial run shows the same counts without writing anything.'))
                 ->action(fn () => $this->queue(false)),
         ];
     }

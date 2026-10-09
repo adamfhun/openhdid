@@ -1,5 +1,6 @@
 <?php
 
+use App\Auth\Passwordless\ClientPasswordlessLogin;
 use App\Auth\Permission;
 use App\Auth\Role;
 use App\Enums\PhoneNumberSource;
@@ -27,6 +28,8 @@ use App\Settings\Settings;
 use App\Sms\FakeSmsSender;
 use App\Sms\SmsSender;
 use App\Sync\QueuedSyncs;
+use App\System\CheckStatus;
+use App\System\HealthChecks;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Http\UploadedFile;
@@ -173,6 +176,23 @@ it('sends a magic link to a client from the admin and shows it in debug mode', f
 
     Mail::assertSent(MagicLinkMail::class, fn ($mail) => $mail->hasTo($client->email));
     expect(AuditLog::query()->where('event', 'login.magic_link_sent')->first()->context['by'])->toBe($this->admin->email);
+});
+
+it('reveals a sent login link in the panel only in debug mode or with the preview setting on', function (): void {
+    $login = app(ClientPasswordlessLogin::class);
+    config()->set('app.debug', false);
+
+    expect($login->revealsLinkInPanel())->toBeFalse();
+
+    app(Settings::class)->set(SettingKey::ClientLoginMagicLinkPreviewInPanel, true);
+    expect($login->revealsLinkInPanel())->toBeTrue()
+        ->and(app(HealthChecks::class)->loginLinkPreview()->status)->toBe(CheckStatus::Warn);
+
+    app(Settings::class)->set(SettingKey::ClientLoginMagicLinkPreviewInPanel, false);
+    expect(app(HealthChecks::class)->loginLinkPreview()->status)->toBe(CheckStatus::Ok);
+
+    config()->set('app.debug', true);
+    expect($login->revealsLinkInPanel())->toBeTrue();
 });
 
 it('keeps the sidebar short: helpdesk items first, administrative clusters last', function (): void {

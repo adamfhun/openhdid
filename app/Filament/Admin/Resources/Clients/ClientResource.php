@@ -57,7 +57,6 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -186,7 +185,7 @@ class ClientResource extends BaseResource
     public static function linkToSponsorAction(): Action
     {
         $links = app(ClientLinks::class);
-        $candidates = fn (): Builder => Client::query()->open()->whereIn(DB::raw('lower(trim(implicit_package))'), app(ClientTiers::class)->packages(ClientTier::Premium));
+        $candidates = fn (): Builder => Client::query()->open()->whereIn('implicit_package', app(ClientTiers::class)->rawNames(app(ClientTiers::class)->packages(ClientTier::Premium)));
 
         return Action::make('linkToSponsor')
             ->label(__('Link to a sponsor'))
@@ -269,8 +268,7 @@ class ClientResource extends BaseResource
             ->label(__('Unmute link warning'))
             ->icon('heroicon-o-bell-alert')
             ->color('gray')
-            ->requiresConfirmation()
-            ->modalDescription(__('The "explicit premium without a link" warning applies to this client again immediately.'))
+            ->tooltip(__('The "explicit premium without a link" warning applies to this client again immediately.'))
             ->visible(fn (Client $record) => (auth()->user()?->can(Permission::ClientsManage->value) ?? false) && $record->hasMutedLinkWarning())
             ->action(fn (Client $record) => app(ClientLinks::class)->unmuteWarning($record, 'manual', auth()->user()));
     }
@@ -629,6 +627,8 @@ class ClientResource extends BaseResource
                     static::muteLinkWarningAction(),
                     static::unmuteLinkWarningAction(),
                     Action::make('clearPin')->label(__('Clear PIN'))->icon('heroicon-o-key')->color('gray')->requiresConfirmation()
+                        ->modalHeading(fn (Client $record) => __('Clear the PIN of :name?', ['name' => $record->name]))
+                        ->modalDescription(__('The client can no longer identify with the PIN until a new one is set; the clearing is recorded in the audit log.'))
                         ->visible(fn (Client $record) => $record->hasPin() && static::canEdit($record))
                         ->action(fn (Client $record) => app(PinService::class)->clearPin($record)),
                     Action::make('close')->label(__('Close account'))->icon('heroicon-o-lock-closed')->color('danger')->requiresConfirmation()
@@ -637,7 +637,7 @@ class ClientResource extends BaseResource
                         ->modalSubmitActionLabel(fn (Client $record) => $record->activeLinks()->exists() ? __('Close all of them') : __('Close account'))
                         ->visible(fn (Client $record) => ! $record->isClosed() && static::canEdit($record))
                         ->action(fn (Client $record) => $record->close('admin')),
-                    Action::make('reopen')->label(__('Reopen'))->icon('heroicon-o-lock-open')->color('success')->requiresConfirmation()
+                    Action::make('reopen')->label(__('Reopen'))->icon('heroicon-o-lock-open')->color('success')
                         ->visible(fn (Client $record) => $record->isClosed() && static::canEdit($record))
                         ->action(fn (Client $record) => $record->reopen()),
                     static::deleteAction(),

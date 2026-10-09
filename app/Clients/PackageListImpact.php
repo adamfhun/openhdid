@@ -199,8 +199,6 @@ class PackageListImpact
 
     private static function normalize(?string $package): ?string
     {
-        $package = mb_strtolower(trim((string) $package));
-
-        return $package === '' ? null : $package;
+        return PackageName::normalize($package);
     }
 }

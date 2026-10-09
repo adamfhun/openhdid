@@ -287,7 +287,10 @@ class ManageSettings extends Page
         $impact = app(PackageListImpact::class);
 
         return Action::make('save')->label(__('Save'))->keyBindings(['mod+s'])
+            // A custom heading or description opens the modal on its own in Filament;
+            // modal() keeps a plain save one click.
             ->requiresConfirmation(fn (): bool => $this->idListDeselections() !== [] || $impact->needsConfirmation($this->packageImpact()))
+            ->modal(fn (): bool => $this->idListDeselections() !== [] || $impact->needsConfirmation($this->packageImpact()))
             ->modalHeading(fn (): string => $this->idListDeselections() !== [] ? __('Stop sending these IDs?') : __('Apply the package list change?'))
             ->modalDescription(fn (): string => implode(' ', array_filter([
                 $this->idListDeselections() !== [] ? __('These IDs will no longer be sent in the export: :list. Their EMD records stop arriving, and the linked accounts are closed after :runs missed syncs. Run a trial sync after saving to see the planned closures.', [
@@ -413,7 +416,7 @@ class ManageSettings extends Page
                 ->disabled(fn (): bool => ! $this->canManageSync())
                 ->dehydrated(fn (): bool => $this->canManageSync())
                 ->helperText($key === SettingKey::SyncExportPayload
-                    ? __('Complete JSON request body. Inside a text value, {{ now }} is replaced with the time of sending in UTC (e.g. 2026-09-28T12:03:15.000Z), and {{ ids }} with the selected IDs of the ID list below, comma-separated (e.g. 3,12,40). Only staff who manage EMD sync can edit it.')
+                    ? __('Complete JSON request body. Inside a text value, {{ now }} is replaced with the time of sending in UTC (e.g. 2026-09-28T12:03:15.000Z), and {{ ids }} with the selected IDs of the ID list below, comma-separated (e.g. 3,12,40). Placeholders stay inside quotes, e.g. "ids": "{{ ids }}". Only staff who manage EMD sync can edit it.')
                     : __('JSON request body of the ID list query (EMD_SYNC_ID_LIST_URL), sent with the export\'s token; {{ now }} works here too. Only staff who manage EMD sync can edit it.'));
         }
 
@@ -439,6 +442,7 @@ class ManageSettings extends Page
                     SettingKey::ClientsUnlinkedBadge => __('Shows a red counter next to the Clients menu item with the number of explicit-premium clients that have no sponsor link yet. The tab on the list keeps its counter either way.'),
                     SettingKey::PortalPhoneVerificationEnabled => __('The client confirms a number added on the portal with a code sent by SMS; needs a working SMS gateway. Off: the helpdesk confirms the number on the client page, or an identified call does when that switch is on. Unverified numbers rank below verified ones when a caller is matched.'),
                     SettingKey::VerifyPhoneOnIdentifiedCall => __('A client identified on a call (by PIN, code, question and answer or manually) proves the number the call came from: their unverified copy of that number becomes verified. Off: numbers are verified by SMS code or by the helpdesk only.'),
+                    SettingKey::ClientLoginMagicLinkPreviewInPanel => __('On: after "Send a login link" the panel notification also shows the link itself, so a tester can sign in without the mailbox. Anyone who can send links can then sign in as the client: keep it off in production; the system status page warns while it is on. Debug mode shows the link regardless.'),
                     SettingKey::ClientLoginOtpSmsEmailFallbackEnabled => __('On: when the SMS code did not arrive after the second send, the login page offers to e-mail a login link once. Works only while "Magic link enabled" is also on: with the e-mail link login off, this switch has no effect and the page says to contact support, as when the switch is off.'),
                     SettingKey::UserLoginRememberEnabled, SettingKey::ClientLoginRememberEnabled => __('On: a sign-in through single sign-on (and, for staff, the "Remember me" box of the password form) keeps the browser signed in for the days set below, beyond the session limit. Off: no remember-me cookie. The e-mail link and the SMS code never remember.'),
                     SettingKey::PortalSharedNumberNotice => __('On: the portal tells the client when one of their numbers is also on file for another client, so the phone menu cannot recognise them from it (the other client is never named). Off: the portal says nothing about it.'),
@@ -518,7 +522,7 @@ class ManageSettings extends Page
                 SettingKey::PackagesPremium, SettingKey::PackagesStandard => TagsInput::make($name)->label($label)
                     ->placeholder(__('Add a package name and press enter'))
                     ->helperText($key === SettingKey::PackagesPremium
-                        ? __('Clients whose implicit or explicit package is listed here get the premium portal. Matching ignores case.')
+                        ? __('Clients whose implicit or explicit package is listed here get the premium portal. Matching ignores case, accents and extra spaces.')
                         : __('Clients whose package is listed here get the standard portal. Clients in neither list cannot sign in.')),
                 SettingKey::SyncUserDomains, SettingKey::SyncClientDomains => TagsInput::make($name)->label($label)
                     ->live()->formatStateUsing(fn ($state) => SettingRules::normalizeDomains((array) $state))

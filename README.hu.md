@@ -18,7 +18,7 @@ Az OpenHDID futtatásra kész konténer-image-ként jelenik meg. Ez a repó a te
 
 ## Gyors indítás
 
-Feltételek: Linux-kiszolgáló Docker Engine 27+ és Docker Compose 2.24+ verzióval (Podmanhoz a telepítési útmutató követelmény-táblázatának megjegyzései), 2 vCPU, 4 GB RAM, egy DNS-név és hozzá TLS-tanúsítvány (teljes lánc és kulcs PEM-formátumban).
+Feltételek: Linux-kiszolgáló Docker Engine 27+ és Docker Compose 2.24+ verzióval (Podman nem támogatott), 2 vCPU, 4 GB RAM, egy DNS-név és hozzá TLS-tanúsítvány (teljes lánc és kulcs PEM-formátumban).
 
 ```sh
 mkdir openhdid && cd openhdid

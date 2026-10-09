@@ -17,6 +17,20 @@ it('sends hardening headers on every response', function (): void {
         ->and($response->headers->get('Permissions-Policy'))->toContain('camera=()');
 });
 
+it('admits the documentation renderer origin only on the api documentation pages', function (): void {
+    config()->set('hdid.security.csp_enabled', true);
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+
+    $docs = $this->get('/docs/ivr')->assertOk()->headers->get('Content-Security-Policy');
+    $panel = $this->get('/admin')->headers->get('Content-Security-Policy');
+
+    expect($docs)->toMatch("/script-src [^;]*https:\/\/unpkg\.com/")
+        ->toMatch("/style-src [^;]*https:\/\/unpkg\.com/")
+        ->toMatch("/font-src [^;]*https:\/\/unpkg\.com/")
+        ->and($panel)->not->toContain('unpkg.com');
+});
+
 it('adds hsts only over https', function (): void {
     $this->get('/login')->assertHeaderMissing('Strict-Transport-Security');
     $this->get('https://localhost/login')->assertHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');

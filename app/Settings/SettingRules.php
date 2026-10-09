@@ -51,7 +51,7 @@ class SettingRules
             SettingKey::SupportStandardEmail, SettingKey::SupportPremiumEmail => ['nullable', 'email'],
             SettingKey::PortalPrivacyUrl, SettingKey::PortalTermsUrl, SettingKey::PortalImprintUrl => ['nullable', 'url'],
             SettingKey::SyncCsvEncoding => ['nullable', 'string', 'max:40'],
-            SettingKey::SyncExportPayload, SettingKey::SyncIdListPayload => ['nullable', 'string', 'json'],
+            SettingKey::SyncExportPayload, SettingKey::SyncIdListPayload => ['nullable', 'string', new JsonPayloadRule],
             SettingKey::SyncIdListIdPath, SettingKey::SyncIdListNamePath => ['required', 'string', 'max:200', 'regex:/^[A-Za-z0-9_\-*]+(\.[A-Za-z0-9_\-*]+)*$/'],
             SettingKey::SyncIdListStatusPath => ['nullable', 'string', 'max:200', 'regex:/^[A-Za-z0-9_\-]+(\.[A-Za-z0-9_\-]+)*$/'],
             default => $key->type() === SettingType::Integer ? ['integer', 'min:0'] : [],

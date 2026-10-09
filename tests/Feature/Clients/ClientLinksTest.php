@@ -189,6 +189,63 @@ it('ends the links of every sponsor whose package left the premium list, by the 
         ->and($dependent->fresh()->isClosed())->toBeFalse();
 });
 
+it('saves a sponsor without confirmation while its implicit package stays on the premium list', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    Filament::setCurrentPanel('admin');
+    app(Settings::class)->set(SettingKey::PackagesPremium, ['Premium', ' Gold ']);
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->create(['implicit_package' => 'Premium', 'explicit_package' => null, 'name' => 'Fő Ügyfél']);
+    $dependent = Client::factory()->synced()->create(['implicit_package' => 'Basic', 'explicit_package' => 'Premium']);
+    $link = $links->link($sponsor, $dependent);
+
+    // The Save button itself opens no dialog while no link ends.
+    Livewire::test(EditClient::class, ['record' => $sponsor->id])
+        ->fillForm(['notes' => 'Visszahívást kért.'])
+        ->mountAction('save')
+        ->assertHasNoFormErrors();
+    expect($sponsor->fresh()->notes)->toBe('Visszahívást kért.');
+
+    // Other fields change, the package stays: a plain submit saves without any warning.
+    Livewire::test(EditClient::class, ['record' => $sponsor->id])
+        ->fillForm(['name' => 'Fő Ügyfél Kft.'])
+        ->call('save')
+        ->assertHasNoFormErrors()
+        ->assertNotNotified(__('Confirm the change with the Save button'));
+    expect($sponsor->fresh()->name)->toBe('Fő Ügyfél Kft.')->and($link->fresh()->isActive())->toBeTrue();
+
+    // Another premium-list package (listed with stray spaces) is still premium.
+    Livewire::test(EditClient::class, ['record' => $sponsor->id])
+        ->fillForm(['implicit_package' => 'Gold'])
+        ->call('save')
+        ->assertHasNoFormErrors()
+        ->assertNotNotified(__('Confirm the change with the Save button'));
+    expect($sponsor->fresh()->implicit_package)->toBe('Gold')->and($link->fresh()->isActive())->toBeTrue();
+});
+
+it('treats a cleared implicit package as a change that ends the links and names them in the dialog', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    Filament::setCurrentPanel('admin');
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $dependent = Client::factory()->synced()->create(['implicit_package' => 'Basic', 'explicit_package' => 'Premium', 'name' => 'Kapcsolt Kata']);
+    $link = $links->link($sponsor, $dependent);
+
+    Livewire::test(EditClient::class, ['record' => $sponsor->id])
+        ->fillForm(['implicit_package' => null])
+        ->call('save')
+        ->assertNotified(__('Confirm the change with the Save button'));
+    expect($link->fresh()->isActive())->toBeTrue();
+
+    Livewire::test(EditClient::class, ['record' => $sponsor->id])
+        ->fillForm(['implicit_package' => 'Basic'])
+        ->mountAction('save')
+        ->assertMountedActionModalSee('Kapcsolt Kata')
+        ->assertMountedActionModalSee('Basic')
+        ->assertMountedActionModalSee('Premium');
+});
+
 it('asks for confirmation on the client form before ending links by changing the sponsor package, and refuses a plain submit', function (): void {
     $this->seed(RolesAndPermissionsSeeder::class);
     $this->actingAs(User::factory()->withRole(Role::Admin)->create());

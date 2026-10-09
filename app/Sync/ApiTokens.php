@@ -2,6 +2,7 @@
 
 namespace App\Sync;
 
+use App\Support\HuDate;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Http\Client\Response;
@@ -21,6 +22,42 @@ class ApiTokens
     {
         return collect(['login_url', 'refresh_url', 'username', 'password'])
             ->every(fn (string $key): bool => filled(config('hdid.sync.'.$key)));
+    }
+
+    /**
+     * One line for the sync page: when the token was last refreshed and whether
+     * it can be expected to work. Null when the file export integration is off.
+     */
+    public function describe(): ?string
+    {
+        if (config('hdid.sync.driver') !== 'spreadsheet') {
+            return null;
+        }
+
+        if (! $this->isConfigured()) {
+            return __('EMD API token: login is not configured (EMD_SYNC_LOGIN_URL, EMD_SYNC_REFRESH_URL, EMD_SYNC_USERNAME, EMD_SYNC_PASSWORD).');
+        }
+
+        $status = $this->status();
+
+        if (! empty($status['error'])) {
+            $attempt = ! empty($status['last_attempt']) ? Carbon::parse($status['last_attempt'])->format(HuDate::DATETIME) : '-';
+
+            return __('EMD API token: the last refresh failed (:time): :error', ['time' => $attempt, 'error' => $status['error']]);
+        }
+
+        if (empty($status['last_success'])) {
+            return __('EMD API token: no successful login yet. A trial run or hdid:emd-sync-token checks the credentials.');
+        }
+
+        $lastSuccess = Carbon::parse($status['last_success']);
+        $values = ['time' => $lastSuccess->format(HuDate::DATETIME), 'ago' => $lastSuccess->diffForHumans()];
+
+        if (config('hdid.sync.token_keep_alive') && $lastSuccess->lt(now()->subMinutes(self::REFRESH_MINUTES + 5))) {
+            return __('EMD API token: last refreshed :time (:ago); the 15-minute keep-alive seems to have stopped, check the scheduler.', $values);
+        }
+
+        return __('EMD API token: last refreshed :time (:ago), presumably valid.', $values);
     }
 
     public function accessToken(): string

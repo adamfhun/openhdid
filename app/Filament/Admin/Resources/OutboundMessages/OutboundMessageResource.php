@@ -100,6 +100,7 @@ class OutboundMessageResource extends BaseResource
             ->recordActions([
                 ViewAction::make()->iconButton(),
                 Action::make('retry')->label(__('Retry'))->icon('heroicon-o-arrow-path')->color('warning')->requiresConfirmation()
+                    ->modalDescription(__('The same message is queued again and sent to the same recipient; an SMS costs again.'))
                     ->authorize(fn () => auth()->user()?->can(Permission::SettingsManage->value) ?? false)
                     ->visible(fn (OutboundMessage $record) => $record->status === OutboundMessageStatus::Failed)
                     ->disabled(fn (OutboundMessage $record) => $record->isRedacted())
@@ -111,7 +112,7 @@ class OutboundMessageResource extends BaseResource
                             Notification::make()->title($e->getMessage())->danger()->send();
                         }
                     }),
-                Action::make('cancel')->label(__('Cancel'))->icon('heroicon-o-x-mark')->color('gray')->requiresConfirmation()
+                Action::make('cancel')->label(__('Cancel'))->icon('heroicon-o-x-mark')->color('gray')
                     ->authorize(fn () => auth()->user()?->can(Permission::SettingsManage->value) ?? false)
                     ->visible(fn (OutboundMessage $record) => $record->status === OutboundMessageStatus::Queued)
                     ->action(function (OutboundMessage $record): void {

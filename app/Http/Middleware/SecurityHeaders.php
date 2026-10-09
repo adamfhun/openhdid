@@ -14,6 +14,12 @@ use Symfony\Component\HttpFoundation\Response;
  */
 class SecurityHeaders
 {
+    /**
+     * The API documentation pages (Scramble) render with Stoplight Elements loaded from
+     * this CDN; the policy admits it on those routes only, every other page stays strict.
+     */
+    private const DOCS_ASSET_ORIGIN = 'https://unpkg.com';
+
     public function handle(Request $request, Closure $next): Response
     {
         $response = $next($request);
@@ -34,21 +40,22 @@ class SecurityHeaders
         }
 
         if (config('hdid.security.csp_enabled') && ! $headers->has('Content-Security-Policy')) {
-            $headers->set('Content-Security-Policy', $this->contentSecurityPolicy());
+            $headers->set('Content-Security-Policy', $this->contentSecurityPolicy($request));
         }
 
         return $response;
     }
 
-    private function contentSecurityPolicy(): string
+    private function contentSecurityPolicy(Request $request): string
     {
         $extra = trim((string) config('hdid.security.csp_extra_sources'));
+        $docs = $request->routeIs('scramble.*') ? self::DOCS_ASSET_ORIGIN : '';
 
         $directives = [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' {$extra}",
-            "style-src 'self' 'unsafe-inline' https://fonts.bunny.net https://fonts.googleapis.com {$extra}",
-            "font-src 'self' data: https://fonts.bunny.net https://fonts.gstatic.com {$extra}",
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' {$docs} {$extra}",
+            "style-src 'self' 'unsafe-inline' https://fonts.bunny.net https://fonts.googleapis.com {$docs} {$extra}",
+            "font-src 'self' data: https://fonts.bunny.net https://fonts.gstatic.com {$docs} {$extra}",
             "img-src 'self' data: blob: https: {$extra}",
             "connect-src 'self' ws: wss: {$extra}",
             "frame-src 'self'",
@@ -58,6 +65,6 @@ class SecurityHeaders
             "form-action 'self'",
         ];
 
-        return implode('; ', array_map(fn (string $d) => rtrim($d), $directives));
+        return implode('; ', array_map(fn (string $d): string => trim(preg_replace('/ {2,}/', ' ', $d) ?? $d), $directives));
     }
 }

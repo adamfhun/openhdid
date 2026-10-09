@@ -92,10 +92,10 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.10 · 2026. október 8.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.3.2 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.11 · 2026. október 9.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.0 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
-    <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.5, felhasználói kézikönyv 1.32</span></div>
+    <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv 1.6, felhasználói kézikönyv 1.32</span></div>
 </div>
 
 <nav class="toc" aria-label="Tartalom">
@@ -147,21 +147,30 @@ a { color: var(--accent); }
 <thead><tr><th>Összetevő</th><th>Követelmény</th><th>Megjegyzés</th></tr></thead>
 <tbody>
 <tr><td>Kiszolgáló</td><td>Biztonsági támogatást kapó Linux, x86_64 vagy arm64</td><td>rendszeres OS-frissítéssel, szinkronizált órával (NTP): a HMAC-aláírás 300 mp-es időablaka és az SSO-tokenek ellenőrzése is erre épül</td></tr>
-<tr><td>Docker</td><td>Docker Engine 27+ és Docker Compose 2.24+</td><td>a Compose-fájl a beépített <code>configs.content</code> és a <code>depends_on.required</code> elemet használja; rootless Docker is megfelelő. <strong>Podman:</strong> kipróbálva csak Dockerrel. A Compose-fájl naplózó-meghajtója a Podmanon is ismert <code>json-file</code>; a <code>podman compose</code> a docker-compose szolgáltatót használja a Podman socketjén (a python <code>podman-compose</code> a fenti elemeket nem biztosan ismeri); rootless Podmannál a tanúsítvány tulajdonosát <code>podman unshare chown 82:82 tls/*.pem</code> állítja, és a 80-as port csak a <code>net.ipv4.ip_unprivileged_port_start=80</code> sysctl-lel vagy másik <code>OPENHDID_HTTP_PORT</code>-tal köthető</td></tr>
+<tr><td>Docker</td><td>Docker Engine 27+ és Docker Compose 2.24+</td><td>a Compose-fájl a beépített <code>configs.content</code> és a <code>depends_on.required</code> elemet használja; rootless Docker is megfelelő. <strong>Podman nem támogatott:</strong> a python <code>podman-compose</code> a profilhoz kötött <code>depends_on</code> miatt <code>KeyError: 'mariadb'</code> hibával áll meg, a docker-compose szolgáltató a Podman socketjén nem lett végigvive. Podmanos gépen a Podman eltávolítása és a Docker CE telepítése az út (lent); a közben beállított <code>DOCKER_HOST</code> változót és docker contextet is el kell távolítani</td></tr>
 <tr><td>Erőforrás</td><td>2 vCPU, 4 GB RAM, 20 GB lemez</td><td>néhány ezer ügyfél és napi több ezer hívás mellett elegendő; a méretezést az üzemeltetési kézikönyv 9. fejezete írja le</td></tr>
 <tr><td>Név és tanúsítvány</td><td>DNS-név, hozzá tanúsítvány teljes lánccal és kulccsal (PEM)</td><td>ECDSA P-256 vagy legalább 2048 bites RSA; jelszóval védett kulcs nem használható</td></tr>
 <tr><td>Adatbázis</td><td>beépített MariaDB 12.3 LTS vagy külső MariaDB/MySQL</td><td>utf8mb4; külső kiszolgálóhoz TLS-kapcsolat ajánlott</td></tr>
 </tbody></table></div>
+<p><strong>Docker telepítése.</strong> A disztribúció saját Docker-csomagja gyakran régi vagy hiányzik (AlmaLinux, RHEL), ezért a Docker saját tárolója ajánlott. Példa AlmaLinux 9-en (AlmaLinux 10-en a tároló felvétele <code>dnf config-manager addrepo --from-repofile=…</code> alakú):</p>
+<pre><code>sudo dnf remove -y podman podman-docker podman-compose buildah   # ha fent vannak
+sudo dnf install -y dnf-plugins-core
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+sudo usermod -aG docker &lt;üzemeltető felhasználó&gt;</code></pre>
+<p>A <code>docker</code> csoport tagsága csak új bejelentkezéssel él (az <code>id</code> parancs mutatja), és root-joggal ér fel: ez a felhasználó csak a telepítés üzemeltetésére szolgáljon. Ellenőrzés: a <code>docker version</code> és a <code>docker compose version</code> kliens- és szerveroldalt is mutat.</p>
 <p><strong>Hálózat.</strong></p>
 <ul>
     <li>Bejövő: 443 a böngészőknek, a telefonközpontnak és a mobil kiszolgálónak; 80 csak a böngészős HTTPS-átirányításhoz kell.</li>
     <li>Kimenő, a konténerekből: Exchange (EWS) vagy SMTP, Ozeki SMS-átjáró, Microsoft Entra és ADFS, az ügyféltörzs gépi felülete, valamint a DNS.</li>
     <li>Az image letöltéséhez a <code>ghcr.io</code> kell; zárt hálózatban saját registrybe tükrözhető.</li>
+    <li><strong>Proxy mögött:</strong> a Docker-démon nem örökli a felhasználó <code>http_proxy</code>/<code>https_proxy</code> változóit, a letöltés 30 másodperc után időtúllépéssel elhal; a proxyt systemd drop-innal kell megadni (üzemeltetési kézikönyv 6. fejezet). Az alkalmazás kimenő kapcsolatai (Exchange, SMS-átjáró, SSO, ügyféltörzs) proxyval nincsenek kipróbálva, közvetlen kijáratot tervezzen hozzájuk.</li>
 </ul>
 <div class="callout gold"><p><strong>Kliens-IP a Docker mögött.</strong> Az IP-alapú forgalomkorlát és az auditnapló a kérés valódi forráscímére épül. IPv4-en a Docker megőrzi a kliens címét. IPv6-on, kikapcsolt <code>ip6tables</code> vagy a userland-proxy használata mellett viszont a konténer a Docker-átjáró címét látja. Telepítés után a <code>docker compose logs web</code> access logjában ellenőrizze, hogy az <code>ip</code> mező a valódi kliens címét mutatja-e. Ha nem, kapcsolja be a Docker IPv6-NAT-ját, vagy tegye a webet egy terheléselosztó mögé (<code>OPENHDID_TLS=off</code>, 6.5 pont).</p></div>
 
 <h2 id="s3"><span class="num">3</span>Telepítés lépésről lépésre</h2>
-<p>A példák a <code>/opt/openhdid</code> mappát használják. A parancsokat Docker-jogosultságú felhasználó futtatja; az alkalmazás maga nem root felhasználóként fut.</p>
+<p>A példák a <code>/opt/openhdid</code> mappát használják. A parancsokat a <code>docker</code> csoport tagja futtatja (2. fejezet); az alkalmazás maga nem root felhasználóként fut.</p>
 <ol class="steps">
 <li><strong>A telepítési fájlok letöltése</strong> a legfrissebb kiadásból. A kiadások böngészhető oldala a <code>https://github.com/adamfhun/openhdid/releases/latest</code>; a lenti alapcím mindig a legfrissebb kiadás mellékleteire mutat, egy adott verzió a <code>https://github.com/adamfhun/openhdid/releases/download/v&lt;verzió&gt;</code> alapcímmel választható. Az alapcím önmagában nem megnyitható oldal (404-et ad), csak a fájlnévvel együtt él. A mappa tulajdonosa a parancsokat futtató fiók (<code>id -un</code>; a <code>$USER</code> változót nem minden shell állítja be). A <code>.env</code> és a <code>db.env</code> titkokat tartalmaz, ezért csak a tulajdonos olvashatja:
 <pre><code>sudo mkdir -p /opt/openhdid &amp;&amp; sudo chown "$(id -un)" /opt/openhdid &amp;&amp; cd /opt/openhdid
@@ -187,8 +196,7 @@ Image nélkül ugyanilyen kulcsot ad: <code>echo "base64:$(openssl rand -base64 
 <li><strong>Tanúsítvány.</strong> A teljes lánc és a kulcs a <code>tls</code> mappába kerül. A konténer felhasználójának (uid 82) olvashatónak kell lennie:
 <pre><code>cp /utvonal/fullchain.pem /utvonal/privkey.pem tls/
 sudo chown 82:82 tls/fullchain.pem tls/privkey.pem
-sudo chmod 444 tls/fullchain.pem &amp;&amp; sudo chmod 400 tls/privkey.pem</code></pre>
-Rootless Podman alatt a <code>sudo chown</code> helyett <code>podman unshare chown 82:82 tls/fullchain.pem tls/privkey.pem</code> kell, mert a gazdagép 82-es azonosítója a konténerben másra képződik.</li>
+sudo chmod 444 tls/fullchain.pem &amp;&amp; sudo chmod 400 tls/privkey.pem</code></pre></li>
 <li><strong>Belső tanúsítványkiadók</strong> (választható). Ha az Exchange, az ADFS, az ügyféltörzs vagy a külső adatbázis belső CA-val hitelesít, a CA-tanúsítványt tegye a <code>ca</code> mappába (<code>*.crt</code> vagy <code>*.pem</code>). Indításkor a rendszer tanúsítványtára mellé kerül; a TLS-ellenőrzés kikapcsolására nincs szükség.</li>
 <li><strong>Indítás</strong> (az image a 3. lépésben már letöltődött):
 <pre><code>docker compose up -d
@@ -201,7 +209,7 @@ Az első indításkor sorrendben:
 </ol></li>
 <li><strong>Az első rendszergazda</strong> (jelszót kér, legalább 12 karakter):
 <pre><code>docker compose exec web php artisan hdid:make-admin admin@example.org --name="Rendszergazda"</code></pre>
-A parancs helyi ügyféltörzsbeli tételt is létrehozza, így a belépési szabály teljesül; a későbbi ügyféltörzs-átvételek ezt a helyi tételt nem tekintik hiányzónak, és ha az e-mail-cím az ügyféltörzsben is megjelenik, a fiókot átkötik rá.</li>
+A parancs helyi ügyféltörzsbeli tételt is létrehozza, így a belépési szabály teljesül; a későbbi ügyféltörzs-átvételek ezt a helyi tételt nem tekintik hiányzónak, és ha az e-mail-cím az ügyféltörzsben is megjelenik, a fiókot átkötik rá. A jelszót rejtett prompt kéri; ha a belépés „hibás felhasználónév vagy jelszó” hibát ad, a parancs ugyanarra az e-mailre újrafuttatva új jelszót állít, a valódi elutasítási ok pedig az auditnaplóból kérdezhető le (üzemeltetési kézikönyv 6. fejezet). Ha a <code>web</code> még nem fut, a parancs <code>docker compose run --rm --no-deps web artisan hdid:make-admin …</code> alakban is megy.</li>
 <li><strong>Első ellenőrzés és a telefonközpont kulcsa</strong> (a kulcs egyszer jelenik meg):
 <pre><code>docker compose exec web php artisan hdid:health
 docker compose exec web php artisan hdid:api-key:create "Prémium telefonközpont" callcenter</code></pre></li>
@@ -224,7 +232,7 @@ docker compose exec web php artisan hdid:api-key:create "Prémium telefonközpon
     <li>az érvénytelen <code>APP_KEY</code>;</li>
     <li>ha az <code>APP_URL</code> nem https;</li>
     <li>a hiányzó adatbázis-adat;</li>
-    <li>élesben (<code>APP_ENV=production</code>) az <code>APP_DEBUG=true</code>, a <code>TRUSTED_PROXIES=*</code> és a <code>SESSION_SECURE_COOKIE=false</code>.</li>
+    <li>élesben (<code>APP_ENV=production</code>) az <code>APP_DEBUG=true</code>, a <code>TRUSTED_PROXIES=*</code> és a <code>SESSION_SECURE_COOKIE=false</code>. A konténer ilyenkor 64-es kilépési kóddal áll meg, és a <code>restart</code> szabály miatt újraindulgat; az ok a <code>docker compose logs web</code> kimenetében. Részletes hibaüzenetekhez az üzemeltetési kézikönyv 5. fejezetének hibakeresési receptje való, nem a <code>production</code> környezet debug módja.</li>
 </ul>
 Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, valamint az önaláírt tanúsítványért.</li>
 <li><strong>Gyorsítótár.</strong> Az ellenőrzés után a konfiguráció, az útvonalak és az események gyorsítótára a memóriában lévő <code>/tmp</code>-be épül. A titkokat is tartalmazó konfigurációs gyorsítótár így lemezre sem kerül. A PHP-FPM dolgozói ezt olvassák, a konténer környezetét nem látják (<code>clear_env</code>).</li>
@@ -234,6 +242,7 @@ Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, vala
 
 <h2 id="s5"><span class="num">5</span>Környezeti változók</h2>
 <p>A teljes lista magyar magyarázattal a kiadás <code>env.example</code> fájljában található. A legfontosabbak:</p>
+<div class="callout"><p><strong>Backslash az értékben.</strong> Tartományi felhasználónevet (<code>DOMAIN\user</code>, például az ügyféltörzs vagy az NTLM-es Exchange fiókja) idézőjel nélkül vagy aposztrófok között írjon: <code>EMD_SYNC_USERNAME=DOMAIN\user</code> vagy <code>EMD_SYNC_USERNAME='DOMAIN\user'</code>. Dupla idézőjelben a Compose a <code>\n</code> és <code>\r</code> sorozatot sortöréssé alakítja, így a <code>"DOMAIN\nagy"</code> két sorra esik. Az alkalmazás a nevet JSON-ban, helyesen kódolva küldi, a backslash-t nem kell kettőzni.</p></div>
 <h3>Kiadás, hálózat, konténer</h3>
 <div class="tablewrap"><table>
 <thead><tr><th>Kulcs</th><th>Alapérték</th><th>Jelentés</th></tr></thead>
@@ -272,14 +281,28 @@ Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, vala
 <tr><td><code>HDID_CSP_ENABLED</code>, <code>HDID_CSP_EXTRA_SOURCES</code></td><td><code>true</code>, üres</td><td>Tartalombiztonsági szabályzat; csak indokolt, pontos források vehetők fel.</td></tr>
 <tr><td><code>HDID_PHONE_REGION</code></td><td><code>HU</code></td><td>A hívószámok értelmezésének alapértelmezett országa.</td></tr>
 <tr><td><code>HDID_SOURCE_URL</code></td><td>az image kiadására mutat</td><td>A „Forráskód” hivatkozás a portál és a panel láblécében; módosított változatnál a módosított forrásra mutasson (AGPL-3.0, 13. pont).</td></tr>
+<tr><td><code>SHOW_SC</code></td><td><code>true</code></td><td>A „Forráskód” hivatkozás megjelenítése; <code>false</code> elrejti akkor is, ha a cím meg van adva. Az AGPL-3.0 13. pontja szerint a hálózati felhasználóknak ekkor más úton kell felajánlani a forrást.</td></tr>
 </tbody></table></div>
 <h3>Külső rendszerek</h3>
 <div class="tablewrap"><table>
 <thead><tr><th>Kulcsok</th><th>Jelentés</th></tr></thead>
 <tbody>
-<tr><td><code>MAIL_MAILER</code>, <code>MAIL_*</code>, <code>EWS_*</code></td><td><code>ews</code> (Exchange: URL, <code>basic</code>/<code>ntlm</code>/<code>oauth</code>, hozzáférés) vagy <code>smtp</code>. A <code>log</code> csak naplóba ír, élesben a rendszerállapot jelzi. <code>EWS_VERIFY_TLS=true</code> maradjon; belső CA a <code>ca</code> mappába.</td></tr>
-<tr><td><code>SMS_DRIVER</code>, <code>OZEKI_*</code></td><td><code>ozeki</code>: az átjáró HTTPS-címe és hozzáférése; <code>log</code> élesben hiba.</td></tr>
-<tr><td><code>EMD_SYNC_*</code></td><td>Ügyféltörzs-átvétel: illesztő (<code>spreadsheet</code> vagy <code>json</code>), export-, ID-lista- (<code>EMD_SYNC_ID_LIST_URL</code>), belépési és tokenfrissítési cím, hozzáférés, időkorlátok, formátum, ütemezés (<code>EMD_SYNC_CRON</code>), tokenfrissentartás, és a panelről indított átvétel sora (<code>EMD_SYNC_QUEUE=sync</code>).</td></tr>
+<tr><td><code>MAIL_MAILER</code></td><td><code>ews</code> / <code>smtp</code> / <code>log</code></td><td>Levelezési illesztő: <code>ews</code> az Exchange webszolgáltatás, <code>smtp</code> SMTP-kiszolgáló. A <code>log</code> csak naplóba ír, élesben a rendszerállapot figyelmeztet. Próba: <code>hdid:test-mail cím --now</code> (11. fejezet).</td></tr>
+<tr><td><code>MAIL_FROM_ADDRESS</code>, <code>MAIL_FROM_NAME</code></td><td>feladó cím és név</td><td>EWS-nél a feladó postafiók legyen az EWS-fiók, vagy annak legyen küldési joga rá.</td></tr>
+<tr><td><code>EWS_URL</code>, <code>EWS_AUTH</code>, <code>EWS_USERNAME</code>, <code>EWS_PASSWORD</code></td><td><code>https://…/EWS/Exchange.asmx</code>; <code>basic</code> / <code>ntlm</code> / <code>oauth</code></td><td>Az Exchange webszolgáltatás címe és hitelesítési módja; <code>basic</code> és <code>ntlm</code> esetén a postafiók felhasználója és jelszava. Tartományi felhasználónév (<code>DOMAIN\user</code>) idézőjel nélkül vagy aposztrófok között írandó.</td></tr>
+<tr><td><code>EWS_OAUTH_TENANT</code>, <code>EWS_OAUTH_CLIENT_ID</code>, <code>EWS_OAUTH_CLIENT_SECRET</code>, <code>EWS_OAUTH_SCOPE</code></td><td>Entra-regisztráció adatai; a hatókör alapból <code>https://outlook.office365.com/.default</code></td><td><code>EWS_AUTH=oauth</code> esetén: a bérlő GUID-ja, az alkalmazás kliensazonosítója és titka, a postafiókra adott EWS-jogosultsággal. A hatókört csak eltérő felhő esetén kell megadni.</td></tr>
+<tr><td><code>EWS_VERIFY_TLS</code></td><td><code>true</code></td><td>Maradjon <code>true</code>; belső tanúsítványkiadóval kiállított Exchange-tanúsítványnál a CA a <code>ca</code> mappába kerül.</td></tr>
+<tr><td><code>MAIL_HOST</code>, <code>MAIL_PORT</code>, <code>MAIL_USERNAME</code>, <code>MAIL_PASSWORD</code>, <code>MAIL_SCHEME</code></td><td>SMTP-kiszolgáló adatai; <code>smtp</code> vagy <code>smtps</code></td><td><code>MAIL_MAILER=smtp</code> esetén. <code>smtps</code> közvetlen TLS (jellemzően 465-ös port), <code>smtp</code> vagy üres: STARTTLS-képes kapcsolat (587).</td></tr>
+<tr><td><code>SMS_DRIVER</code></td><td><code>ozeki</code> / <code>log</code></td><td>SMS-küldés az Ozeki NG átjárón; a <code>log</code> csak naplóba ír, élesben a rendszerállapot hibát jelez. Próba: <code>hdid:test-sms +36… --now</code>.</td></tr>
+<tr><td><code>OZEKI_URL</code>, <code>OZEKI_USERNAME</code>, <code>OZEKI_PASSWORD</code></td><td>az átjáró API-címe (például <code>https://sms.example.org:9501/api</code>), felhasználó, jelszó</td><td>A rendszer POST-kérést küld, a hozzáférés nem kerül a címsorba; csak kapcsolódási hibánál ismétel.</td></tr>
+<tr><td><code>EMD_SYNC_DRIVER</code>, <code>EMD_SYNC_API_URL</code></td><td><code>spreadsheet</code>, teljes export-URL</td><td>Átvételi mód: hitelesített POST → CSV/XLSX fájl az export végpontjáról; az export kéréstörzse (JSON) a panel <em>Beállítások › Ügyféltörzs (EMD)</em> fülén, csak SuperAdmin szerkeszti. A régi GET JSON API-hoz <code>json</code>, <code>EMD_SYNC_API_TOKEN</code> (statikus Bearer-token) és <code>EMD_SYNC_API_TIMEOUT</code> (60 mp).</td></tr>
+<tr><td><code>EMD_SYNC_LOGIN_URL</code>, <code>EMD_SYNC_REFRESH_URL</code>, <code>EMD_SYNC_USERNAME</code>, <code>EMD_SYNC_PASSWORD</code></td><td>az ügyféltörzs belépési és tokenfrissítési címe, belépési adatai</td><td>Belépés: POST JSON <code>{Password, Username}</code>; tokenfrissítés: POST JSON <code>{refreshToken}</code>. Mindkét válasz <code>access_token</code> és <code>refresh_token</code>; a <code>roles</code> mezőt a rendszer figyelmen kívül hagyja. Sikertelen tokenfrissítés után egyszeri új belépés következik. Tartományi felhasználónév (<code>DOMAIN\user</code>) idézőjel nélkül vagy aposztrófok között írandó.</td></tr>
+<tr><td><code>EMD_SYNC_AUTH_TIMEOUT</code>, <code>EMD_SYNC_EXPORT_TIMEOUT</code></td><td>20 / 600 másodperc</td><td>Belépés és fájlletöltés külön időkorláttal; nem a token érvényessége. A teljes háttérfeladat korlátja 1200 mp, a letöltési időkorlát ennél kisebb legyen.</td></tr>
+<tr><td><code>EMD_SYNC_ID_LIST_URL</code></td><td>üres</td><td>Az ID-lista (például a szervezetek) lekérdezésének címe: POST az exporttal azonos tokennel, a Beállításokban megadott kéréstörzzsel, az <code>EMD_SYNC_EXPORT_TIMEOUT</code> időkorlátjával. Csak akkor kell, ha az export kéréstörzse a <code>{{ ids }}</code> helyőrzőt használja; üresen az ID-lista ki van kapcsolva.</td></tr>
+<tr><td><code>EMD_SYNC_EXPORT_FORMAT</code>, <code>EMD_SYNC_CSV_DELIMITER</code></td><td><code>xlsx</code>, <code>,</code></td><td>A várt exportfájl <code>xlsx</code> vagy <code>csv</code>; a CSV-elválasztó egyetlen karakter. A CSV-kódolás a <em>Beállítások › Ügyféltörzs (EMD)</em> fülön állítható.</td></tr>
+<tr><td><code>EMD_SYNC_TOKEN_KEEP_ALIVE</code></td><td><code>true</code> / <code>false</code> (<code>on</code>/<code>off</code>, <code>1</code>/<code>0</code> is)</td><td>Az ügyféltörzs API-tokenjének 15 percenkénti háttérfrissítése; kikapcsolva az átvétel szükség szerint frissít, sikertelen frissítés után egyszer újra belép. Olvashatatlan érték esetén az alapérték érvényes. Módosítás után <code>docker compose up -d</code>.</td></tr>
+<tr><td><code>EMD_SYNC_QUEUE</code></td><td><code>sync</code></td><td>A panelről indított átvétel sora; a <code>sync-worker</code> szolgáltatás dolgozza fel, így a legfeljebb 20 perces átvétel nem tartja fel az e-maileket és SMS-eket. Ha várakozó átvételt öt percen túl egyetlen feldolgozó sem vesz fel, a rendszerállapot figyelmeztet.</td></tr>
+<tr><td><code>EMD_SYNC_CRON</code></td><td><code>0 */3 * * *</code></td><td>Teljes ügyféltörzs-átvétel 3 óránként; üresen csak kézzel. A 15 percenkénti tokenfrissítés ettől független. A régi <code>SYNC_*</code> nevek álnévként működnek; kitöltött új név elsőbbséget kap.</td></tr>
 <tr><td><code>CALLCENTER_*</code></td><td>Örökölt, rögzített telefonközponti kulcs és aláírás. Új partnerhez a felületen kezelt API-kulcs ajánlott; a <code>CALLCENTER_SIGNATURE_TTL</code> (300) az aláírt kérés időbélyegének megengedett eltérése.</td></tr>
 <tr><td><code>USER_*</code>, <code>CLIENT_*</code> (<code>ADFS</code>, <code>ENTRA</code>)</td><td>Négy alkalmazás-regisztráció az egyszeri bejelentkezéshez; az Entra-bérlő csak GUID lehet.</td></tr>
 </tbody></table></div>
@@ -426,7 +449,7 @@ docker compose logs -f --tail=100 worker            # élő követés</code></pr
 <p>A konténerben futó parancsok előtagja <code>docker compose exec web php artisan</code>.</p>
 <h3>Ügyféltörzs (Enterprise Master Data, EMD)</h3>
 <ol class="steps">
-    <li>Töltse ki az <code>EMD_SYNC_*</code> értékeket, majd <code>docker compose up -d</code>.</li>
+    <li>Töltse ki az <code>EMD_SYNC_*</code> értékeket (jelentésük az 5. fejezet táblázatában), majd <code>docker compose up -d</code>. Az export és az ID-lista kéréstörzse nem környezeti változó: a panel <em>Beállítások › Ügyféltörzs (EMD)</em> fülén áll.</li>
     <li>A belépés ellenőrzése: <code>docker compose exec web php artisan hdid:emd-sync-token</code>.</li>
     <li>Próbafuttatás: <code>docker compose exec web php artisan hdid:emd-sync --dry-run</code>, vagy a panel <em>Próbafuttatás az API-ból</em> gombja; utóbbi a <code>sync-worker</code>-en fut.</li>
     <li>Megfelelő eredmény után az éles átvétel.</li>
@@ -450,7 +473,7 @@ docker compose logs -f --tail=100 worker            # élő követés</code></pr
 <p><strong>Kulcs.</strong> A panelen <em>Rendszer › API-kulcsok</em>, „Call center / IVR” hatókörrel; vagy parancssorból: <code>docker compose exec web php artisan hdid:api-key:create "Telefonközpont" callcenter</code>. A kulcs egyszer jelenik meg.</p>
 <p><strong>Küldés.</strong> A kulcs az <code>X-Api-Key</code> fejlécben küldendő. Az <code>api_key</code> lekérdezési paraméter csak örökölt partnernek használható, mert webszerver-naplóba kerülhet; az access log itt nem rögzíti.</p>
 <p><strong>Aláírás.</strong> Választható HMAC-aláírás: <code>X-Timestamp</code> és <code>X-Signature</code> fejléc. Az aláírandó szöveg: időbélyeg, metódus, kéréscím a lekérdezéssel, törzs.</p>
-<p><strong>Leírás.</strong> A teljes gépi felület rendszergazdával belépve a <code>/docs/ivr</code> címen olvasható, a mobil kiszolgálóé a <code>/docs/mobile</code> címen.</p>
+<p><strong>Leírás.</strong> A teljes gépi felület rendszergazdával belépve a <code>/docs/ivr</code> címen olvasható, a mobil kiszolgálóé a <code>/docs/mobile</code> címen. A megjelenítőt a böngésző az <code>unpkg.com</code> címről tölti be (a tartalombiztonsági szabályzat ezt csak a <code>/docs/*</code> oldalakon engedi), ezért a munkaállomásnak internet-elérés kell; zárt hálózaton a <code>/docs/ivr.json</code> letölthető, és bármely OpenAPI-nézőben olvasható, ez adható át a telefonközpont szállítójának is.</p>
 
 <h2 id="s12"><span class="num">12</span>Ellenőrzés és biztonsági átvétel</h2>
 <h3>12.1 Működés</h3>
@@ -541,7 +564,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.10 · 2026. október 8. · OpenHDID 1.3.2</div>
+<div class="foot">OpenHDID telepítési útmutató 1.11 · 2026. október 9. · OpenHDID 1.4.0</div>
 </div>
 
 </body>

@@ -1,4 +1,4 @@
-{{-- Where the running build's source is published (AGPL-3.0 section 13); nothing without HDID_SOURCE_URL. --}}
+{{-- Where the running build's source is published (AGPL-3.0 section 13); nothing without HDID_SOURCE_URL or with SHOW_SC=false. --}}
 @if ($url)
     <div class="hdid-source-link">
         <a href="{{ $url }}" target="_blank" rel="noopener">{{ __('Source code') }}</a>

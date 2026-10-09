@@ -92,10 +92,10 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">A konténeres OpenHDID napi üzemeltetése: ellenőrzés, szolgáltatások kezelése, naplók és felügyelet, ütemezett feladatok, a leggyakoribb helyzetek, mentés és visszaállítás, frissítés, skálázás és biztonsági karbantartás.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.5 · 2026. október 8.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.3.2 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.6 · 2026. október 9.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.0 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
-    <div><span class="k">Kapcsolódó</span><span>telepítési útmutató 1.10, felhasználói kézikönyv 1.32</span></div>
+    <div><span class="k">Kapcsolódó</span><span>telepítési útmutató 1.11, felhasználói kézikönyv 1.32</span></div>
 </div>
 
 <nav class="toc" aria-label="Tartalom">
@@ -220,6 +220,7 @@ docker compose logs --no-log-prefix web | grep '"status":429' | wc -l  # forgalo
 <pre><code>docker compose exec mariadb sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -uroot -e "ALTER USER \`openhdid\`@\`%\` IDENTIFIED BY \"új-jelszó\";"'</code></pre>
     Utána a <code>.env</code> <code>DB_PASSWORD</code> értéke és <code>docker compose up -d</code>.</li>
     <li><strong>Az ügyféltörzs tokenjei</strong> jelszó- vagy végpontcsere után: <code>docker compose exec web php artisan hdid:emd-sync-token</code>.</li>
+    <li><strong>Hibakeresés részletes hibaüzenetekkel.</strong> Éles környezetben (<code>APP_ENV=production</code>) az <code>APP_DEBUG=true</code> tiltott: a konténer 64-es kilépési kóddal megáll, mert a hibaoldal belső részleteket mutatna. Egy hibakeresési időszakra a <code>.env</code>-ben <code>APP_ENV=staging</code> és <code>APP_DEBUG=true</code> együtt, majd <code>docker compose up -d</code>; a végén mindkettő visszaállítása és újra <code>docker compose up -d</code>. Ha csak több napló kell, az <code>APP_ENV</code> maradhat, elég a <code>LOG_LEVEL=debug</code>.</li>
 </ul>
 <div class="callout danger"><p><strong>APP_KEY</strong> Meglévő telepítésen nem cserélhető a szokásos módon. A titkosított válaszok, kódmásolatok, API-tokenek, sütik és kulcsolt lenyomatok mind tőle függnek; cseréje külön adatmigrációs tervet és visszaállítási próbát igényel.</p></div>
 
@@ -228,9 +229,26 @@ docker compose logs --no-log-prefix web | grep '"status":429' | wc -l  # forgalo
 <h3>A konténer nem indul el vagy újraindulgat</h3>
 <ol class="steps">
     <li><code>docker compose ps</code> és <code>docker compose logs --tail=50 &lt;szolgáltatás&gt;</code>. Az indítószkript <code>openhdid: ERROR:</code> sora megnevezi az okot: hiányzó vagy hibás <code>APP_KEY</code>, nem https <code>APP_URL</code>, hiányzó adatbázis-adat, élesben tiltott beállítás, tanúsítványhiba, nem írható <code>storage</code> kötet.</li>
+    <li>Ha csak a <code>web</code> indul újra („restarting”), az ok a tanúsítvány vagy az nginx: a <code>docker compose run --rm --no-deps web tls-check</code> futó <code>web</code> nélkül is ellenőrzi a fájlokat (hiányzó <code>fullchain.pem</code>/<code>privkey.pem</code>, nem olvasható kulcs, névegyezés, csonka lánc). Az <code>artisan</code> parancsok ekkor is futnak: <code>docker compose run --rm --no-deps web artisan hdid:make-admin …</code>.</li>
     <li>A <code>migrate</code> hibájánál a többi szolgáltatás nem indul: <code>docker compose logs migrate</code>. Jellemző okok: az adatbázis nem érhető el 120 másodpercen belül, hibás migrációs jelszó a <code>db.env</code>-ben, vagy a migrációs fióknak nincs joga.</li>
     <li>Javítás után: <code>docker compose up -d</code>.</li>
 </ol>
+<h3>Az image letöltése időtúllépéssel elhal</h3>
+<p>Ha a <code>docker compose pull</code> 30 másodperc után időtúllépést ad, miközben a <code>curl</code> a gazdagépről eléri a <code>ghcr.io</code>-t, a Docker-démon nem látja a felhasználó proxybeállítását (<code>env | grep -i proxy</code>). A démon a proxyt systemd drop-inból kapja:</p>
+<pre><code>sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf &gt;/dev/null &lt;&lt;EOF
+[Service]
+Environment="HTTP_PROXY=${http_proxy:-$HTTP_PROXY}" "HTTPS_PROXY=${https_proxy:-$HTTPS_PROXY}" "NO_PROXY=localhost,127.0.0.1,${no_proxy:-$NO_PROXY}"
+EOF
+sudo systemctl daemon-reload &amp;&amp; sudo systemctl restart docker
+docker info | grep -i proxy</code></pre>
+<p>Ha nincs proxy, az IPv6 lehet félig beállítva: a <code>curl -4</code> és a <code>curl -6</code> a <code>https://ghcr.io/v2/</code> címre mutatja meg (<code>HTTP/2 401</code> a jó válasz); az IPv4 előnyben részesítése a <code>/etc/gai.conf</code> <code>precedence ::ffff:0:0/96 100</code> sorával.</p>
+<h3>„permission denied … docker.sock”</h3>
+<p>A futtató felhasználó nincs a <code>docker</code> csoportban, vagy a tagság még nem él: <code>sudo usermod -aG docker &lt;felhasználó&gt;</code>, majd új bejelentkezés (vagy <code>newgrp docker</code>); ellenőrzés <code>id</code> és <code>docker ps</code>. Ha a Docker kliens a Podman socketjét keresi, a korábbi <code>DOCKER_HOST</code> változót kell törölni (<code>unset DOCKER_HOST</code>, a profilból is), és a <code>docker context use default</code> parancsot futtatni.</p>
+<h3>Belépés elutasítva „hibás felhasználónév vagy jelszó” üzenettel</h3>
+<p>A felület minden elutasításra ugyanezt a semleges üzenetet adja. A valódi ok az auditnaplóban van (<code>login.rejected</code> esemény); a panel nélkül a konténerből kérdezhető le:</p>
+<pre><code>docker compose exec web php artisan tinker --execute 'App\Models\AuditLog::query()-&gt;where("event", "login.rejected")-&gt;latest()-&gt;take(5)-&gt;get()-&gt;each(fn ($e) =&gt; print($e-&gt;created_at." ".json_encode($e-&gt;context).PHP_EOL));'</code></pre>
+<p>A <code>reason</code> mező értékei: <code>invalid_credentials</code> (rossz e-mail vagy jelszó; a <code>hdid:make-admin</code> újrafuttatása ugyanarra az e-mailre a jelszót felülírja), <code>account_locked</code> (fokozódó zárolás, várni kell), <code>no_permission</code> (nincs panel-jogosultság), <code>method_disabled</code> (a jelszavas belépés kikapcsolva a beállításokban), <code>no_external_record</code> és <code>external_record_mismatch</code> (hiányzó vagy eltérő ügyféltörzs-tétel), <code>account_closed</code>. Ha egy sor sem keletkezett, a kérés el sem jutott a belépési szabályig: IP-korlát (percenként 5 próba) vagy lejárt munkamenet (419).</p>
 <h3>Tanúsítványhiba vagy lejárat</h3>
 <p>A <code>web</code> indításkor ellenőrzi a tanúsítványt. A <code>docker compose exec web openhdid tls-check</code> kiírja:</p>
 <ul>
@@ -314,8 +332,8 @@ tar czf mentes/openhdid-config-$d.tar.gz .env db.env tls ca compose.yaml</code><
 </ul>
 <ol class="steps">
     <li><strong>Az image ellenőrzése</strong> (választható, ajánlott):
-<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.3.2 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.3.2 \
+<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.4.0 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.4.0 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre></li>
     <li><strong>Mentés</strong> a 7. fejezet szerint.</li>
@@ -436,7 +454,7 @@ cosign verify ghcr.io/adamfhun/openhdid:1.3.2 \
 <tr><td>SemVer</td><td>Semantic Versioning – szemantikus verziózás (fő.al.javító).</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID üzemeltetési kézikönyv 1.5 · 2026. október 8. · OpenHDID 1.3.2</div>
+<div class="foot">OpenHDID üzemeltetési kézikönyv 1.6 · 2026. október 9. · OpenHDID 1.4.0</div>
 </div>
 
 </body>

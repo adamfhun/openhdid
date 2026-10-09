@@ -28,6 +28,17 @@ beforeEach(function (): void {
     Filament::setCurrentPanel('admin');
 });
 
+it('saves with the Save button without any dialog when nothing needs confirming', function (): void {
+    $field = ManageSettings::fieldName(SettingKey::PortalFooterText);
+
+    Livewire::test(ManageSettings::class)
+        ->fillForm([$field => 'Új lábléc'])
+        ->mountAction('save')
+        ->assertHasNoFormErrors();
+
+    expect(app(Settings::class)->string(SettingKey::PortalFooterText))->toBe('Új lábléc');
+});
+
 it('estimates who loses access, which sponsors stop sponsoring and whose tier moves', function (): void {
     $sponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null, 'name' => 'Fő Ügyfél']);
     $dependent = Client::factory()->synced()->create(['implicit_package' => 'Basic', 'explicit_package' => 'Premium', 'name' => 'Kapcsolt Kata']);

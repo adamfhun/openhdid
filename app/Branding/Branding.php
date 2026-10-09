@@ -148,8 +148,23 @@ class Branding
             'privacy_url' => $this->settings->string(SettingKey::PortalPrivacyUrl),
             'terms_url' => $this->settings->string(SettingKey::PortalTermsUrl),
             'imprint_url' => $this->settings->string(SettingKey::PortalImprintUrl),
-            'source_url' => config('hdid.source_url'),
+            'source_url' => $this->sourceUrl(),
         ];
+    }
+
+    /**
+     * The published source of the running build, or null when the deployment names none
+     * or switched the link off (SHOW_SC=false).
+     */
+    public function sourceUrl(): ?string
+    {
+        if (! config('hdid.show_source_url', true)) {
+            return null;
+        }
+
+        $url = config('hdid.source_url');
+
+        return is_string($url) && $url !== '' ? $url : null;
     }
 
     /**

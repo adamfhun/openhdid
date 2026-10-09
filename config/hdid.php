@@ -64,6 +64,10 @@ return [
     // it, which is how a network service offers its source under the AGPL-3.0 (section 13).
     'source_url' => env('HDID_SOURCE_URL') ?: null,
 
+    // Whether the footers show the "Source code" link at all. Only an explicit off value hides it,
+    // so an empty SHOW_SC line copied from .env.example keeps the link.
+    'show_source_url' => ! in_array(env('SHOW_SC', true), [false, 0, '0', 'false', 'off', 'no'], true),
+
     'phone' => [
         'default_region' => env('HDID_PHONE_REGION', 'HU'),
     ],

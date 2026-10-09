@@ -47,6 +47,7 @@ class EditMessageTemplate extends EditRecord
                 ->icon('heroicon-o-arrow-uturn-left')
                 ->color('gray')
                 ->requiresConfirmation()
+                ->modalDescription(__('The edited subject and body are discarded and the built-in text applies from the next message on.'))
                 ->visible(fn (): bool => $this->getRecord()->isCustomised() || $this->getRecord()->subject !== null)
                 ->action(function (): void {
                     $this->getRecord()->forceFill(['subject' => null, 'body' => null, 'updated_by_user_id' => auth()->id()])->save();

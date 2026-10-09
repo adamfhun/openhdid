@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Branding\Branding;
 use App\Filament\Admin\NavigationGroup;
 use App\Filament\Admin\Pages\Dashboard;
 use App\Filament\Admin\Pages\SearchClients;
@@ -71,7 +72,7 @@ class AdminPanelProvider extends PanelProvider
             ))
             ->renderHook(PanelsRenderHook::USER_MENU_BEFORE, fn (): View => view('filament.admin.tier-switch'))
             ->renderHook(PanelsRenderHook::BODY_END, fn (): View => view('filament.admin.shortcuts', ['searchUrl' => SearchClients::getUrl()]))
-            ->renderHook(PanelsRenderHook::FOOTER, fn (): View => view('filament.admin.source-link', ['url' => config('hdid.source_url')]))
+            ->renderHook(PanelsRenderHook::FOOTER, fn (): View => view('filament.admin.source-link', ['url' => app(Branding::class)->sourceUrl()]))
             ->userMenuItems([
                 Action::make('locale_hu')->label('Magyar')->icon('heroicon-o-language')->url(fn () => route('locale.switch', 'hu'))->visible(fn () => app()->getLocale() !== 'hu'),
                 Action::make('locale_en')->label('English')->icon('heroicon-o-language')->url(fn () => route('locale.switch', 'en'))->visible(fn () => app()->getLocale() !== 'en'),

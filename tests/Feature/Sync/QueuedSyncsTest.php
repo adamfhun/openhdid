@@ -10,6 +10,7 @@ use App\Models\SyncRun;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\Sync\ApiTokens;
 use App\Sync\QueuedSyncs;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
@@ -37,6 +38,25 @@ beforeEach(function (): void {
         'hdid.sync.username' => 'u', 'hdid.sync.password' => 'p',
     ]);
     app(Settings::class)->set(SettingKey::SyncExportPayload, '{"ids":"1"}');
+});
+
+it('shows the EMD token state next to the run buttons', function (): void {
+    $admin = User::factory()->withRole(Role::Admin)->create();
+    $this->actingAs($admin);
+    config()->set('hdid.sync.driver', 'spreadsheet');
+    config()->set('hdid.sync.login_url', 'https://directory.test/login');
+    config()->set('hdid.sync.refresh_url', 'https://directory.test/refresh');
+    config()->set('hdid.sync.username', 'u');
+    config()->set('hdid.sync.password', 'p');
+    Http::fake(['https://directory.test/login' => Http::response(['access_token' => 'a', 'refresh_token' => 'r'])]);
+
+    Livewire::test(ManageSyncRuns::class)->assertSee(__('EMD API token: no successful login yet. A trial run or hdid:emd-sync-token checks the credentials.'));
+
+    app(ApiTokens::class)->accessToken();
+    Livewire::test(ManageSyncRuns::class)->assertSee('presumably valid');
+
+    config()->set('hdid.sync.password', null);
+    Livewire::test(ManageSyncRuns::class)->assertSee('login is not configured');
 });
 
 it('queues a panel trial run and shows the completed counts and escaped preview', function (): void {

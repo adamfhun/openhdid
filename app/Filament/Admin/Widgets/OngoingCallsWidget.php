@@ -110,11 +110,9 @@ class OngoingCallsWidget extends TableWidget
                     ->color('gray')
                     ->visible(fn (Call $call) => $call->isHeldBy(auth()->user()))
                     ->disabled(fn (Call $call) => $call->isIdentified())
-                    ->tooltip(fn (Call $call) => $call->isIdentified() ? __('The caller is identified: the call stays with the agent who handled it.') : null)
-                    ->requiresConfirmation()
-                    ->modalHeading(__('Hand this call back to the queue?'))
-                    ->modalDescription(__('The call stays on the dashboard without an agent so that a colleague can take it.'))
-                    ->modalSubmitActionLabel(__('Release'))
+                    ->tooltip(fn (Call $call) => $call->isIdentified()
+                        ? __('The caller is identified: the call stays with the agent who handled it.')
+                        : __('The call stays on the dashboard without an agent so that a colleague can take it.'))
                     ->action(function (Call $call): void {
                         try {
                             app(CallCenterService::class)->release($call, auth()->user());
