@@ -9,6 +9,7 @@ use App\Enums\IdChannel;
 use App\Enums\OneTimeCodePurpose;
 use App\Identification\MobileOtpService;
 use App\Identification\PinService;
+use App\Identification\QaSessionEngine;
 use App\Models\Call;
 use App\Models\Client;
 use App\Models\ClientPhoneNumber;
@@ -38,6 +39,7 @@ class CallCenterService
         private readonly Settings $settings,
         private readonly Auditor $auditor,
         private readonly ClientTiers $tiers,
+        private readonly QaSessionEngine $qaSessions,
     ) {}
 
     /**
@@ -187,6 +189,10 @@ class CallCenterService
 
             $this->auditor->record($holder !== null ? 'call.taken_over' : 'call.claimed', $call, $holder !== null ? ['from_user_id' => $holder->id] : [], $agent);
 
+            if ($holder !== null) {
+                $this->qaSessions->cancelCallSessions($call, $holder, 'call_taken_over');
+            }
+
             return $call;
         });
     }
@@ -220,8 +226,42 @@ class CallCenterService
             ])->save();
 
             $this->auditor->record('call.released', $call, [], $agent);
+            $this->qaSessions->cancelCallSessions($call, $agent, 'call_released');
 
             return $call;
+        });
+    }
+
+    /**
+     * The agent moves the call they work on to another client (the call came
+     * in matched to the wrong one). Holder and attachability are decided on
+     * the row re-read inside the call lock, so a colleague's take-over in the
+     * meantime cannot be moved away under them; the agent's open
+     * question-and-answer session with the previous client closes.
+     *
+     * @throws AuthorizationException when the call is a colleague's by now, or not attachable by this agent
+     */
+    public function reassignToClient(Call $call, Client $client, User $agent): Call
+    {
+        return $this->underCallLock($call, function (Call $call) use ($client, $agent): Call {
+            if ($call->isHeldBySomeoneElse($agent)) {
+                throw new AuthorizationException(__('This call is being handled by another agent.'));
+            }
+
+            if (! $call->isAttachableBy($agent)) {
+                throw new AuthorizationException(__('Take the call from the dashboard first; a call nobody holds cannot be moved to another client.'));
+            }
+
+            if ($call->client_id === $client->id) {
+                return $call;
+            }
+
+            if (($previous = $call->client) !== null) {
+                $this->qaSessions->cancelOpenSessions($previous, $agent, 'call_reassigned');
+                $this->auditor->record('call.client_reassigned', $call, ['from_client_id' => $previous->id, 'to_client_id' => $client->id], $agent);
+            }
+
+            return $this->attachClient($call, $client, $agent);
         });
     }
 

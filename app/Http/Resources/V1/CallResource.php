@@ -2,7 +2,6 @@
 
 namespace App\Http\Resources\V1;
 
-use App\Clients\ClientTiers;
 use App\Models\Call;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -12,7 +11,9 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * is on file, the matched client with what the IVR needs to decide the next
  * step (can it ask for a PIN, is the caller already identified). `ambiguous`
  * is true when the number is on file for several clients: nobody is matched
- * then and the caller has to identify by code, PIN or an agent.
+ * then and the caller has to identify by code, PIN or an agent. The service
+ * level is not sent: the call center does not need it, and with an unmapped
+ * queue it would tell the matched client's level to anyone holding the key.
  *
  * @mixin Call
  */
@@ -30,11 +31,9 @@ class CallResource extends JsonResource
             'caller_number_raw' => $this->caller_number_raw,
             'status' => $this->status->value,
             'queue' => $this->queue,
-            'tier' => $this->tier?->value,
             'client' => $this->whenLoaded('client', fn () => $this->client === null ? null : [
                 'id' => $this->client->id,
                 'name' => $this->client->name,
-                'tier' => app(ClientTiers::class)->tierFor($this->client)?->value,
                 'has_pin' => $this->client->hasPin(),
                 'pin_locked' => $this->client->pin_locked_until !== null && $this->client->pin_locked_until->isFuture(),
             ]),

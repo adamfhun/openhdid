@@ -129,6 +129,27 @@ it('fails the sync check when no successful run happened within twice the expect
     expect(app(HealthChecks::class)->syncApi()->status)->toBe(CheckStatus::Fail, 'a dry run is not a real run');
 });
 
+it('prints the signing secret with a mobile backend key created from the command line', function (): void {
+    $this->artisan('hdid:api-key:create', ['name' => 'Mobil', 'scope' => 'mobile_backend'])
+        ->expectsOutputToContain('hdid_')
+        ->expectsOutputToContain('Signing secret')
+        ->assertSuccessful();
+
+    expect(ApiKey::query()->where('name', 'Mobil')->sole()->requiresSignature())->toBeTrue();
+});
+
+it('fails the api key check while a mobile backend key has no signing secret', function (): void {
+    config()->set('hdid.callcenter.api_key', 'legacy');
+    $old = ApiKey::factory()->scope(ApiKeyScope::MobileBackend)->create(['name' => 'Régi mobil']);
+
+    $check = app(HealthChecks::class)->apiKeys();
+    expect($check->status)->toBe(CheckStatus::Fail)
+        ->and($check->detail)->toContain('Régi mobil');
+
+    $old->rotateSigningSecret();
+    expect(app(HealthChecks::class)->apiKeys()->status)->toBe(CheckStatus::Ok);
+});
+
 it('creates an api key from the command line and prints it once', function (): void {
     $this->artisan('hdid:api-key:create', ['name' => 'PBX', 'scope' => 'callcenter'])
         ->expectsOutputToContain('hdid_')

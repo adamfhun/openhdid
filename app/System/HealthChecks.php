@@ -115,7 +115,7 @@ class HealthChecks
             'mail' => __('Red: the EWS URL or credentials are missing in the environment (MAIL_MAILER, EWS_*). Yellow: a log/array mailer is set, so no e-mail leaves the server, fine for testing, not for production. Test with a magic link to your own client account.'),
             'sms' => __('Red with Ozeki: the gateway is unreachable or the credentials are wrong (OZEKI_*), check the Ozeki service and the network path. Red/yellow with the log driver: SMS are only written to the log, set SMS_DRIVER=ozeki for production.'),
             'sync' => __('Red: the last run failed or no successful run happened in twice the expected interval. Open EMD sync runs for the error; check the API URL/key or upload the file manually. A refused run usually means the export was much smaller than before (row-ratio guard). Yellow with a waiting run: the sync started from the panel was not picked up, start a worker for the EMD_SYNC_QUEUE queue. With {{ ids }} in the export payload, a failed ID list query (EMD_SYNC_ID_LIST_URL, ID list settings) or no selected ID on the list also fails the run; the run details show the status codes. Yellow with accounts closing at the next sync: their records were absent from the last run(s); open EMD records, tab "Closes at the next sync", and check the export (or the ID list selection) before the next run closes them. Yellow with e-mail conflicts: the directory renamed an account e-mail to an address another account holds; the account kept its old address and cannot sign in until the duplicate is resolved in EMD or the other account is deleted. A changed classification (staff/client) closes the old account only after the same number of runs as a missing record; the run details list the pending ones.'),
-            'api_keys' => __('A scope (call center or mobile backend) has no active key, so that partner cannot call in. Create one under API keys and hand it over, or ignore this while the integration is not live yet.'),
+            'api_keys' => __('Red: a mobile app backend key has no signing secret, so every request with it is refused (signing is mandatory for this scope). Issue one under API keys › Signing secret and hand it to the operator of the mobile backend, or revoke the key if it is not used. Yellow: a scope (call center or mobile backend) has no active key, so that partner cannot call in; create one under API keys and hand it over, or ignore this while the integration is not live yet.'),
             'package_overrides' => __('Informational: these clients carry a temporary manual package. Nothing to fix, but review the list now and then and end an override EMD has caught up with.'),
             'shared_numbers' => __('A number on file for more than one client recognises nobody in the phone menu, so those callers are not asked for their PIN. Open Shared phone numbers, decide whose number it is and remove it from the others; a number EMD lists for several people has to be corrected in the directory.'),
             'oidc' => __('A provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*). Either fill in the configuration or switch the provider off, otherwise the login button leads to an error.'),
@@ -441,6 +441,16 @@ class HealthChecks
         }
 
         $detail = implode(' · ', $parts);
+
+        // A key of a scope that always signs, made before signing became
+        // mandatory: every request with it is refused until it gets a secret.
+        $unsigned = ApiKey::query()->active()->whereNull('hmac_secret')
+            ->whereIn('scope', array_filter(ApiKeyScope::cases(), fn (ApiKeyScope $scope): bool => $scope->signatureRequired()))
+            ->pluck('name');
+
+        if ($unsigned->isNotEmpty()) {
+            return Check::fail('api_keys', $label, __('Without a signing secret, so every request with them is refused: :names', ['names' => $unsigned->implode(', ')]).' · '.$detail);
+        }
 
         return $missing === [] ? Check::ok('api_keys', $label, $detail) : Check::warn('api_keys', $label, __('No active key for: :list', ['list' => implode(', ', $missing)]).' · '.$detail);
     }

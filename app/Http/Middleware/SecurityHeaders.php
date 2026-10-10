@@ -16,9 +16,11 @@ class SecurityHeaders
 {
     /**
      * The API documentation pages (Scramble) render with Stoplight Elements loaded from
-     * this CDN; the policy admits it on those routes only, every other page stays strict.
+     * this CDN; the policy admits that one pinned package path on those routes only,
+     * not the whole CDN, and every other page stays strict. A Scramble upgrade that
+     * moves to another version needs this path updated (SecurityHeadersTest checks it).
      */
-    private const DOCS_ASSET_ORIGIN = 'https://unpkg.com';
+    private const DOCS_ASSET_ORIGIN = 'https://unpkg.com/@stoplight/elements@8.4.2/';
 
     public function handle(Request $request, Closure $next): Response
     {

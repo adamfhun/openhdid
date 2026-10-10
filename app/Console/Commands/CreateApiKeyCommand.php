@@ -26,10 +26,15 @@ class CreateApiKeyCommand extends Command
             return self::FAILURE;
         }
 
-        ['key' => $key, 'plain' => $plain] = ApiKey::generate((string) $this->argument('name'), $scope);
+        ['key' => $key, 'plain' => $plain, 'secret' => $secret] = ApiKey::generate((string) $this->argument('name'), $scope);
 
         $this->components->info("API key \"{$key->name}\" ({$scope->value}) created. Copy it now; it is not shown again.");
         $this->line($plain);
+
+        if ($secret !== null) {
+            $this->components->info('Signing secret: every request with this key must be signed (see /docs/mobile). Copy it now; it is not shown again.');
+            $this->line($secret);
+        }
 
         return self::SUCCESS;
     }

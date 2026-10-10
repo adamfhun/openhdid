@@ -27,6 +27,8 @@ use App\Settings\Settings;
 use App\Support\HuDate;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Event;
 use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Livewire;
 
@@ -314,6 +316,26 @@ it('cancels the open session of the previous client when the call is reassigned'
         ->and($open->fresh()->status)->toBe(IdSessionStatus::Cancelled)
         ->and($open->fresh()->outcome_reason)->toBe('call_reassigned')
         ->and(AuditLog::query()->where('event', 'call.client_reassigned')->exists())->toBeTrue();
+});
+
+it('moves a call to another client inside the call lock, so a take-over cannot slip in between', function (): void {
+    $wrong = Client::factory()->synced()->create(['name' => 'Rossz Réka']);
+    $call = Call::factory()->create(['client_id' => $wrong->id, 'agent_user_id' => $this->agent->id]);
+    $locked = [];
+    Event::listen('eloquent.updated: '.Call::class, function (Call $updated) use (&$locked): void {
+        $probe = Cache::lock('hdid:call:'.$updated->external_call_id, 1);
+        $free = $probe->get();
+        if ($free) {
+            $probe->release();
+        }
+        $locked[] = ! $free;
+    });
+
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id])->assertOk();
+
+    expect($call->fresh()->client_id)->toBe($this->client->id)
+        ->and($locked)->not->toBeEmpty()
+        ->and(array_unique($locked))->toBe([true], 'the holder is checked and the client written under the call lock');
 });
 
 it('refuses to move a call of a level the agent does not handle', function (): void {

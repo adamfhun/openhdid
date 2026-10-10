@@ -22,12 +22,24 @@ it('admits the documentation renderer origin only on the api documentation pages
     $this->seed(RolesAndPermissionsSeeder::class);
     $this->actingAs(User::factory()->withRole(Role::Admin)->create());
 
-    $docs = $this->get('/docs/ivr')->assertOk()->headers->get('Content-Security-Policy');
+    $page = $this->get('/docs/ivr')->assertOk();
+    $docs = $page->headers->get('Content-Security-Policy');
     $panel = $this->get('/admin')->headers->get('Content-Security-Policy');
 
-    expect($docs)->toMatch("/script-src [^;]*https:\/\/unpkg\.com/")
-        ->toMatch("/style-src [^;]*https:\/\/unpkg\.com/")
-        ->toMatch("/font-src [^;]*https:\/\/unpkg\.com/")
+    // Only the one pinned package path, not the whole CDN: every other package
+    // there could otherwise run in an administrator's session.
+    preg_match_all('#https://unpkg\.com/[^"\' ]+#', $page->getContent(), $assets);
+    preg_match('/script-src ([^;]*)/', $docs, $scripts);
+    $sources = array_values(array_filter(explode(' ', $scripts[1]), fn (string $source): bool => str_contains($source, 'unpkg.com')));
+
+    expect($assets[0])->not->toBeEmpty()
+        ->and($sources)->toHaveCount(1)
+        ->and($sources[0])->toEndWith('/')->not->toBe('https://unpkg.com/');
+    foreach ($assets[0] as $asset) {
+        expect($asset)->toStartWith($sources[0], 'the policy covers every file the page loads; update the pinned path after a Scramble upgrade');
+    }
+    expect($docs)->toMatch('#style-src [^;]*'.preg_quote($sources[0], '#').'#')
+        ->toMatch('#font-src [^;]*'.preg_quote($sources[0], '#').'#')
         ->and($panel)->not->toContain('unpkg.com');
 });
 

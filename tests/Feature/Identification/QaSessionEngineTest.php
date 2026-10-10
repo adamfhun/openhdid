@@ -1,5 +1,6 @@
 <?php
 
+use App\CallCenter\CallCenterService;
 use App\Enums\IdMethod;
 use App\Enums\IdSessionStatus;
 use App\Enums\StepVerdict;
@@ -8,6 +9,7 @@ use App\Identification\IdentificationException;
 use App\Identification\QaSessionEngine;
 use App\Identification\QuestionCatalog;
 use App\Models\AuditLog;
+use App\Models\Call;
 use App\Models\Client;
 use App\Models\IdSession;
 use App\Models\IdSessionStep;
@@ -452,4 +454,60 @@ it('is not blocked by an open pin session and closes a session left open without
 
     expect(app(QaSessionEngine::class)->expireStale())->toBeGreaterThanOrEqual(1)
         ->and($stuck->fresh()->status)->toBe(IdSessionStatus::Expired);
+});
+
+it('closes the question-and-answer session of an agent who releases the call or loses it to a colleague', function (): void {
+    $calls = app(CallCenterService::class);
+    $colleague = User::factory()->create();
+
+    $client = clientWithAnswers(5);
+    $call = Call::factory()->create(['client_id' => $client->id]);
+    $calls->claim($call, $this->agent);
+    $session = $this->engine->start($client, $this->agent, $call->fresh());
+
+    // Released from the dashboard, where no identification page is involved.
+    $calls->release($call->fresh(), $this->agent);
+    expect($session->fresh()->status)->toBe(IdSessionStatus::Cancelled)
+        ->and($session->fresh()->outcome_reason)->toBe('call_released');
+
+    $client = clientWithAnswers(5);
+    $call = Call::factory()->create(['client_id' => $client->id]);
+    $calls->claim($call, $this->agent);
+    $session = $this->engine->start($client, $this->agent, $call->fresh());
+
+    $calls->claim($call->fresh(), $colleague, takeOver: true);
+    expect($session->fresh()->status)->toBe(IdSessionStatus::Cancelled)
+        ->and($session->fresh()->outcome_reason)->toBe('call_taken_over')
+        ->and($this->engine->start($client, $colleague, $call->fresh())->agent_user_id)->toBe($colleague->id, 'the new holder can identify the caller at once');
+});
+
+it('refuses a verdict on a call the agent no longer holds so that it never vouches for the new holder', function (): void {
+    $client = clientWithAnswers(5);
+    $call = Call::factory()->create(['client_id' => $client->id]);
+    app(CallCenterService::class)->claim($call, $this->agent);
+    $session = $this->engine->start($client, $this->agent, $call->fresh());
+    $this->engine->decide($this->engine->next($session, $this->agent), StepVerdict::Accepted, $this->agent);
+    $step = $this->engine->next($session->refresh(), $this->agent);
+
+    // The call changes hands by a path that leaves the session open.
+    $call->forceFill(['agent_user_id' => User::factory()->create()->id])->save();
+
+    expect(fn () => $this->engine->decide($step, StepVerdict::Accepted, $this->agent))->toThrow(IdentificationException::class);
+    expect($session->fresh()->status)->toBe(IdSessionStatus::Cancelled)
+        ->and($session->fresh()->outcome_reason)->toBe('call_left_agent')
+        ->and($step->fresh()->isPending())->toBeTrue()
+        ->and($call->fresh()->isIdentified())->toBeFalse();
+});
+
+it('reveals no further question once the call has left the agent', function (): void {
+    $client = clientWithAnswers(5);
+    $call = Call::factory()->create(['client_id' => $client->id]);
+    app(CallCenterService::class)->claim($call, $this->agent);
+    $session = $this->engine->start($client, $this->agent, $call->fresh());
+
+    $call->forceFill(['agent_user_id' => null])->save();
+
+    expect(fn () => $this->engine->next($session, $this->agent))->toThrow(IdentificationException::class);
+    expect($session->fresh()->status)->toBe(IdSessionStatus::Cancelled)
+        ->and($session->steps()->count())->toBe(0);
 });

@@ -61,7 +61,7 @@ it('selects a row at once, without a dialog, as one audited change', function ()
     $ag = SyncIdListItem::factory()->create(['external_id' => '3', 'name' => 'Ág Bt.']);
 
     Livewire::test(ManageSettings::class)
-        ->callAction(TestAction::make('toggleSelection')->table($ag))
+        ->callAction(TestAction::make('selectId')->table($ag))
         ->assertHasNoActionErrors();
 
     expect($ag->fresh()->selected)->toBeTrue()
@@ -75,8 +75,8 @@ it('asks before deselecting a row, naming the ID and the consequence', function 
     SyncIdListItem::factory()->selected()->create(['external_id' => '12', 'name' => 'Zebra Kft.']);
 
     Livewire::test(ManageSettings::class)
-        ->mountAction(TestAction::make('toggleSelection')->table($alma))
-        ->assertActionMounted(TestAction::make('toggleSelection')->table($alma))
+        ->mountAction(TestAction::make('deselectId')->table($alma))
+        ->assertActionMounted(TestAction::make('deselectId')->table($alma))
         ->assertMountedActionModalSee('Alma Zrt. (40)')
         ->assertMountedActionModalDontSee('Zebra Kft.')
         ->callMountedAction();
@@ -125,6 +125,35 @@ it('selects by pasted IDs, adding or replacing, and reports the IDs not on the l
         ->callAction(TestAction::make('selectByIds')->table(), ['ids' => '777', 'mode' => 'only'])
         ->assertNotified(__('None of the IDs is on the list; nothing changed.'));
     expect(app(IdList::class)->selectedIds())->toBe(['12', '40']);
+});
+
+it('keeps a confirmed deselection a deselection when a colleague changed the row meanwhile', function (): void {
+    $alma = SyncIdListItem::factory()->selected()->create(['external_id' => '40', 'name' => 'Alma Zrt.']);
+
+    $page = Livewire::test(ManageSettings::class)->mountAction(TestAction::make('deselectId')->table($alma));
+    $alma->update(['selected' => false]);
+    $page->callMountedAction();
+
+    expect($alma->fresh()->selected)->toBeFalse('the dialog asked to stop sending this ID');
+});
+
+it('deselects in "only these" mode the selected IDs that are off the list for now as well', function (): void {
+    SyncIdListItem::factory()->create(['external_id' => '3', 'name' => 'Ág Bt.']);
+    SyncIdListItem::factory()->selected()->create(['external_id' => '12', 'name' => 'Zebra Kft.']);
+    $away = SyncIdListItem::factory()->selected()->removed()->create(['external_id' => '9', 'name' => 'Szünetelő Kft.']);
+
+    Livewire::test(ManageSettings::class)
+        ->callAction(TestAction::make('selectByIds')->table(), ['ids' => '3', 'mode' => 'only'])
+        ->assertNotified(__('Selection updated: :added selected, :removed deselected.', ['added' => 1, 'removed' => 2]));
+
+    expect(app(IdList::class)->selectedIds())->toBe(['3'])
+        ->and($away->fresh()->selected)->toBeFalse('it would be sent again the moment it returns to the list');
+});
+
+it('refuses a pasted text longer than any real ID list', function (): void {
+    Livewire::test(ManageSettings::class)
+        ->callAction(TestAction::make('selectByIds')->table(), ['ids' => str_repeat('1 ', 50001), 'mode' => 'add'])
+        ->assertHasActionErrors(['ids' => 'max']);
 });
 
 it('exports the filtered ID list as CSV', function (): void {

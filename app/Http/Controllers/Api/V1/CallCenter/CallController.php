@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api\V1\CallCenter;
 
 use App\CallCenter\CallCenterService;
-use App\Clients\ClientTiers;
 use App\Enums\CallStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\CallCenter\CallEventRequest;
@@ -26,6 +25,10 @@ class CallController extends Controller
 
     /**
      * Create or update a call. Idempotent on `call_id`.
+     *
+     * `call_id` must identify one call for good and never be reused: an
+     * event with the id of an earlier call continues that call, with its
+     * client and its identification, and opens no new one.
      *
      * The call center may name the client (`client_id` or
      * `client_external_id`); when it cannot, which is the usual case, the
@@ -79,7 +82,7 @@ class CallController extends Controller
      * compared with every client's numbers, closed accounts excluded. When
      * several clients share the number, `client` is null and `ambiguous` true.
      *
-     * @response array{caller_number: ?string, ambiguous: bool, client: ?array{id: string, name: string, tier: ?string, has_pin: bool, pin_locked: bool}}
+     * @response array{caller_number: ?string, ambiguous: bool, client: ?array{id: string, name: string, has_pin: bool, pin_locked: bool}}
      */
     public function lookup(Request $request): JsonResponse
     {
@@ -94,7 +97,6 @@ class CallController extends Controller
             'client' => $client === null ? null : [
                 'id' => $client->id,
                 'name' => $client->name,
-                'tier' => app(ClientTiers::class)->tierFor($client)?->value,
                 'has_pin' => $client->hasPin(),
                 'pin_locked' => $client->pin_locked_until !== null && $client->pin_locked_until->isFuture(),
             ],

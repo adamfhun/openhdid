@@ -7,6 +7,7 @@ use App\Models\Client;
 use App\Models\OneTimeCode;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 
@@ -37,8 +38,9 @@ class OneTimeCodes
 
     /**
      * A secret that must be unique among all usable secrets of its purpose,
-     * because it is later looked up without knowing the client. The plain
-     * value is kept encrypted so that it can be shown again while it lives.
+     * and of the purposes looked up together with it, because it is later
+     * looked up without knowing the client. The plain value is kept
+     * encrypted so that it can be shown again while it lives.
      *
      * @param  callable(): string  $generator
      * @return array{code: string, record: OneTimeCode}
@@ -48,8 +50,10 @@ class OneTimeCodes
         for ($attempt = 0; $attempt < 20; $attempt++) {
             $code = $generator();
 
-            if ($this->findUsable($purpose, $code) !== null) {
-                continue;
+            foreach ($purpose->sharedCodeSpace() as $sibling) {
+                if ($this->findUsable($sibling, $code) !== null) {
+                    continue 2;
+                }
             }
 
             try {
@@ -73,6 +77,15 @@ class OneTimeCodes
     }
 
     /**
+     * The hashing a real issue costs, spent without storing anything, so a
+     * request that issues nothing takes as long as one that does.
+     */
+    public function matchIssueCost(): void
+    {
+        Hash::make(Str::random(16));
+    }
+
+    /**
      * Whether the client has a code of this purpose that can still be
      * verified (issued, not used up, not expired).
      */
@@ -82,7 +95,9 @@ class OneTimeCodes
     }
 
     /**
-     * Verify a code for a known client; counts failed attempts.
+     * Verify a code for a known client. Every guess is counted before the
+     * slow hash compare, with a conditional update that only succeeds while
+     * attempts are left, so overlapping guesses can never exceed the limit.
      */
     public function verify(Client $client, OneTimeCodePurpose $purpose, string $code): bool
     {
@@ -97,8 +112,17 @@ class OneTimeCodes
             return false;
         }
 
+        $counted = OneTimeCode::query()->whereKey($record->id)
+            ->whereNull('consumed_at')
+            ->whereColumn('attempts', '<', 'max_attempts')
+            ->update(['attempts' => DB::raw('attempts + 1')]);
+
+        if ($counted !== 1) {
+            return false;
+        }
+
         if (! Hash::check($code, $record->code_hash)) {
-            $record->increment('attempts');
+            $record->refresh();
 
             if ($record->attempts >= $record->max_attempts) {
                 $record->forceFill(['lookup' => null])->save();
@@ -130,11 +154,20 @@ class OneTimeCodes
      */
     public function consumeToken(OneTimeCodePurpose $purpose, string $token): ?Client
     {
+        return $this->consumeTokenRecord($purpose, $token)?->client;
+    }
+
+    /**
+     * Consume an opaque token and return its record (with the client), for
+     * callers that need to know which issued secret was used.
+     */
+    public function consumeTokenRecord(OneTimeCodePurpose $purpose, string $token): ?OneTimeCode
+    {
         if (strlen($token) !== 64) {
             return null;
         }
 
-        return $this->consume($purpose, $token)?->client;
+        return $this->consume($purpose, $token);
     }
 
     /**

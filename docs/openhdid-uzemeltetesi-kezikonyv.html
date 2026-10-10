@@ -92,8 +92,8 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">A konténeres OpenHDID napi üzemeltetése: ellenőrzés, szolgáltatások kezelése, naplók és felügyelet, ütemezett feladatok, a leggyakoribb helyzetek, mentés és visszaállítás, frissítés, skálázás és biztonsági karbantartás.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.4.2 · 2026. október 9.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.2 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.4.3 · 2026. október 10.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.3 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>telepítési útmutató, felhasználói kézikönyv</span></div>
 </div>
@@ -329,24 +329,24 @@ Kérés: POST ".config("hdid.sync.login_url")."
 ./backup.sh list                     # a mentések listája (verzió, adatbázis, méret)
 ./backup.sh restore                  # visszaállítás a legutóbbi mentésből
 ./backup.sh restore 2026-10-09_023000</code></pre>
-<p><strong>A mentés.</strong> A szkript a saját mappájában létrehozza a <code>backup</code> almappát (700-as jog), és abba egy időbélyeges mappát: <code>database.sql.gz</code>, <code>storage.tar.gz</code>, <code>config.tar.gz</code>, <code>tls.tar.gz</code>, <code>info.txt</code> (időpont, OpenHDID-verzió, image) és <code>SHA256SUMS</code>; minden fájl 600-as jogú. A mentés futó vermen készül (a <code>mariadb</code> szolgáltatásnak futnia kell), kiesés nélkül. Alapból a legutóbbi 14 mentés marad, a régebbieket a szkript törli (<code>--keep N</code>, <code>0</code> = mind marad). A <code>tls</code> kulcsát az alkalmazás saját felhasználója olvassa ki, mert az üzemeltető számára nem olvasható.</p>
+<p><strong>A mentés.</strong> A szkript a saját mappájában létrehozza a <code>backup</code> almappát (700-as jog), és abba egy időbélyeges mappát: <code>database.sql.gz</code>, <code>storage.tar.gz</code>, <code>config.tar.gz</code>, <code>tls.tar.gz</code>, <code>info.txt</code> (időpont, OpenHDID-verzió, image) és <code>SHA256SUMS</code>; minden fájl 600-as jogú. A mentés futó vermen készül (a <code>mariadb</code> szolgáltatásnak futnia kell), kiesés nélkül. Alapból a legutóbbi 14 mentés marad, a régebbieket a szkript törli (<code>--keep N</code>, <code>0</code> = mind marad); a visszaállítás előtti biztonsági mentésekből a legutóbbi 3, mert azok is tartalmazzák a kulcsokat és az adatokat. Egy megszakadt futás (újraindítás, <code>kill -9</code>) zárját a következő futás felismeri és feloldja. A szkript a telepítési mappa <code>.env</code>-jét követi: a héjban exportált <code>COMPOSE_PROJECT_NAME</code>, <code>COMPOSE_FILE</code> és <code>COMPOSE_PROFILES</code> nem hat rá (két telepítésnél egy gépen mindegyik <code>.env</code>-jébe saját <code>COMPOSE_PROJECT_NAME</code> kerül). A <code>tls</code> kulcsát az alkalmazás saját felhasználója olvassa ki, mert az üzemeltető számára nem olvasható.</p>
 <p><strong>Ütemezve</strong> (cron, naponta 2:30-kor; a <code>--quiet</code> csak hibánál ír, a cron ezt levélben küldi):</p>
 <pre><code>30 2 * * * /opt/openhdid/backup.sh --quiet</code></pre>
 <h3>Visszaállítás</h3>
 <p>A <code>./backup.sh restore [név]</code> egy megerősítés (<code>igen</code>) után végigviszi a teljes helyreállítást; nem interaktív futtatáshoz <code>--yes</code>. A lépések:</p>
 <ol class="steps">
-    <li><strong>Ellenőrzés:</strong> a mentés ellenőrzőösszegei; sérült vagy módosított mentésből nem állít vissza.</li>
-    <li><strong>Biztonsági mentés</strong> a jelenlegi állapotról (<code>…_visszaallitas-elott</code>), így a visszaállítás is visszavonható. Ha a jelenlegi verem már nem menthető, <code>--no-safety-backup</code>.</li>
-    <li><strong>Az alkalmazás leáll</strong> (<code>web</code>, <code>worker</code>, <code>sync-worker</code>, <code>scheduler</code>); innentől a végéig kiesés van.</li>
-    <li><strong>Beállítások és <code>tls</code>:</strong> a mentett <code>.env</code> és a többi fájl kerül vissza, a mentés <code>OPENHDID_VERSION</code>-jével együtt; a kulcsot az alkalmazás felhasználója írja vissza, a mappa erre a pillanatra nyílik meg.</li>
-    <li><strong>Adatbázis:</strong> a táblák törlése, majd a mentés visszatöltése a migrációs fiókkal.</li>
+    <li><strong>Ellenőrzés:</strong> a mentés ellenőrzőösszegei (ezek a sérülést mutatják ki, a szándékos módosítást nem: aki a mentést átírja, az összegeket is átírhatja); a beállítás-archívumban csak a várt fájlok lehetnek (<code>.env</code>, <code>db.env</code>, <code>compose.yaml</code>, <code>compose.override.yaml</code>, <code>ca</code>), hivatkozás nélkül; adatbázist tartalmazó mentésnél a mentett beállításokban benne a <code>db</code> profil; a <code>tls</code> mappa az üzemeltetőé. Bármelyik hiba esetén semmi nem változik, az alkalmazás fut tovább. Ha a mentés beállításai eltérnek a jelenlegiektől, a szkript a megerősítés előtt megnevezi a fájlokat.</li>
+    <li><strong>Biztonsági mentés</strong> a jelenlegi állapotról (<code>…_visszaallitas-elott</code>, a legutóbbi 3 marad), így a visszaállítás is visszavonható; ha bármelyik lépése hibázik, a visszaállítás nem kezdődik el. Ha a jelenlegi verem már nem menthető, <code>--no-safety-backup</code>.</li>
+    <li><strong>Az alkalmazás leáll</strong> (<code>web</code>, <code>worker</code>, <code>sync-worker</code>, <code>scheduler</code>); innentől a végéig kiesés van; ha nem áll le, a visszaállítás nem kezdődik el.</li>
+    <li><strong>Beállítások és <code>tls</code>:</strong> a mentett <code>.env</code> és a többi fájl kerül vissza, a mentés <code>OPENHDID_VERSION</code>-jével együtt; a kulcsot az alkalmazás felhasználója a 700-as <code>backup</code> mappán belül egy ideiglenes mappába írja, amely aztán a <code>tls</code> helyére kerül, így más helyi felhasználó egyik pillanatban sem fér hozzá.</li>
+    <li><strong>Adatbázis:</strong> a táblák törlése, majd a mentés visszatöltése a migrációs fiókkal, sandbox módban (a mentés adat: a benne lévő kliensparancsok nem futnak). Utána a munkamenetek és a gyorsítótár kiürülnek, hogy a mentés óta visszavont belépések (kilépés minden eszközről, lezárt fiók) ne éledjenek újra: visszaállítás után mindenkinek újra be kell lépnie.</li>
     <li><strong>Storage kötet</strong>, majd <strong>indítás</strong> és rendszerállapot.</li>
 </ol>
 <p><strong>Ellenőrzés utána:</strong> belépés; egy ügyfél adatlapján a válaszok száma és egy kérdés-válasz próba. Ez bizonyítja, hogy a titkosított adatok az <code>APP_KEY</code>-jel olvashatók.</p>
 <p><strong>Új gépre.</strong> Docker telepítése (telepítési útmutató 2. fejezet), a telepítési mappa létrehozása, benne a kiadás <code>compose.yaml</code> és <code>backup.sh</code> fájlja és a <code>tls</code>, <code>ca</code> mappa (<code>mkdir -p tls ca</code>), majd a mentés mappájának átmásolása a <code>backup</code> alá, végül <code>./backup.sh restore &lt;név&gt;</code>. A beépített adatbázist és a két fiókot az első induló <code>mariadb</code> a visszaállított jelszavakkal hozza létre.</p>
 <p><strong>Követelmények a mentéssel szemben.</strong></p>
 <ul>
-    <li>A <code>backup</code> mappát rendszeresen másolja a gazdagépen kívülre, titkosítva és módosítás ellen védve; a helyi mentés a gép elvesztése ellen nem véd.</li>
+    <li>A <code>backup</code> mappát rendszeresen másolja a gazdagépen kívülre, titkosítva és módosítás ellen védve; a helyi mentés a gép elvesztése ellen nem véd. Csak olyan helyről állítson vissza, ahová illetéktelen nem írhat: a mentés az indítási beállításokat (<code>compose.yaml</code>, <code>.env</code>) is tartalmazza, így egy módosított mentés azt is meghatározná, mi fut a gépen.</li>
     <li>A <code>config.tar.gz</code> (kulcsok, jelszavak) más hozzáférési szabállyal kerüljön tárolásra, mint az adatbázis.</li>
     <li>Határozza meg a megengedett adatvesztést (RPO) és a helyreállítási időt (RTO), és rendszeres visszaállítási próbával mérje; a próba egy másik gépen a fenti „Új gépre” lépésekkel végezhető.</li>
     <li>Külső adatbázisnál (a <code>db</code> profil nélkül) az adatbázist az adatbázis üzemeltetője menti és állítja vissza, a mentéssel egyidejű állapotra; a szkript a többit kezeli, és ezt az <code>info.txt</code>-ben jelzi.</li>
@@ -359,8 +359,8 @@ Kérés: POST ".config("hdid.sync.login_url")."
 </ul>
 <ol class="steps">
     <li><strong>Az image ellenőrzése</strong> (választható, ajánlott):
-<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.4.2 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.4.2 \
+<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.4.3 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.4.3 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre></li>
     <li><strong>Mentés:</strong> <code>./backup.sh</code> (7. fejezet).</li>
@@ -459,7 +459,7 @@ cosign verify ghcr.io/adamfhun/openhdid:1.4.2 \
 <tr><td><code>hdid:emd-sync [--file=] [--dry-run]</code></td><td>Ügyféltörzs-átvétel (a régi <code>hdid:sync</code> név álnévként működik).</td></tr>
 <tr><td><code>hdid:emd-sync-token</code></td><td>Az ügyféltörzs API-tokenjének frissítése, szükség esetén új belépés.</td></tr>
 <tr><td><code>hdid:test-mail cím [--now]</code>, <code>hdid:test-sms szám [--now]</code></td><td>Próbaüzenet; <code>--now</code> a sor megkerülésével.</td></tr>
-<tr><td><code>hdid:api-key:create "Név" callcenter|mobile_backend</code></td><td>Gépi kulcs; egyszer jelenik meg.</td></tr>
+<tr><td><code>hdid:api-key:create "Név" callcenter|mobile_backend</code></td><td>Gépi kulcs; egyszer jelenik meg, a <code>mobile_backend</code> hatókörnél az aláíró titokkal együtt (az aláírás ott kötelező).</td></tr>
 <tr><td><code>hdid:messages:flush</code></td><td>Várakozó üzenetek azonnali küldése.</td></tr>
 <tr><td><code>hdid:prune</code></td><td>Adatmegőrzési tisztítás kézzel.</td></tr>
 <tr><td><code>schedule:list</code> (a <code>scheduler</code> konténerben)</td><td>Ütemezett feladatok és következő futásuk.</td></tr>
@@ -482,7 +482,7 @@ cosign verify ghcr.io/adamfhun/openhdid:1.4.2 \
 <tr><td>SemVer</td><td>Semantic Versioning – szemantikus verziózás (fő.al.javító).</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID üzemeltetési kézikönyv 1.4.2 · 2026. október 9.</div>
+<div class="foot">OpenHDID üzemeltetési kézikönyv 1.4.3 · 2026. október 10.</div>
 </div>
 
 </body>

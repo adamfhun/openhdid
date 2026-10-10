@@ -73,7 +73,7 @@ it('reports api keys, login providers, sync and the outbox', function (): void {
 
     expect($checks->apiKeys()->status)->toBe(CheckStatus::Warn);
     ApiKey::factory()->scope(ApiKeyScope::CallCenter)->create();
-    ApiKey::factory()->scope(ApiKeyScope::MobileBackend)->create();
+    ApiKey::factory()->scope(ApiKeyScope::MobileBackend)->signed()->create();
     expect($checks->apiKeys()->status)->toBe(CheckStatus::Ok);
 
     expect($checks->oidc()->status)->toBe(CheckStatus::Ok);

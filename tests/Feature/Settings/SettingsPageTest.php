@@ -217,7 +217,8 @@ it('preserves the EMD request settings and the ID selection when a user without 
         ->call('save')->assertHasNoFormErrors()
         ->assertActionHidden(TestAction::make('fetchIdList')->table())
         ->assertActionHidden(TestAction::make('selectByIds')->table())
-        ->assertActionHidden(TestAction::make('toggleSelection')->table($item))
+        ->assertActionHidden(TestAction::make('deselectId')->table($item))
+        ->assertActionHidden(TestAction::make('selectId')->table($item))
         ->assertActionHidden(TestAction::make('deselectIds')->table()->bulk());
 
     expect($settings->string(SettingKey::SyncExportPayload))->toBe('{"ids":"original"}')

@@ -4,7 +4,9 @@ namespace App\Settings;
 
 use App\Audit\Auditor;
 use App\Auth\Permission;
+use App\Models\Client;
 use App\Models\Setting;
+use App\Models\User;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -100,6 +102,26 @@ class Settings
             'from' => $previous,
             'to' => $value,
         ]);
+
+        $this->forgetRememberTokensWhenSwitchedOff($key, $value);
+    }
+
+    /**
+     * Switching remember-me off makes every remember cookie of that account
+     * type worthless at once: the stored tokens go, so no path that resolves
+     * a guard (before or outside the session checks) can sign in with one.
+     */
+    private function forgetRememberTokensWhenSwitchedOff(SettingKey $key, mixed $value): void
+    {
+        $model = match ($key) {
+            SettingKey::ClientLoginRememberEnabled => Client::class,
+            SettingKey::UserLoginRememberEnabled => User::class,
+            default => null,
+        };
+
+        if ($model !== null && $value === false) {
+            $model::query()->whereNotNull('remember_token')->update(['remember_token' => null]);
+        }
     }
 
     /**

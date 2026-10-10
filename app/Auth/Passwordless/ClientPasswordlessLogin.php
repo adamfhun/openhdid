@@ -17,6 +17,7 @@ use App\Models\Client;
 use App\Models\OutboundMessage;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\RateLimiter;
 
@@ -52,6 +53,12 @@ class ClientPasswordlessLogin
 
     public const REQUEST_WINDOW_SECONDS = 900;
 
+    /** Cache key prefix of the links the panel showed, by one-time code id; the value is who saw it. */
+    private const REVEALED_LINK_PREFIX = 'hdid:magic-link:revealed:';
+
+    /** Lock around one client's SMS code checks. */
+    private const OTP_LOCK_PREFIX = 'hdid:login-otp:';
+
     public function __construct(
         private readonly Settings $settings,
         private readonly OneTimeCodes $codes,
@@ -82,7 +89,9 @@ class ClientPasswordlessLogin
     }
 
     /**
-     * Silently does nothing when the account is not eligible.
+     * Silently does nothing when the account is not eligible; the work a
+     * real link costs (hashing the secret) is spent either way, so the
+     * answer time does not tell an eligible address from any other.
      */
     public function requestMagicLink(string $email): void
     {
@@ -90,27 +99,43 @@ class ClientPasswordlessLogin
             throw new LoginRejectedException(LoginRejection::MethodDisabled);
         }
 
+        if (! $this->sendMagicLinkIfEligible($email)) {
+            $this->codes->matchIssueCost();
+        }
+    }
+
+    private function sendMagicLinkIfEligible(string $email): bool
+    {
         if ($this->tooManyRequestsFor($email, self::METHOD_MAGIC_LINK)) {
-            return;
+            return false;
         }
 
         $client = $this->eligibleClient($email, self::METHOD_MAGIC_LINK);
 
         if ($client === null) {
-            return;
+            return false;
         }
 
         $this->issueMagicLink($client);
+
+        return true;
     }
 
     /**
      * Create a fresh one-time link for a client and e-mail it. Returns the
      * URL so that an operator can hand it over directly (debug/support).
+     * A link the panel shows to the staff member who sent it is marked in
+     * the audit, and the sign-in it leads to names that staff member, so a
+     * staff member signing in as the client never looks like the client.
      */
-    public function issueMagicLink(Client $client, ?string $sentBy = null): string
+    public function issueMagicLink(Client $client, ?string $sentBy = null, bool $revealed = false): string
     {
         $ttl = $this->settings->int(SettingKey::ClientLoginMagicLinkTtlMinutes);
-        ['token' => $token] = $this->codes->issueToken($client, OneTimeCodePurpose::MagicLink, $ttl, $client->email);
+        ['token' => $token, 'record' => $record] = $this->codes->issueToken($client, OneTimeCodePurpose::MagicLink, $ttl, $client->email);
+
+        if ($revealed) {
+            Cache::put(self::REVEALED_LINK_PREFIX.$record->id, $sentBy ?? '?', now()->addMinutes($ttl));
+        }
 
         $url = $this->landingUrl($client, $token);
 
@@ -120,7 +145,7 @@ class ClientPasswordlessLogin
             'hours' => rtrim(rtrim(number_format($ttl / 60, 1, '.', ''), '0'), '.'),
             'days' => (string) max(1, (int) round($ttl / 1440)),
         ], $client->email, meta: ['url' => $url, 'ttl_minutes' => $ttl]);
-        $this->auditor->record('login.magic_link_sent', $client, ['email' => $client->email, 'by' => $sentBy]);
+        $this->auditor->record('login.magic_link_sent', $client, ['email' => $client->email, 'by' => $sentBy] + ($revealed ? ['revealed' => true] : []));
 
         return $url;
     }
@@ -134,16 +159,18 @@ class ClientPasswordlessLogin
             throw new LoginRejectedException(LoginRejection::MethodDisabled);
         }
 
-        $client = $this->codes->consumeToken(OneTimeCodePurpose::MagicLink, $token);
+        $record = $this->codes->consumeTokenRecord(OneTimeCodePurpose::MagicLink, $token);
+        $client = $record?->client;
 
-        if ($client === null) {
+        if ($record === null || $client === null) {
             $this->login->recordRejection(PrincipalType::Client, self::METHOD_MAGIC_LINK, LoginRejection::InvalidCredentials, ['detail' => 'unknown_used_or_expired_link']);
 
             throw new LoginRejectedException(LoginRejection::InvalidCredentials);
         }
 
         $client = $this->login->assertEligible($client, PrincipalType::Client, self::METHOD_MAGIC_LINK);
-        $this->login->loginToSession($client, self::METHOD_MAGIC_LINK);
+        $revealedTo = Cache::pull(self::REVEALED_LINK_PREFIX.$record->id);
+        $this->login->loginToSession($client, self::METHOD_MAGIC_LINK, context: $revealedTo === null ? [] : ['link_revealed_to' => $revealedTo]);
 
         return $client;
     }
@@ -172,7 +199,8 @@ class ClientPasswordlessLogin
     }
 
     /**
-     * Silently does nothing when the account is not eligible or has no phone.
+     * Silently does nothing when the account is not eligible or has no phone;
+     * like the link, it costs the same time either way.
      */
     public function requestOtp(string $email): void
     {
@@ -180,30 +208,39 @@ class ClientPasswordlessLogin
             throw new LoginRejectedException(LoginRejection::MethodDisabled);
         }
 
+        if (! $this->sendOtpIfEligible($email)) {
+            $this->codes->matchIssueCost();
+        }
+    }
+
+    private function sendOtpIfEligible(string $email): bool
+    {
         if ($this->tooManyRequestsFor($email, self::METHOD_OTP_SMS)) {
-            return;
+            return false;
         }
 
         $client = $this->eligibleClient($email, self::METHOD_OTP_SMS);
         $phone = $client?->load('phoneNumbers')->primaryPhoneNumber();
 
         if ($client === null || $phone === null) {
-            return;
+            return false;
         }
 
         if ($client->isLoginLocked()) {
             $this->login->recordRejection(PrincipalType::Client, self::METHOD_OTP_SMS, LoginRejection::AccountLocked, ['email' => $client->email, 'detail' => 'code_request', 'locked_until' => $client->locked_until?->toIso8601String()], $client);
 
-            return;
+            return false;
         }
 
         if ($this->tooManyRequestsFor($phone, self::METHOD_OTP_SMS)) {
-            return;
+            return false;
         }
+
+        $sent = false;
 
         // Count and send under one lock per number, so that two overlapping
         // requests cannot both pass the budget.
-        Cache::lock('sms-budget:'.$phone, 10)->block(5, function () use ($client, $phone): void {
+        Cache::lock('sms-budget:'.$phone, 10)->block(5, function () use ($client, $phone, &$sent): void {
             if (($window = $this->smsBudgetExhausted($phone)) !== null) {
                 $this->auditor->record('message.refused', $client, [
                     'channel' => 'sms',
@@ -230,7 +267,10 @@ class ClientPasswordlessLogin
                 'minutes' => (string) $this->settings->int(SettingKey::ClientLoginOtpSmsTtlMinutes),
             ], $phone);
             $this->auditor->record('login.otp_sent', $client, ['phone' => $phone]);
+            $sent = true;
         });
+
+        return $sent;
     }
 
     /**
@@ -283,7 +323,8 @@ class ClientPasswordlessLogin
             throw new LoginRejectedException(LoginRejection::MethodDisabled);
         }
 
-        $client = Client::query()->where('email', mb_strtolower(trim($email)))->first();
+        /** @var Client|null $client */
+        $client = $this->login->findByEmail(PrincipalType::Client, $email);
 
         // Only a guess against a live code counts towards the lockout: a
         // stranger posting codes for an address that never asked for one
@@ -294,11 +335,28 @@ class ClientPasswordlessLogin
             throw new LoginRejectedException(LoginRejection::InvalidCredentials);
         }
 
-        $this->lockout->assertNotLocked($client, self::METHOD_OTP_SMS, answer: LoginRejection::InvalidCredentials);
+        // One client's guesses are judged one at a time: the lockout check,
+        // the code compare and the failure count form one critical section,
+        // so overlapping requests cannot all pass a lockout check made
+        // before any of them was counted.
+        try {
+            $verified = Cache::lock(self::OTP_LOCK_PREFIX.$client->id, 10)->block(5, function () use ($client, $code): bool {
+                $client->refresh();
+                $this->lockout->assertNotLocked($client, self::METHOD_OTP_SMS, answer: LoginRejection::InvalidCredentials);
 
-        if (! $this->codes->verify($client, OneTimeCodePurpose::LoginOtp, $code)) {
-            $this->lockout->recordFailure($client, self::METHOD_OTP_SMS);
+                if ($this->codes->verify($client, OneTimeCodePurpose::LoginOtp, $code)) {
+                    return true;
+                }
 
+                $this->lockout->recordFailure($client, self::METHOD_OTP_SMS);
+
+                return false;
+            });
+        } catch (LockTimeoutException) {
+            $verified = false;
+        }
+
+        if (! $verified) {
             throw new LoginRejectedException(LoginRejection::InvalidCredentials);
         }
 

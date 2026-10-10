@@ -9,6 +9,7 @@ use App\Messaging\MessageKey;
 use App\Messaging\Messenger;
 use App\Models\AuditLog;
 use App\Models\Client;
+use App\Models\ExternalRecord;
 use App\Models\MessageTemplate;
 use App\Models\OneTimeCode;
 use App\Models\User;
@@ -16,8 +17,11 @@ use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Sms\FakeSmsSender;
 use App\Sms\SmsSender;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Routing\Middleware\ThrottleRequests;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\URL;
 
@@ -125,6 +129,91 @@ it('locks a code after too many wrong attempts', function (): void {
 
     expect(OneTimeCode::query()->first()->isUsable())->toBeFalse();
 });
+
+it('counts a guess at a login code before checking it, so overlapping guesses cannot go past the attempt limit', function (): void {
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
+    app(Settings::class)->set(SettingKey::ClientLoginOtpMaxAttempts, 2);
+    $client = Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Admin, 'is_primary' => true]);
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu']);
+    preg_match('/(\d{6})/', $this->sms->lastTo('+36301234567'), $m);
+
+    // Other requests use up the last attempts after this one has read the code.
+    OneTimeCode::retrieved(function (OneTimeCode $code): void {
+        DB::table('one_time_codes')->where('id', $code->id)->update(['attempts' => 2]);
+    });
+
+    try {
+        $this->withoutMiddleware(ThrottleRequests::class);
+        $this->postJson('/api/v1/client/auth/otp/verify', ['email' => 'c@x.hu', 'code' => $m[1]])->assertForbidden();
+    } finally {
+        OneTimeCode::flushEventListeners();
+    }
+
+    $this->assertGuest('client');
+    expect(OneTimeCode::query()->first()->consumed_at)->toBeNull();
+});
+
+it('checks one login code of a client at a time, under the client lock', function (): void {
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
+    $client = Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Admin, 'is_primary' => true]);
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu']);
+
+    $lockWasFree = null;
+    OneTimeCode::retrieved(function () use ($client, &$lockWasFree): void {
+        $probe = Cache::lock('hdid:login-otp:'.$client->id, 1);
+        $lockWasFree ??= $probe->get();
+        if ($lockWasFree) {
+            $probe->release();
+        }
+    });
+
+    try {
+        $this->withoutMiddleware(ThrottleRequests::class);
+        $this->postJson('/api/v1/client/auth/otp/verify', ['email' => 'c@x.hu', 'code' => '000000'])->assertForbidden();
+    } finally {
+        OneTimeCode::flushEventListeners();
+    }
+
+    expect($lockWasFree)->toBeFalse('the code is read and judged while the client lock is held');
+});
+
+it('treats an address that only the database collation equates with an account as unknown', function (): void {
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
+    $client = Client::factory()->synced()->create(['email' => 'victim@x.hu']);
+    $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Admin, 'is_primary' => true]);
+
+    // MariaDB's accent- and case-insensitive collation finds the account for
+    // a look-alike address; SQLite compares bytes, so the row is altered here.
+    $storedAs = fn (Model $found) => $found->setRawAttributes(['email' => 'víctim@x.hu'] + $found->getAttributes(), sync: true);
+    Client::retrieved($storedAs);
+    ExternalRecord::retrieved($storedAs);
+
+    try {
+        $this->postJson('/api/v1/client/auth/magic-link', ['email' => 'victim@x.hu'])->assertOk();
+        $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'victim@x.hu'])->assertOk();
+    } finally {
+        Client::flushEventListeners();
+        ExternalRecord::flushEventListeners();
+    }
+
+    Mail::assertNothingSent();
+    expect($this->sms->lastTo('+36301234567'))->toBeNull()
+        ->and(AuditLog::query()->where('event', 'login.rejected')->where('context->reason', 'no_account')->count())->toBe(2);
+});
+
+it('spends the same hashing work on an unknown address as on a real one, so the answer time tells nothing', function (string $path): void {
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
+    Hash::spy();
+
+    $this->postJson('/api/v1/client/auth/'.$path, ['email' => 'nobody@x.hu'])->assertOk();
+
+    Hash::shouldHaveReceived('make')->once();
+})->with([
+    'login link' => ['magic-link'],
+    'sms code' => ['otp/request'],
+]);
 
 it('does not send sms to a client without a phone number', function (): void {
     app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);

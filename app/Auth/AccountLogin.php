@@ -41,10 +41,23 @@ class AccountLogin
     {
         $email = mb_strtolower(trim($email));
 
+        return $this->assertEligible($this->findByEmail($type, $email), $type, $method, ['email' => $email]);
+    }
+
+    /**
+     * The account whose stored address is exactly this one (case aside). The
+     * database collation is accent- and case-insensitive, so a look-alike
+     * address ("víctim@…") would find the account too and dodge every
+     * per-address limit; such a match counts as no account.
+     */
+    public function findByEmail(PrincipalType $type, string $email): ?Principal
+    {
+        $email = mb_strtolower(trim($email));
+
         /** @var Principal|null $principal */
         $principal = $type->modelClass()::query()->where('email', $email)->first();
 
-        return $this->assertEligible($principal, $type, $method, ['email' => $email]);
+        return $principal !== null && mb_strtolower(trim($principal->getEmail())) === $email ? $principal : null;
     }
 
     /**
@@ -74,7 +87,10 @@ class AccountLogin
      * only where the path allows it (SSO, password) and the setting is on;
      * the passwordless paths never set one.
      */
-    public function loginToSession(Principal $principal, string $method, bool $allowRemember = false): void
+    /**
+     * @param  array<string, mixed>  $context  extra facts for the login.succeeded audit entry
+     */
+    public function loginToSession(Principal $principal, string $method, bool $allowRemember = false, array $context = []): void
     {
         $guard = $this->auth->guard($principal->principalType()->guard());
         $remember = $allowRemember && $this->applyRememberDuration($principal->principalType());
@@ -83,7 +99,7 @@ class AccountLogin
             $guard->login($principal, $remember);
         }
 
-        $this->recordSuccess($principal, $method);
+        $this->recordSuccess($principal, $method, $context);
     }
 
     /**

@@ -13,6 +13,7 @@ use App\Models\ClientPhoneNumber;
 use App\Models\ExternalRecord;
 use App\Models\User;
 use App\Support\PhoneNormalizer;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -110,7 +111,10 @@ class AccountProvisioner
             $client->restore();
         }
 
+        $identityChange = null;
+
         if ($client !== null && $client->external_record_id !== null && $client->external_record_id !== $record->id) {
+            $identityChange = 'rebound';
             $this->auditor->record('account.rebound', $client, [
                 'from_external_record_id' => $client->external_record_id,
                 'to_external_record_id' => $record->id,
@@ -133,6 +137,7 @@ class AccountProvisioner
             // new address. One e-mail belongs to one account at a time, so
             // the old address stays and the conflict is reported; the login
             // rule's e-mail match then refuses this client until it is sorted out.
+            $previousEmail = $client->email;
             $emailTaken = ! self::sameEmail($client->email, $record->email)
                 && Client::withTrashed()->where('email', $record->email)->whereKeyNot($client->id)->exists();
 
@@ -148,7 +153,14 @@ class AccountProvisioner
 
             if ($emailTaken) {
                 $this->noteEmailConflict($client, $record);
+                $identityChange = 'email_conflict';
+            } elseif (! self::sameEmail($previousEmail, $client->email)) {
+                $identityChange ??= 'email_changed';
             }
+        }
+
+        if ($identityChange !== null) {
+            $this->revokeAfterIdentityChange($client, $record, $identityChange);
         }
 
         $this->reopenIfClosedBySync($client);
@@ -192,10 +204,12 @@ class AccountProvisioner
         if (! self::sameEmail($user->email, $record->email)) {
             if (User::withTrashed()->where('email', $record->email)->whereKeyNot($user->id)->exists()) {
                 $this->noteEmailConflict($user, $record);
+                $this->revokeAfterIdentityChange($user, $record, 'email_conflict');
             } else {
                 $from = $user->email;
                 $user->forceFill(['email' => $record->email])->save();
                 $this->auditor->record('account.email_changed', $user, ['from' => $from, 'to' => $record->email, 'external_id' => $record->external_id]);
+                $this->revokeAfterIdentityChange($user, $record, 'email_changed');
             }
         }
 
@@ -231,6 +245,19 @@ class AccountProvisioner
      * Audited on the account, logged for the operator and reported on the
      * run; the account keeps its current address.
      */
+    /**
+     * The e-mail is the account's identity: when the directory renames it,
+     * reissues the record behind it, or gives the address to someone else,
+     * whatever was signed in or sent under the old identity (sessions,
+     * remember cookies, API tokens, login links and codes) ends here. The
+     * person signs in again under the identity the directory holds now.
+     */
+    private function revokeAfterIdentityChange(Principal&Model $account, ExternalRecord $record, string $reason): void
+    {
+        $account->revokeAccess();
+        $this->auditor->record('account.access_revoked', $account, ['reason' => $reason, 'external_id' => $record->external_id]);
+    }
+
     private function noteEmailConflict(Principal $principal, ExternalRecord $record): void
     {
         $context = ['external_id' => $record->external_id, 'kind' => $record->kind->value, 'email' => $record->email, 'kept' => $principal->getEmail()];

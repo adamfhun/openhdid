@@ -84,7 +84,12 @@ class ApiKeyResource extends BaseResource
                 Action::make('removeSecret')->label(__('Remove signature'))->icon('heroicon-o-lock-open')->color('warning')->requiresConfirmation()
                     ->modalDescription(__('Requests with this key are then accepted without X-Timestamp and X-Signature; the partner may stop signing.'))
                     ->visible(fn (ApiKey $record) => ! $record->isRevoked() && $record->requiresSignature())
-                    ->action(fn (ApiKey $record) => $record->removeSigningSecret()),
+                    ->disabled(fn (ApiKey $record) => $record->scope->signatureRequired())
+                    ->tooltip(fn (ApiKey $record) => $record->scope->signatureRequired() ? __('A mobile app backend key always signs its requests; issue a new secret instead.') : null)
+                    ->action(function (ApiKey $record): void {
+                        abort_if($record->scope->signatureRequired(), 403);
+                        $record->removeSigningSecret();
+                    }),
                 Action::make('revoke')->label(__('Revoke'))->icon('heroicon-o-no-symbol')->color('danger')->requiresConfirmation()
                     ->modalDescription(__('Requests with this key get 401 at once. A revoked key cannot be restored; create a new one if needed.'))
                     ->visible(fn (ApiKey $record) => ! $record->isRevoked())

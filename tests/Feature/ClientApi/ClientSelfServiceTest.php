@@ -12,6 +12,7 @@ use App\Models\Question;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Hash;
 use Laravel\Sanctum\Sanctum;
 
@@ -183,6 +184,31 @@ it('applies the client pin switch again on replacement and removal', function ()
 
     expect(Hash::check('123456', $this->client->fresh()->pin_hash))->toBeTrue();
     $this->assertDatabaseMissing('audit_log', ['event' => 'client.pin_cleared']);
+});
+
+it('audits every pin refused as taken and stops pin changes for the day after a few, so taken pins cannot be collected', function (): void {
+    app(Settings::class)->set(SettingKey::PinClientChangesEnabled, true);
+    $this->withoutMiddleware(ThrottleRequests::class);
+    $taken = ['111111', '222222', '333333', '444444', '555555'];
+    foreach ($taken as $pin) {
+        Client::factory()->withPin($pin)->create();
+    }
+
+    foreach ($taken as $pin) {
+        $this->putJson('/api/v1/client/pin', ['pin' => $pin, 'pin_confirmation' => $pin])
+            ->assertUnprocessable()->assertJsonValidationErrors(['pin' => __('This PIN is already in use. Choose another PIN.')]);
+    }
+
+    // A free PIN is refused as well now: telling it apart from a taken one is what the limit prevents.
+    $this->putJson('/api/v1/client/pin', ['pin' => '987654', 'pin_confirmation' => '987654'])
+        ->assertUnprocessable()->assertJsonValidationErrors(['pin' => __('Too many PINs already in use were tried today. Try again tomorrow.')]);
+
+    expect($this->client->fresh()->hasPin())->toBeFalse()
+        ->and(AuditLog::query()->where('event', 'client.pin_taken_refused')->where('subject_id', $this->client->id)->count())->toBe(5)
+        ->and(AuditLog::query()->where('event', 'client.pin_change_capped')->where('subject_id', $this->client->id)->count())->toBe(1);
+
+    $this->travel(25)->hours();
+    $this->putJson('/api/v1/client/pin', ['pin' => '987654', 'pin_confirmation' => '987654'])->assertOk();
 });
 
 it('rejects another clients pin through the client api when changes are enabled', function (): void {

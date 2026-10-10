@@ -35,7 +35,7 @@
     "A provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*). Either fill in the configuration or switch the provider off, otherwise the login button leads to an error.": "Egy szolgáltató be van kapcsolva a Beállításokban, de a környezeti beállításokból hiányzik a kiállító vagy a címtár, az ügyfélazonosító vagy a titok (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*). Töltse ki a konfigurációt, vagy kapcsolja ki a szolgáltatót, különben a belépés gomb hibára fut.",
     "A reason is required.": "Az indoklás kötelező.",
     "A run is refused when it reads fewer rows than this share of the previous successful run (0 = off). Protects against a truncated export closing accounts.": "A futás elutasításra kerül, ha az előző sikeres futás sorainak ennél kisebb hányadát olvassa be (0 = kikapcsolva). Egy csonka export így nem zárhat le fiókokat.",
-    "A scope (call center or mobile backend) has no active key, so that partner cannot call in. Create one under API keys and hand it over, or ignore this while the integration is not live yet.": "Egy hatókörhöz (telefonközpont vagy mobil háttérrendszer) nincs aktív kulcs, így az a partner nem tud kapcsolódni. Hozzon létre egyet az API-kulcsoknál és adja át, vagy hagyja figyelmen kívül, amíg az integráció nem él.",
+    "Red: a mobile app backend key has no signing secret, so every request with it is refused (signing is mandatory for this scope). Issue one under API keys › Signing secret and hand it to the operator of the mobile backend, or revoke the key if it is not used. Yellow: a scope (call center or mobile backend) has no active key, so that partner cannot call in; create one under API keys and hand it over, or ignore this while the integration is not live yet.": "Piros: a mobilalkalmazás kiszolgálójának egy kulcsához nincs aláíró titok, ezért minden kérését elutasítja a rendszer (ennél a hatókörnél az aláírás kötelező). Adjon ki titkot az API kulcsok › Aláíró titok művelettel, és adja át a mobil kiszolgáló üzemeltetőjének, vagy vonja vissza a kulcsot, ha nem használják. Sárga: egy hatókörhöz (telefonközpont vagy mobil háttérrendszer) nincs aktív kulcs, így az a partner nem tud csatlakozni; hozzon létre egyet az API kulcsok alatt és adja át, vagy hagyja figyelmen kívül, amíg az integráció nem él.",
     "A Timeout Occurred": "Időtúllépés történt",
     "Accent color": "Kiemelő szín",
     "Accept": "Elfogadom",
@@ -1442,5 +1442,17 @@
     "at least one selected ID (table below)": "legalább egy kijelölt ID (lent a táblázatban)",
     ":selected of :listed listed IDs selected.": ":selected kijelölve a listán lévő :listed ID-ből.",
     "The export uses {{ ids }}; the sync does not run until these are done: :list.": "Az export a {{ ids }}-t használja; az átvétel addig nem indul, amíg ezek nincsenek meg: :list.",
-    "Select this ID": "Kijelölés"
+    "Select this ID": "Kijelölés",
+    "account_closed": "az ügyfél fiókja lezárva vagy nem jogosult",
+    "call_released": "a hívás visszakerült a sorba",
+    "call_reassigned": "a hívás másik ügyfélhez került",
+    "call_taken_over": "egy kolléga átvette a hívást",
+    "call_left_agent": "a hívás már nem az ügyintézőé",
+    "This call is no longer yours: it was handed back to the queue or a colleague has taken it over, so this identification has been closed.": "Ez a hívás már nem az Öné: visszakerült a sorba, vagy egy kolléga átvette, ezért ez az azonosítás lezárult.",
+    "Too many PINs already in use were tried today. Try again tomorrow.": "Ma már túl sok foglalt PIN-kódot próbált beállítani. Kérjük, holnap próbálja újra.",
+    "A mobile app backend key comes with its signing secret: every request made with it has to be signed.": "A mobilalkalmazás kiszolgálójának kulcsa aláíró titokkal együtt készül: minden vele küldött kérést alá kell írni.",
+    "Signing secret (shown once as well; hand it over together with the key):": "Aláíró titok (ez is csak most látszik; a kulccsal együtt adja át):",
+    "API key and signing secret created": "API kulcs és aláíró titok létrehozva",
+    "A mobile app backend key always signs its requests; issue a new secret instead.": "A mobilalkalmazás kiszolgálójának kulcsa mindig aláírja a kéréseit; helyette adjon ki új titkot.",
+    "Without a signing secret, so every request with them is refused: :names": "Aláíró titok nélkül, ezért minden kérésük elutasítva: :names"
 }

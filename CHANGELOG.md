@@ -4,6 +4,64 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.4.3] – 2026-10-10
+
+### Magyar
+**Frissítés előtt:** az indításkori ellenőrzés szigorúbb. Élesben (`APP_ENV=production`) a konténer nem indul üres `DB_PASSWORD`-del, Redis-t használó beállítás mellett üres `REDIS_PASSWORD`-del, vagy mindenkit megbízhatónak vevő `TRUSTED_PROXIES` értékkel (`*`, `**`, `0.0.0.0/0`, `::/0`); ismeretlen `APP_ENV` értékkel (például `prod`) semmilyen környezetben. Az ok a `docker compose logs web` `openhdid: ERROR:` sorában áll. A mobilalkalmazás kiszolgálójának kulcsánál az aláírás kötelező lett: egy aláíró titok nélkül kiadott mobilkulcs minden kérését elutasítja a rendszer (`401`, `signature_required`), amíg a Rendszer › API kulcsok › Aláíró titok művelettel titkot nem kap; ezt a mobil kiszolgáló üzemeltetőjével egyeztetve, a frissítéssel egy időben kell megtenni (a Rendszerállapot addig piros).
+
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- ADM-02.4: ha a hívás elkerül az ügyintézőtől (elengedi, a vezérlőpultról is, vagy egy kolléga átveszi), az ő kérdés-válasz munkamenete ezen a híváson lezárul, és a nyitva maradt oldaláról döntés nem rögzíthető.
+- NYT-03: ha az ügyféltörzs megváltoztatja, ki áll a fiók mögött (új e-mail-cím, újra kiadott tétel, ütköző cím), a fiók minden meglévő belépése megszűnik (munkamenetek, „emlékezz rám”, mobil bejelentkezés, élő hivatkozások és kódok).
+- BEL-01.1: a panelen megjelenített belépési hivatkozást az eseménynapló megjelöli, a vele tett belépés bejegyzése megnevezi a munkatársat.
+- BEL-01.2: az egyszerre küldött SMS-kód-tippek is egyenként számítanak a kódonkénti és a fiókzárolási korlátba.
+- BEL-01.5, BEL-04.2: az „Emlékezz rám” kikapcsolása a korábban kiadott sütiket is azonnal érvényteleníti.
+- BEL-01: a belépési cím pontosan egyezzen a fiókéval (kis- és nagybetű kivételével); a válasz ideje sem árulja el, van-e jogosult fiók.
+- BEL-01.4: a mobil ID token aláírásának átkódolása nem teszi újjá a tokent.
+- AZO-01: az egyszeri azonosító kód és az IVR-kód egymás között is egyedi.
+- AZO-03: a foglalt PIN miatti elutasítás naplózott, fiókonként napi öt után aznap a PIN nem módosítható.
+- NYT-13.2: az ID-lista soronkénti gombja rögzített jelentésű (Kijelölés, Levétel); a „csak ezek” a listáról átmenetileg lekerült, kijelölt ID-ket is leveszi; a beillesztés legfeljebb 100 000 karakter.
+- CC-03, MOB-01: a mobilalkalmazás kiszolgálójának kulcsa az aláíró titokkal együtt készül, minden kérése aláírt, a titka nem vehető le (megrendelői döntés).
+- CC-01: a telefonközpont válaszai (hívásesemény, hívás állapota, szám szerinti lekérdezés) nem tartalmazzák a szolgáltatási szintet; a név marad (megrendelői döntés).
+
+Részletek:
+- Biztonsági felülvizsgálat négy párhuzamos áttekintéssel (az új funkciók, a mentés és a konténer, a belépési utak, a gépi felületek és az azonosítás); kritikus vagy magas súlyú hiba nem volt, minden javítás előbb elbukó teszttel készült.
+- A hívás másik ügyfélre helyezése az azonosítás oldalról a hívás zárján belül fut, így egy közben történt átvétel nem írható felül.
+- A CSRF-kivétel bearer-kérésnél munkatársi munkamenet mellett sem érvényes, és nem léptet be „emlékezz rám” sütiből.
+- A dokumentációs oldalak (`/docs/*`) tartalombiztonsági szabályzata a teljes `unpkg.com` helyett csak a rögzített Stoplight Elements csomagútvonalat engedi.
+- `backup.sh`: a beállítás-archívumban csak a várt fájlok lehetnek, hivatkozás nélkül (egy módosított mentés nem írhatja felül például magát a szkriptet); az adatbázis sandbox módban töltődik vissza; a TLS-kulcs a 700-as `backup` mappában készül elő, a `tls` mappa nem nyílik meg más helyi felhasználónak; minden elutasító ellenőrzés a leállítás előtt fut, és a sikertelen leállítás vagy biztonsági mentés megállítja a visszaállítást; a visszaállítás üríti a munkameneteket és a gyorsítótárat (mindenkinek újra be kell lépnie); a héjban exportált `COMPOSE_PROJECT_NAME`, `COMPOSE_FILE`, `COMPOSE_PROFILES` nem téríti el; a megszakadt futás zárját felismeri; a visszaállítás előtti biztonsági mentésekből a legutóbbi 3 marad. Az ellenőrzőösszeg üzenete pontosabb: a sérülést mutatja ki, a szándékos módosítást nem.
+- A demóadatok ID-listát is tartalmaznak (húsz szervezet, öt kijelölve), így a kipróbálás során az ID-lista táblázata is látható.
+- Gépi felület: a `tier` mező kikerült a `/api/v1/callcenter/calls`, a `calls/{call_id}` és a `lookup` válaszából (a hívásnál és a híváshoz rendelt ügyfélnél is). Leképezetlen hívósornál a hívás szintje a felismert ügyfélé volt, így a kulcs birtokosa megtudhatta, ki prémium ügyfél.
+- A mobil és a telefonközponti felületleírás (`/docs/mobile`, `/docs/ivr`) aláírási része teljes: hatókör szerint kötelező vagy feltételes fejlécek, az aláírt szöveg pontos felépítése, elutasítási okok üzenetekkel, tesztvektor, a titok kiesés nélküli cseréje, kódminták (shell, Node.js, PHP, Python, Java, C#). A `hdid:api-key:create … mobile_backend` a titkot is kiírja.
+- A felhasználói kézikönyv minden képernyőképe frissült, új kép mutatja az ID-lista táblázatát. A dokumentumok verziója 1.4.3.
+
+### English
+**Before upgrading:** the startup check is stricter. In production (`APP_ENV=production`) the container does not start with an empty `DB_PASSWORD`, with an empty `REDIS_PASSWORD` while Redis is used, or with a `TRUSTED_PROXIES` value that trusts everyone (`*`, `**`, `0.0.0.0/0`, `::/0`); with an unknown `APP_ENV` value (for example `prod`) in no environment at all. The reason is on the `openhdid: ERROR:` line of `docker compose logs web`. Signing is now mandatory for the mobile app backend key: every request of a mobile key issued without a signing secret is refused (`401`, `signature_required`) until it gets one under System › API keys › Signing secret; do this together with the operator of the mobile backend, at the time of the upgrade (system status stays red until then).
+
+Rule changes in one sentence each (with the specification's identifiers):
+- ADM-02.4: when a call leaves the agent (released, from the dashboard too, or taken over by a colleague), their question-and-answer session on it ends, and no verdict can be recorded from the page left open.
+- NYT-03: when the master data changes who is behind an account (new e-mail, reissued record, conflicting address), every existing sign-in of the account ends (sessions, remember-me, mobile sign-in, live links and codes).
+- BEL-01.1: a login link shown in the panel is marked in the audit log, and the sign-in made with it names the staff member.
+- BEL-01.2: SMS code guesses sent at the same moment count one by one towards the per-code and the lockout limits.
+- BEL-01.5, BEL-04.2: switching remember-me off also invalidates the cookies issued before.
+- BEL-01: the sign-in address must match the account exactly (case aside); the answer time does not tell whether an eligible account exists either.
+- BEL-01.4: re-encoding the signature of a mobile ID token does not make it a new token.
+- AZO-01: one-time identification codes and IVR codes are unique across both kinds.
+- AZO-03: a PIN refused as already in use is audited, and after five in a day the account's PIN cannot be changed until the next day.
+- NYT-13.2: the ID list row buttons have a fixed meaning (Select, Deselect); "only these" also deselects selected IDs that are off the list for now; a paste is limited to 100,000 characters.
+- CC-03, MOB-01: a mobile app backend key comes with its signing secret, every request is signed, and the secret cannot be removed (owner decision).
+- CC-01: the call-center responses (call event, call state, lookup by number) no longer carry the service level; the name stays (owner decision).
+
+Details:
+- Security review with four parallel passes (new features, backup and container, sign-in paths, machine interfaces and identification); nothing critical or high was found, and every fix started with a failing test.
+- Moving a call to another client from the identification page runs inside the call lock, so a take-over in between cannot be overwritten.
+- The CSRF exemption for bearer requests no longer applies with a staff session either, and it never signs anyone in from a remember-me cookie.
+- The content security policy of the documentation pages (`/docs/*`) admits only the pinned Stoplight Elements package path instead of all of `unpkg.com`.
+- `backup.sh`: the configuration archive may hold only the expected files, no links (a tampered backup cannot overwrite, for example, the script itself); the database is loaded in sandbox mode; the TLS key is prepared inside the 700 `backup` folder, the `tls` folder never opens up to other local users; every refusing check runs before anything stops, and a failed stop or safety backup halts the restore; a restore empties sessions and the cache (everyone signs in again); `COMPOSE_PROJECT_NAME`, `COMPOSE_FILE` and `COMPOSE_PROFILES` exported in the shell no longer redirect it; a lock left by an interrupted run is recognised; the latest 3 safety backups are kept. The checksum message is more precise: it detects damage, not deliberate changes.
+- The demo data includes an ID list (twenty organisations, five selected), so the ID list table can be tried out too.
+- Machine API: the `tier` field is gone from the responses of `/api/v1/callcenter/calls`, `calls/{call_id}` and `lookup` (for the call and its matched client). With an unmapped queue the call's level was the matched client's, so a key holder could learn who is a premium client.
+- The signing part of the mobile and call-center interface documents (`/docs/mobile`, `/docs/ivr`) is complete: headers required or conditional by scope, the exact signed text, rejection reasons with messages, a test vector, changing the secret without an interruption, code samples (shell, Node.js, PHP, Python, Java, C#). `hdid:api-key:create … mobile_backend` prints the secret too.
+- Every screenshot of the user manual (Hungarian) is new, and a new one shows the ID list table. The documents carry version 1.4.3.
+
 ## [1.4.2] – 2026-10-09
 
 ### Magyar

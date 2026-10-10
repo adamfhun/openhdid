@@ -23,7 +23,9 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
  * configured window and X-Signature = HMAC-SHA256 over
  * "timestamp\nMETHOD\nrequest-uri\nbody" (the URI includes the query string,
  * so a captured GET signature is useless for any other call), and no
- * signature is accepted twice within the window. For the call-center scope
+ * signature is accepted twice within the window. The mobile backend scope
+ * always signs (ApiKeyScope::signatureRequired); its key without a secret is
+ * refused. For the call-center scope
  * the static key from config/hdid.php is still accepted, with its optional HMAC.
  */
 class AuthenticateApiKey
@@ -49,6 +51,10 @@ class AuthenticateApiKey
         if ($key !== null) {
             if ($key->hmac_secret !== null) {
                 $this->assertSigned($request, $key->hmac_secret, $scope, $key);
+            } elseif ($scope->signatureRequired()) {
+                // A key of this scope created before signing became mandatory:
+                // useless until a signing secret is issued for it.
+                $this->reject($request, $scope, 'signature_required', 'Signature required: this key has no signing secret yet.', $key);
             }
 
             $key->touchLastUsed();

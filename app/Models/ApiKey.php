@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Str;
+use LogicException;
 
 /**
  * Long-lived machine-to-machine credential (IVR / call center, mobile app
@@ -44,23 +45,32 @@ class ApiKey extends Model
     }
 
     /**
-     * Create a key and return the plain secret alongside the record.
+     * Create a key and return the plain key alongside the record; a scope that
+     * requires signing gets its signing secret at once, returned the same way
+     * (both are shown once).
      *
-     * @return array{key: ApiKey, plain: string}
+     * @return array{key: ApiKey, plain: string, secret: ?string}
      */
     public static function generate(string $name, ApiKeyScope $scope, ?User $by = null): array
     {
         $plain = 'hdid_'.Str::random(40);
+        $secret = $scope->signatureRequired() ? static::newSigningSecret() : null;
 
-        $key = static::query()->create([
+        $key = static::query()->forceCreate([
             'name' => $name,
             'scope' => $scope,
             'key_hash' => static::hashOf($plain),
             'key_prefix' => substr($plain, 0, 12),
             'created_by_user_id' => $by?->id,
+            'hmac_secret' => $secret,
         ]);
 
-        return ['key' => $key, 'plain' => $plain];
+        return ['key' => $key, 'plain' => $plain, 'secret' => $secret];
+    }
+
+    private static function newSigningSecret(): string
+    {
+        return Str::random(48);
     }
 
     public static function hashOf(string $plain): string
@@ -98,15 +108,22 @@ class ApiKey extends Model
      */
     public function rotateSigningSecret(): string
     {
-        $secret = Str::random(48);
+        $secret = static::newSigningSecret();
         $this->forceFill(['hmac_secret' => $secret])->save();
         $this->audit('signing_secret_rotated');
 
         return $secret;
     }
 
+    /**
+     * @throws LogicException for a scope that signs every request
+     */
     public function removeSigningSecret(): void
     {
+        if ($this->scope->signatureRequired()) {
+            throw new LogicException('The signing secret of a '.$this->scope->value.' key cannot be removed.');
+        }
+
         $this->forceFill(['hmac_secret' => null])->save();
         $this->audit('signing_secret_removed');
     }

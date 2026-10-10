@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Auth\AuthSessions;
 use App\Auth\Permission;
+use App\Enums\ApiKeyScope;
 use App\Http\Controllers\HealthController;
 use App\Http\Middleware\AuthenticateApiKey;
 use App\Localization\RememberClientLocale;
@@ -154,14 +155,14 @@ class AppServiceProvider extends ServiceProvider
                 document: fn (Router $router, $action) => $router->get('docs/ivr.json', $action)->name('scramble.ivr.document'),
             )
             ->withDocumentTransformers($apiKey)
-            ->withDocumentTransformers(ApiSignatureDocs::transformer(everyOperation: true))
+            ->withDocumentTransformers(ApiSignatureDocs::transformer(ApiKeyScope::CallCenter))
             ->resolveOperationMethodsUsing($allMethods);
 
         Scramble::registerApi('mobile', [
             'api_path' => 'api/v1/mobile',
             'info' => [
                 'version' => config('scramble.info.version'),
-                'description' => 'Mobile app backend contract: issue an IVR identification code for a client the backend has already authenticated. The code is meant for the phone menu only (the app sends it as DTMF from the dialler); the helpdesk never accepts it and the client never has to read it out. Authenticate with a long-lived API key (X-Api-Key header or bearer token). Keys with a signing secret must sign every request, see below.',
+                'description' => 'Mobile app backend contract: issue an IVR identification code for a client the backend has already authenticated. The code is meant for the phone menu only (the app sends it as DTMF from the dialler); the helpdesk never accepts it and the client never has to read it out. Authenticate with a long-lived API key (X-Api-Key header or bearer token) and sign every request with the key\'s signing secret, see below.',
             ],
         ])
             ->expose(
@@ -169,7 +170,7 @@ class AppServiceProvider extends ServiceProvider
                 document: fn (Router $router, $action) => $router->get('docs/mobile.json', $action)->name('scramble.mobile.document'),
             )
             ->withDocumentTransformers($apiKey)
-            ->withDocumentTransformers(ApiSignatureDocs::transformer(everyOperation: true))
+            ->withDocumentTransformers(ApiSignatureDocs::transformer(ApiKeyScope::MobileBackend))
             ->resolveOperationMethodsUsing($allMethods);
     }
 }

@@ -95,6 +95,7 @@ class QaSessionEngine
     {
         $this->guardAgent($session, $agent);
         $this->guardOpen($session);
+        $this->guardCall($session);
 
         $pending = $session->steps()->where('verdict', StepVerdict::Pending)->first();
         if ($pending !== null) {
@@ -158,6 +159,7 @@ class QaSessionEngine
             try {
                 $this->guardAgent($session, $agent);
                 $this->guardOpen($session);
+                $this->guardCall($session);
             } catch (IdentificationException $exception) {
                 return $exception;
             }
@@ -246,6 +248,29 @@ class QaSessionEngine
     }
 
     /**
+     * Close the agent's open sessions run on this call, when the call leaves
+     * them (released, taken over by a colleague): a session left open would
+     * otherwise keep judging answers and mark the colleague's call as
+     * identified, and it would keep the colleague from starting their own.
+     */
+    public function cancelCallSessions(Call $call, User $agent, string $reason): int
+    {
+        $count = 0;
+
+        IdSession::query()->open()
+            ->where('call_id', $call->id)
+            ->where('agent_user_id', $agent->id)
+            ->chunkById(200, function ($sessions) use ($reason, &$count): void {
+                foreach ($sessions as $session) {
+                    $this->finish($session, IdSessionStatus::Cancelled, $reason);
+                    $count++;
+                }
+            });
+
+        return $count;
+    }
+
+    /**
      * Expire every open session past its deadline. Run from the scheduler.
      */
     public function expireStale(): int
@@ -311,6 +336,30 @@ class QaSessionEngine
         if ($agent !== null && $session->agent_user_id !== null && $session->agent_user_id !== $agent->id) {
             throw new IdentificationException(__('This identification session belongs to another agent.'));
         }
+    }
+
+    /**
+     * A session run on a call counts only while its agent may still attach
+     * to that call (holds it, or calls back a missed one nobody handled):
+     * once the call has left them, whatever path it took, the session is
+     * closed instead of identifying the caller on someone else's call.
+     */
+    private function guardCall(IdSession $session): void
+    {
+        if ($session->call_id === null || $session->agent_user_id === null) {
+            return;
+        }
+
+        $call = Call::query()->find($session->call_id);
+        $agent = User::query()->find($session->agent_user_id);
+
+        if ($call === null || $agent === null || $call->isAttachableBy($agent)) {
+            return;
+        }
+
+        $this->finish($session, IdSessionStatus::Cancelled, 'call_left_agent');
+
+        throw new IdentificationException(__('This call is no longer yours: it was handed back to the queue or a colleague has taken it over, so this identification has been closed.'));
     }
 
     private function guardOpen(IdSession $session): void

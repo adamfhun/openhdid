@@ -108,7 +108,14 @@ function check_env(string $role): void
 {
     $errors = [];
     $warnings = [];
-    $production = env_value('APP_ENV', 'production') === 'production';
+    // Laravel compares the environment name exactly: "prod" or "Production"
+    // would silently switch every production safeguard below off.
+    $environment = env_value('APP_ENV', 'production');
+    $knownEnvironments = ['production', 'staging', 'demo', 'local', 'testing'];
+    if (! in_array($environment, $knownEnvironments, true)) {
+        stop_on(['APP_ENV must be one of '.implode(', ', $knownEnvironments)." (got {$environment}); any other value would switch the production safeguards off."]);
+    }
+    $production = $environment === 'production';
 
     $key = (string) env_value('APP_KEY', '');
     if ($key === '') {
@@ -143,13 +150,23 @@ function check_env(string $role): void
                 $errors[] = "{$name} is not set.";
             }
         }
-        if (env_value('DB_PASSWORD') === null) {
+        if (env_value('DB_PASSWORD') === null && $production && env_value('DB_SOCKET') === null) {
+            $errors[] = 'DB_PASSWORD is empty: the database account would have no password. Set it in .env (and the migration account\'s in db.env).';
+        } elseif (env_value('DB_PASSWORD') === null) {
             $warnings[] = 'DB_PASSWORD is empty.';
         }
     }
 
-    if ($production && in_array('*', env_list('TRUSTED_PROXIES'), true)) {
-        $errors[] = 'TRUSTED_PROXIES=* is not allowed in production; list the load balancer addresses.';
+    $redisStores = array_filter(['CACHE_STORE', 'QUEUE_CONNECTION', 'SESSION_DRIVER'], fn (string $name): bool => env_value($name) === 'redis');
+    if ($production && $redisStores !== [] && env_value('REDIS_PASSWORD') === null) {
+        $errors[] = 'REDIS_PASSWORD is empty while '.implode(', ', $redisStores).' uses redis: Valkey would answer anyone on the network, and queued jobs run what they read. Set REDIS_PASSWORD in .env.';
+    }
+
+    // Each of these trusts every address (Laravel reads "*" and "**" so too),
+    // which lets any client forge its address and the host of generated links.
+    $trustAll = array_values(array_intersect(env_list('TRUSTED_PROXIES'), ['*', '**', '0.0.0.0/0', '::/0']));
+    if ($production && $trustAll !== []) {
+        $errors[] = 'TRUSTED_PROXIES='.implode(',', $trustAll).' trusts every address and is not allowed in production; list the load balancer addresses.';
     }
     if ($production && ! env_bool('SESSION_SECURE_COOKIE', true)) {
         $errors[] = 'SESSION_SECURE_COOKIE=false is not allowed in production.';

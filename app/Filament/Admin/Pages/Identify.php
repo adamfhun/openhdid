@@ -26,6 +26,7 @@ use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
 use Filament\Pages\Dashboard;
 use Filament\Pages\Page;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Validation\ValidationException;
@@ -113,24 +114,11 @@ class Identify extends Page
             throw new HttpException(403, __('This call belongs to a service level you do not handle.'));
         }
 
-        if ($call->isHeldBySomeoneElse($agent)) {
-            throw new HttpException(403, __('This call is being handled by another agent.'));
+        try {
+            app(CallCenterService::class)->reassignToClient($call, $this->getClient(), $agent);
+        } catch (AuthorizationException $e) {
+            throw new HttpException(403, $e->getMessage());
         }
-
-        if (! $call->isAttachableBy($agent)) {
-            throw new HttpException(403, __('Take the call from the dashboard first; a call nobody holds cannot be moved to another client.'));
-        }
-
-        if ($call->client_id !== null) {
-            $previous = $call->client;
-
-            if ($previous !== null) {
-                app(QaSessionEngine::class)->cancelOpenSessions($previous, $agent, 'call_reassigned');
-                app(Auditor::class)->record('call.client_reassigned', $call, ['from_client_id' => $previous->id, 'to_client_id' => $this->clientId], $agent);
-            }
-        }
-
-        app(CallCenterService::class)->attachClient($call, $this->getClient(), $agent);
     }
 
     /**

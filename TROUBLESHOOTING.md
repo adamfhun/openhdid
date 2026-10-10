@@ -269,3 +269,11 @@ docker compose exec web php artisan hdid:test-sms +36301234567 --now
 ./backup.sh list
 ./backup.sh restore
 ```
+
+A „Már fut egy mentés vagy visszaállítás (folyamat: N)” üzenetnél az a futás valóban dolgozik
+(`ps -p N`); egy megszakadt futás (újraindítás, `kill -9`) zárját a következő futás magától feloldja.
+Ha a visszaállítás „nem várt fájl” miatt áll meg, a mentés beállítás-archívuma olyat tartalmaz, amit
+a szkript nem ír bele: ilyen mentést ne állítson vissza. / "A backup or restore is already running
+(process: N)" means that run is really working (`ps -p N`); the lock of an interrupted run (reboot,
+`kill -9`) is lifted by the next run. A restore stopping on an "unexpected file" means the backup's
+configuration archive holds something the script never writes: do not restore that backup.

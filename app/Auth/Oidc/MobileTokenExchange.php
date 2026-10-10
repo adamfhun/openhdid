@@ -58,8 +58,12 @@ class MobileTokenExchange
         }
 
         // One exchange per token: the first presentation claims it for as long
-        // as the age limit could still accept it.
-        if (! Cache::add('oidc.mobile.used.'.hash('sha256', $idToken), true, $maxAgeSeconds + OidcClient::CLOCK_SKEW_SECONDS)) {
+        // as the age limit could still accept it. The key is the signed part
+        // (header and payload) only: the signature segment can be re-encoded
+        // (padding, stray characters) and still verify, so it must not make
+        // the same token look new.
+        $signedPart = implode('.', array_slice(explode('.', $idToken), 0, 2));
+        if (! Cache::add('oidc.mobile.used.'.hash('sha256', $signedPart), true, $maxAgeSeconds + OidcClient::CLOCK_SKEW_SECONDS)) {
             $this->reject('token_replayed', ['email' => $this->oidc->email($claims, $config)]);
         }
 

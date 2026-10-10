@@ -59,7 +59,7 @@ it('lets the ivr look up the caller and the state of a call', function (): void 
         ->assertJsonPath('caller_number', '+36301234567')
         ->assertJsonPath('client.name', 'Kovács Anna')
         ->assertJsonPath('client.has_pin', true)
-        ->assertJsonPath('client.tier', 'premium');
+        ->assertJsonMissingPath('client.tier');
     $this->getJson('/api/v1/callcenter/lookup?caller_number=06209999999')->assertOk()->assertJsonPath('client', null);
 
     // Call event over GET (legacy IVR) returns the matched client at once
@@ -180,13 +180,13 @@ it('accepts a managed api key from the header, bearer token or query string', fu
 });
 
 it('lets the mobile backend request an ivr code for a client', function (): void {
-    ['plain' => $mobile] = ApiKey::generate('app', ApiKeyScope::MobileBackend);
+    ['plain' => $mobile, 'secret' => $secret] = ApiKey::generate('app', ApiKeyScope::MobileBackend);
     $client = Client::factory()->synced()->create(['email' => 'app@x.hu']);
     $client->externalRecord->update(['external_id' => 777]);
 
-    $this->withHeaders(['X-Api-Key' => $mobile])->postJson('/api/v1/mobile/ivr-code', ['email' => 'App@x.hu'])
+    signedMachineCall($mobile, $secret, 'POST', '/api/v1/mobile/ivr-code', ['email' => 'App@x.hu'])
         ->assertOk()->assertJsonPath('client_id', $client->id)->assertJsonStructure(['code', 'formatted', 'expires_at']);
-    $code = $this->withHeaders(['X-Api-Key' => $mobile])->getJson('/api/v1/mobile/ivr-code?external_id=777')
+    $code = signedMachineCall($mobile, $secret, 'GET', '/api/v1/mobile/ivr-code', ['external_id' => 777])
         ->assertOk()->assertJsonPath('client_id', $client->id)->json('code');
 
     // The IVR code is accepted by the IVR only, never on the agent's page
@@ -194,21 +194,20 @@ it('lets the mobile backend request an ivr code for a client', function (): void
     $this->withHeaders(['X-Api-Key' => 'key-123'])->postJson('/api/v1/callcenter/ivr/verify-code', ['code' => $code])
         ->assertOk()->assertJsonPath('identified', true)->assertJsonPath('client_id', $client->id);
     expect(IdSession::query()->where('client_id', $client->id)->value('method'))->toBe(IdMethod::IvrCode);
-    $this->withHeaders(['X-Api-Key' => $mobile])->postJson('/api/v1/mobile/ivr-code', ['email' => 'nobody@x.hu'])->assertUnprocessable();
+    signedMachineCall($mobile, $secret, 'POST', '/api/v1/mobile/ivr-code', ['email' => 'nobody@x.hu'])->assertUnprocessable();
 
     $this->withHeaders(['X-Api-Key' => 'key-123'])->postJson('/api/v1/mobile/ivr-code', ['email' => 'app@x.hu'])->assertUnauthorized('call-center key has no mobile scope');
 });
 
 it('issues independently sized ivr codes and accepts live codes after a length change', function (): void {
-    ['plain' => $mobile] = ApiKey::generate('app', ApiKeyScope::MobileBackend);
+    ['plain' => $mobile, 'secret' => $secret] = ApiKey::generate('app', ApiKeyScope::MobileBackend);
     $client = Client::factory()->synced()->create();
     app(Settings::class)->setMany([
         SettingKey::IvrCodeLength->value => 12,
         SettingKey::MobileOtpLength->value => 10,
     ]);
 
-    $code = $this->withHeaders(['X-Api-Key' => $mobile])
-        ->postJson('/api/v1/mobile/ivr-code', ['email' => $client->email])
+    $code = signedMachineCall($mobile, $secret, 'POST', '/api/v1/mobile/ivr-code', ['email' => $client->email])
         ->assertOk()->json('code');
     expect($code)->toMatch('/^[0-9]{12}$/')
         ->and(strlen(app(MobileOtpService::class)->issue($client)['code']))->toBe(10);
@@ -323,4 +322,21 @@ it('preserves the known caller number when a status update omits it', function (
 
     $this->postJson('/api/v1/callcenter/calls', ['call_id' => 'review-call', 'caller_number' => null, 'status' => 'ended'])
         ->assertOk()->assertJsonPath('data.caller_number', null)->assertJsonPath('data.caller_number_raw', null);
+});
+
+it('tells the call center nothing about the service level of a caller or a call', function (): void {
+    $client = Client::factory()->synced()->withPin('654321')->create(['name' => 'Kovács Anna']);
+    $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Admin]);
+
+    // An unmapped queue: the call's level would come from the matched client.
+    $event = $this->postJson('/api/v1/callcenter/calls', ['call_id' => 'lvl-1', 'caller_number' => '06301234567', 'status' => 'ringing', 'queue' => 'ismeretlen'])->assertCreated();
+    $state = $this->getJson('/api/v1/callcenter/calls/lvl-1')->assertOk();
+    $lookup = $this->getJson('/api/v1/callcenter/lookup?caller_number=06301234567')->assertOk();
+
+    foreach ([$event, $state] as $response) {
+        $response->assertJsonPath('data.client.name', 'Kovács Anna')
+            ->assertJsonMissingPath('data.tier')
+            ->assertJsonMissingPath('data.client.tier');
+    }
+    $lookup->assertJsonPath('client.name', 'Kovács Anna')->assertJsonMissingPath('client.tier');
 });

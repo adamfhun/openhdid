@@ -18,6 +18,7 @@ use App\Settings\Settings;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -29,6 +30,11 @@ use Illuminate\Validation\ValidationException;
 class PinService
 {
     private const MAX_LOCKOUT_MINUTES = 24 * 60;
+
+    /** PINs refused as already in use, per account and day, before PIN changes stop for the day. */
+    public const TAKEN_REFUSALS_PER_DAY = 5;
+
+    private const TAKEN_REFUSALS_PREFIX = 'hdid:pin-taken:';
 
     public function __construct(
         private readonly Settings $settings,
@@ -120,11 +126,12 @@ class PinService
         }
 
         Cache::lock('hdid:pin-assignment', 30)->block(5, function () use ($client, $pin): void {
-            DB::transaction(function () use ($client, $pin): void {
-                if ($this->uniquenessRequired() && $this->isPinTaken($client, $pin)) {
-                    throw ValidationException::withMessages(['pin' => __('This PIN is already in use. Choose another PIN.')]);
-                }
+            // Outside the transaction, so that the refusal's audit row stays.
+            if ($this->uniquenessRequired()) {
+                $this->refuseTakenPin($client, $pin);
+            }
 
+            DB::transaction(function () use ($client, $pin): void {
                 $record = Client::query()->whereKey($client->id)->lockForUpdate()->firstOrFail();
                 $record->forceFill([
                     'pin_hash' => Hash::make($pin),
@@ -140,6 +147,32 @@ class PinService
         });
 
         $client->refresh();
+    }
+
+    /**
+     * With unique PINs, "already in use" tells that somebody has that PIN. The
+     * refusals are audited, and after a few in a day every PIN change of the
+     * account is refused until the next day, a free PIN too: otherwise an
+     * account could keep probing and collect the PINs in use.
+     *
+     * @throws ValidationException
+     */
+    private function refuseTakenPin(Client $client, string $pin): void
+    {
+        $key = self::TAKEN_REFUSALS_PREFIX.$client->id;
+
+        if (RateLimiter::tooManyAttempts($key, self::TAKEN_REFUSALS_PER_DAY)) {
+            $this->auditor->record('client.pin_change_capped', $client, ['limit' => self::TAKEN_REFUSALS_PER_DAY]);
+
+            throw ValidationException::withMessages(['pin' => __('Too many PINs already in use were tried today. Try again tomorrow.')]);
+        }
+
+        if ($this->isPinTaken($client, $pin)) {
+            RateLimiter::hit($key, 86400);
+            $this->auditor->record('client.pin_taken_refused', $client);
+
+            throw ValidationException::withMessages(['pin' => __('This PIN is already in use. Choose another PIN.')]);
+        }
     }
 
     /**

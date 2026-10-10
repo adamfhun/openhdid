@@ -3,10 +3,12 @@
 use App\Auth\Passwordless\ClientPasswordlessLogin;
 use App\Auth\Permission;
 use App\Auth\Role;
+use App\Enums\ApiKeyScope;
 use App\Enums\PhoneNumberSource;
 use App\Enums\SyncRunStatus;
 use App\Enums\SyncSource;
 use App\Filament\Admin\Pages\ManageSettings;
+use App\Filament\Admin\Resources\ApiKeys\Pages\ManageApiKeys;
 use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Admin\Resources\ExternalRecords\Pages\ManageExternalRecords;
 use App\Filament\Admin\Resources\NewsPosts\Pages\ManageNewsPosts;
@@ -16,6 +18,7 @@ use App\Filament\Admin\Resources\SyncRuns\Pages\ManageSyncRuns;
 use App\Filament\Admin\Resources\Users\Pages\CreateUser;
 use App\Jobs\RunDirectorySync;
 use App\Mail\MagicLinkMail;
+use App\Models\ApiKey;
 use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\ExternalRecord;
@@ -31,6 +34,7 @@ use App\Sync\QueuedSyncs;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
@@ -193,6 +197,75 @@ it('reveals a sent login link in the panel only in debug mode or with the previe
 
     config()->set('app.debug', true);
     expect($login->revealsLinkInPanel())->toBeTrue();
+});
+
+it('records that a login link was shown in the panel and names the staff member on the sign-in it leads to', function (): void {
+    Mail::fake();
+    config()->set('app.debug', false);
+    app(Settings::class)->set(SettingKey::ClientLoginMagicLinkPreviewInPanel, true);
+    $client = Client::factory()->synced()->create();
+
+    Livewire::test(ClientResource::getPages()['index']->getPage())
+        ->callTableAction('sendMagicLink', $client)
+        ->assertNotified();
+
+    $url = null;
+    Mail::assertSent(MagicLinkMail::class, function (MagicLinkMail $mail) use (&$url): bool {
+        $url = $mail->url;
+
+        return true;
+    });
+
+    $sent = AuditLog::query()->where('event', 'login.magic_link_sent')->sole();
+    expect($sent->context['revealed'])->toBeTrue()->and($sent->context['by'])->toBe($this->admin->email);
+
+    auth('web')->logout();
+    $this->withHeader('Referer', config('app.url'));
+    signInWithLink($url)->assertOk();
+
+    $login = AuditLog::query()->where('event', 'login.succeeded')->where('context->method', 'magic_link')->sole();
+    expect($login->context['link_revealed_to'])->toBe($this->admin->email);
+});
+
+it('keeps a login link that was only e-mailed free of any panel mark', function (): void {
+    Mail::fake();
+    config()->set('app.debug', false);
+    $client = Client::factory()->synced()->create();
+
+    Livewire::test(ClientResource::getPages()['index']->getPage())
+        ->callTableAction('sendMagicLink', $client);
+
+    $url = null;
+    Mail::assertSent(MagicLinkMail::class, function (MagicLinkMail $mail) use (&$url): bool {
+        $url = $mail->url;
+
+        return true;
+    });
+
+    expect(AuditLog::query()->where('event', 'login.magic_link_sent')->sole()->context)->not->toHaveKey('revealed');
+
+    auth('web')->logout();
+    $this->withHeader('Referer', config('app.url'));
+    signInWithLink($url)->assertOk();
+
+    expect(AuditLog::query()->where('event', 'login.succeeded')->where('context->method', 'magic_link')->sole()->context)->not->toHaveKey('link_revealed_to');
+});
+
+it('creates a mobile backend key with its signing secret and keeps that secret in place', function (): void {
+    Livewire::test(ManageApiKeys::class)
+        ->callAction('create', ['name' => 'Mobil kiszolgáló', 'scope' => ApiKeyScope::MobileBackend->value])
+        ->assertNotified(__('API key and signing secret created'));
+
+    $mobile = ApiKey::query()->where('name', 'Mobil kiszolgáló')->sole();
+    $ivr = ApiKey::factory()->signed()->create();
+    expect($mobile->requiresSignature())->toBeTrue();
+
+    Livewire::test(ManageApiKeys::class)
+        ->assertActionDisabled(TestAction::make('removeSecret')->table($mobile))
+        ->assertActionEnabled(TestAction::make('removeSecret')->table($ivr))
+        ->callAction(TestAction::make('removeSecret')->table($mobile));
+
+    expect($mobile->fresh()->requiresSignature())->toBeTrue('a mobile backend key always signs');
 });
 
 it('keeps the sidebar short: helpdesk items first, administrative clusters last', function (): void {

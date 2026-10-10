@@ -74,7 +74,7 @@ Ezután lépjen be a `https://<kiszolgáló>/admin` címen, és folytassa az *Ad
 - **Rendszerállapot**: `GET /health` (az `OPENHDID_MONITORING_ALLOW` címeiről), `docker compose exec web php artisan hdid:health`, valamint a *Rendszerállapot* oldal.
 - **Frissítés**: mentés (`./backup.sh`), új `OPENHDID_VERSION`, majd `docker compose pull && docker compose up -d`. A migrációk automatikusan és csak előre futnak. Lépésről lépésre, másolható parancsokkal: [UPGRADE.md](UPGRADE.md) (minden kiadás mellékleteként is, a verziószám már beírva).
 - **Hibakeresés**: másolható diagnosztikai parancsok (állapot, proxy, jogosultság, ügyféltörzs-elérés és -belépés, tanúsítvány-lánc, egyszeri bejelentkezés, a belépés elutasításának oka): [TROUBLESHOOTING.md](TROUBLESHOOTING.md), kiadási mellékletként is.
-- **Mentés és visszaállítás** egy paranccsal, root nélkül: `./backup.sh` (a `backup` almappába, időbélyeggel: adatbázis, storage kötet, beállítások, tls), `./backup.sh list`, `./backup.sh restore [név]`. Napi cron: `30 2 * * * /opt/openhdid/backup.sh --quiet`; a mentéseket másolja a gazdagépen kívülre.
+- **Mentés és visszaállítás** egy paranccsal, root nélkül: `./backup.sh` (a `backup` almappába, időbélyeggel: adatbázis, storage kötet, beállítások, tls), `./backup.sh list`, `./backup.sh restore [név]`. Napi cron: `30 2 * * * /opt/openhdid/backup.sh --quiet`; a mentéseket másolja a gazdagépen kívülre, és csak olyan helyről állítson vissza, ahová illetéktelen nem írhat. Visszaállítás után mindenkinek újra be kell lépnie.
 
 ## Konténer-image
 

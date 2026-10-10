@@ -39,11 +39,13 @@ class SendMagicLinkAction
                     return;
                 }
 
-                $url = app(ClientPasswordlessLogin::class)->issueMagicLink($record, auth()->user()?->email);
+                $passwordless = app(ClientPasswordlessLogin::class);
+                $reveal = $passwordless->revealsLinkInPanel();
+                $url = $passwordless->issueMagicLink($record, auth()->user()?->email, revealed: $reveal);
 
                 $notification = Notification::make()->title(__('Login link sent to :email', ['email' => $record->email]))->success();
 
-                if (app(ClientPasswordlessLogin::class)->revealsLinkInPanel()) {
+                if ($reveal) {
                     $notification
                         ->persistent()
                         ->body(new HtmlString('<span class="text-xs">'.__('Link preview is on; the link is').'</span><br><code class="break-all text-xs select-all">'.e($url).'</code>'));

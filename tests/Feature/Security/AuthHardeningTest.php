@@ -152,17 +152,54 @@ it('skips csrf for bearer requests unless the session itself signs a client in',
         ->and($exempt($strayCookie))->toBeTrue()
         ->and($exempt($browser))->toBeFalse();
 
-    // Once the session authenticates a client, a bearer header no longer lifts the CSRF check.
-    Auth::guard('client')->setUser(Client::factory()->synced()->create());
-    expect($exempt($strayCookie))->toBeFalse();
-    Auth::guard('client')->forgetUser();
+    // Once the session signs someone in, client or staff, a bearer header no longer lifts the CSRF check.
+    $signedIn = function (string $guard): Request {
+        $request = Request::create('/api/v1/client/logout', 'POST', cookies: [config('session.cookie') => 'x'], server: ['HTTP_AUTHORIZATION' => 'Bearer t']);
+        $session = app('session')->driver();
+        $session->flush();
+        $session->put(Auth::guard($guard)->getName(), 'someone');
+        $request->setLaravelSession($session);
+
+        return $request;
+    };
+    expect($exempt($signedIn('client')))->toBeFalse()
+        ->and($exempt($signedIn('web')))->toBeFalse();
+});
+
+it('decides the csrf exemption from the session alone, without signing anyone in from a remember cookie', function (): void {
+    $middleware = app(ValidateCsrfTokenUnlessBearer::class);
+    $client = Client::factory()->synced()->create();
+    $client->forceFill(['remember_token' => $token = Str::random(60)])->saveQuietly();
+    $recaller = Auth::guard('client')->getRecallerName();
+    Auth::forgetGuards();
+    $this->app['request']->cookies->set($recaller, $client->id.'|'.$token.'|'.Auth::guard('client')->hashPasswordForCookie((string) $client->getAuthPassword()));
+
+    $request = Request::create('/api/v1/client/logout', 'POST', cookies: [$recaller => 'x'], server: ['HTTP_AUTHORIZATION' => 'Bearer t']);
+    (fn () => $this->inExceptArray($request))->call($middleware);
+
+    expect(Auth::guard('client')->hasUser())->toBeFalse('the remember-me switch is applied later, by the session check');
+});
+
+it('forgets the stored remember tokens of an account type when its remember-me is switched off', function (): void {
+    $settings = app(Settings::class);
+    $settings->set(SettingKey::ClientLoginRememberEnabled, true);
+    $settings->set(SettingKey::UserLoginRememberEnabled, true);
+    $client = Client::factory()->synced()->create(['remember_token' => 'client-token']);
+    $user = User::factory()->create(['remember_token' => 'user-token']);
+
+    $settings->set(SettingKey::ClientLoginRememberEnabled, false);
+    expect($client->fresh()->remember_token)->toBeNull()
+        ->and($user->fresh()->remember_token)->toBe('user-token', 'the other account type keeps its cookies');
+
+    $settings->set(SettingKey::UserLoginRememberEnabled, false);
+    expect($user->fresh()->remember_token)->toBeNull();
 });
 it('accepts an api key from the query string for the call center scope only and audits rejections', function (): void {
-    ['plain' => $mobile] = ApiKey::generate('app', ApiKeyScope::MobileBackend);
+    ['plain' => $mobile, 'secret' => $secret] = ApiKey::generate('app', ApiKeyScope::MobileBackend);
     Client::factory()->synced()->create(['email' => 'app@x.hu']);
 
     $this->getJson('/api/v1/mobile/ivr-code?email=app@x.hu&api_key='.$mobile)->assertUnauthorized();
-    $this->withHeaders(['X-Api-Key' => $mobile])->getJson('/api/v1/mobile/ivr-code?email=app@x.hu')->assertOk();
+    signedMachineCall($mobile, $secret, 'GET', '/api/v1/mobile/ivr-code', ['email' => 'app@x.hu'])->assertOk();
 
     expect(AuditLog::query()->where('event', 'api_key.rejected')->value('context'))->toMatchArray(['scope' => 'mobile_backend', 'reason' => 'missing'])
         ->and(AuditLog::query()->where('event', 'client.mobile_otp_issued')->value('context')['api_key'])->toStartWith('key:');
@@ -246,4 +283,37 @@ it('clears the remember tokens issued before remember-me became a switch', funct
     (require database_path('migrations/2026_10_03_100002_forget_remember_tokens.php'))->up();
 
     expect($user->fresh()->remember_token)->toBeNull()->and($client->fresh()->remember_token)->toBeNull();
+});
+
+it('issues a mobile backend key together with its signing secret and refuses its unsigned requests', function (): void {
+    ['plain' => $plain, 'secret' => $secret, 'key' => $key] = ApiKey::generate('app', ApiKeyScope::MobileBackend);
+    Client::factory()->synced()->create(['email' => 'app@x.hu']);
+
+    expect($secret)->toBeString()->and($key->fresh()->requiresSignature())->toBeTrue();
+
+    $this->withHeaders(['X-Api-Key' => $plain])->postJson('/api/v1/mobile/ivr-code', ['email' => 'app@x.hu'])->assertUnauthorized();
+    signedMachineCall($plain, $secret, 'POST', '/api/v1/mobile/ivr-code', ['email' => 'app@x.hu'])->assertOk();
+
+    expect(AuditLog::query()->where('event', 'api_key.rejected')->sole()->context['reason'])->toBe('stale_timestamp');
+});
+
+it('refuses every request of a mobile backend key without a signing secret, signed or not', function (): void {
+    $plain = 'hdid_'.str_repeat('m', 40);
+    $key = ApiKey::factory()->scope(ApiKeyScope::MobileBackend)->create(['key_hash' => ApiKey::hashOf($plain), 'key_prefix' => substr($plain, 0, 12)]);
+    Client::factory()->synced()->create(['email' => 'app@x.hu']);
+
+    $this->withHeaders(['X-Api-Key' => $plain])->postJson('/api/v1/mobile/ivr-code', ['email' => 'app@x.hu'])
+        ->assertUnauthorized()->assertJsonPath('message', 'Signature required: this key has no signing secret yet.');
+
+    expect(AuditLog::query()->where('event', 'api_key.rejected')->where('subject_id', $key->id)->sole()->context['reason'])->toBe('signature_required')
+        ->and(fn () => $key->fresh()->removeSigningSecret())->toThrow(LogicException::class);
+});
+
+it('keeps a call center key signable at will', function (): void {
+    ['plain' => $plain, 'secret' => $secret, 'key' => $key] = ApiKey::generate('ivr', ApiKeyScope::CallCenter);
+
+    expect($secret)->toBeNull()->and($key->requiresSignature())->toBeFalse();
+    $key->rotateSigningSecret();
+    $key->fresh()->removeSigningSecret();
+    expect($key->fresh()->requiresSignature())->toBeFalse();
 });

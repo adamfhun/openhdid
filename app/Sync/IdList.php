@@ -163,23 +163,7 @@ class IdList
             return 0;
         }
 
-        return Cache::lock(self::LOCK, 60)->block(10, fn (): int => DB::transaction(function () use ($ids, $selected): int {
-            $query = SyncIdListItem::query()->whereIn('external_id', $ids)->where('selected', ! $selected);
-            if ($selected) {
-                $query->listed();
-            }
-            $changed = $query->pluck('external_id')->map(fn ($id): string => (string) $id)->sort(SORT_NATURAL)->values()->all();
-            if ($changed === []) {
-                return 0;
-            }
-
-            // One query and one audit row for the whole change: a model save per item
-            // would write thousands of audit rows for a large selection.
-            SyncIdListItem::query()->whereIn('external_id', $changed)->update(['selected' => $selected, 'updated_at' => now()]);
-            $this->auditSelection($selected ? 'select' : 'deselect', $changed);
-
-            return count($changed);
-        }));
+        return Cache::lock(self::LOCK, 60)->block(10, fn (): int => DB::transaction(fn (): int => $this->applySelection($ids, $selected)));
     }
 
     /**
@@ -192,10 +176,45 @@ class IdList
     public function replaceSelection(array $externalIds): array
     {
         $wanted = array_values(array_unique(array_map('strval', $externalIds)));
-        $drop = SyncIdListItem::query()->listed()->where('selected', true)->whereNotIn('external_id', $wanted)
-            ->pluck('external_id')->map(fn ($id): string => (string) $id)->all();
 
-        return ['added' => $this->setSelected($wanted, true), 'removed' => $this->setSelected($drop, false)];
+        // One critical section: the IDs to drop are read and dropped together.
+        // IDs off the list for now count too: left selected, they would be
+        // sent again the moment they return.
+        return Cache::lock(self::LOCK, 60)->block(10, fn (): array => DB::transaction(function () use ($wanted): array {
+            $drop = SyncIdListItem::query()->where('selected', true)->whereNotIn('external_id', $wanted)
+                ->pluck('external_id')->map(fn ($id): string => (string) $id)->all();
+
+            return ['added' => $this->applySelection($wanted, true), 'removed' => $this->applySelection($drop, false)];
+        }));
+    }
+
+    /**
+     * Sets the selection of the given IDs (only listed ones can be selected)
+     * and audits the change; the caller holds the lock and the transaction.
+     *
+     * @param  list<string>  $ids
+     */
+    private function applySelection(array $ids, bool $selected): int
+    {
+        if ($ids === []) {
+            return 0;
+        }
+
+        $query = SyncIdListItem::query()->whereIn('external_id', $ids)->where('selected', ! $selected);
+        if ($selected) {
+            $query->listed();
+        }
+        $changed = $query->pluck('external_id')->map(fn ($id): string => (string) $id)->sort(SORT_NATURAL)->values()->all();
+        if ($changed === []) {
+            return 0;
+        }
+
+        // One query and one audit row for the whole change: a model save per item
+        // would write thousands of audit rows for a large selection.
+        SyncIdListItem::query()->whereIn('external_id', $changed)->update(['selected' => $selected, 'updated_at' => now()]);
+        $this->auditSelection($selected ? 'select' : 'deselect', $changed);
+
+        return count($changed);
     }
 
     /**

@@ -15,6 +15,7 @@ use App\Models\Call;
 use App\Models\Client;
 use App\Models\ExternalRecord;
 use App\Models\NewsPost;
+use App\Models\SyncIdListItem;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
@@ -53,6 +54,7 @@ class DemoSeeder extends Seeder
         app(Settings::class)->set(SettingKey::PortalTermsUrl, 'https://example.test/feltetelek');
 
         self::agent(200001, 'Ági Ügynök', 'agent@example.test', 'password-agent-1');
+        self::idList();
 
         $questions = collect([
             'Mi volt az első háziállata neve?',
@@ -162,6 +164,34 @@ class DemoSeeder extends Seeder
             'external_id' => $externalId, 'kind' => $kind, 'name' => $name, 'email' => $email,
             'email_domain' => ExternalRecord::domainOf($email), 'phones' => [], 'attributes' => [],
             ...$attributes,
+        ]);
+    }
+
+    /**
+     * A small ID list (organizations of the master data system) for the
+     * Settings › EMD tab: a few selected, one that has left the list.
+     */
+    private static function idList(): void
+    {
+        $organizations = [
+            11 => 'Acme Hungária Kft.', 12 => 'Alföldi Agrár Zrt.', 14 => 'Balaton Szerviz Bt.', 17 => 'Bükki Fa Kft.',
+            21 => 'Csepeli Gépgyár Zrt.', 23 => 'Debreceni Logisztika Kft.', 25 => 'Duna Pénzügyi Zrt.', 28 => 'Egri Borház Kft.',
+            31 => 'Észak Energia Zrt.', 34 => 'Fehérvári Építő Kft.', 36 => 'Győri Járműipar Zrt.', 39 => 'Hajdú Élelmiszer Kft.',
+            42 => 'Kecskeméti Kertészet Bt.', 45 => 'Miskolci Acél Zrt.', 48 => 'Nyírségi Gyümölcs Kft.', 51 => 'Pécsi Egyetemi Szolgáltató Kft.',
+            54 => 'Soproni Textil Zrt.', 57 => 'Szegedi Paprika Kft.', 61 => 'Tiszai Vegyi Zrt.', 64 => 'Zalai Olaj Kft.',
+        ];
+        $selected = [11, 21, 25, 36, 51];
+
+        foreach ($organizations as $id => $name) {
+            SyncIdListItem::query()->firstOrCreate(['external_id' => (string) $id], [
+                'name' => $name, 'selected' => in_array($id, $selected, true),
+                'first_seen_at' => now()->subDays(30), 'last_seen_at' => now(),
+            ]);
+        }
+
+        SyncIdListItem::query()->firstOrCreate(['external_id' => '70'], [
+            'name' => 'Megszűnt Szövetkezet', 'selected' => true,
+            'first_seen_at' => now()->subDays(60), 'last_seen_at' => now()->subDays(9), 'removed_at' => now()->subDays(8),
         ]);
     }
 }

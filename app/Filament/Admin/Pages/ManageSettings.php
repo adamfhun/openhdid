@@ -345,7 +345,8 @@ class ManageSettings extends Page implements HasTable
                     ->authorize(fn (): bool => $this->canManageSync())
                     ->modalDescription(__('Paste IDs separated by commas, semicolons, spaces or new lines. IDs not on the list are reported and left out.'))
                     ->schema([
-                        Textarea::make('ids')->label(__('IDs'))->rows(6)->required(),
+                        // Room for every ID of a large list (about 5000 IDs of up to 12 characters).
+                        Textarea::make('ids')->label(__('IDs'))->rows(6)->required()->maxLength(100000),
                         Radio::make('mode')->label(__('What should happen?'))->required()->default('add')->options([
                             'add' => __('Add them to the selection'),
                             'only' => __('Select only these (the others are deselected)'),
@@ -369,23 +370,35 @@ class ManageSettings extends Page implements HasTable
                     )),
             ])
             ->recordActions([
-                Action::make('toggleSelection')
-                    ->label(fn (SyncIdListItem $record): string => $record->selected ? __('Deselect') : __('Select this ID'))
-                    ->icon(fn (SyncIdListItem $record) => $record->selected ? Heroicon::OutlinedMinusCircle : Heroicon::OutlinedPlusCircle)
-                    ->color(fn (SyncIdListItem $record): string => $record->selected ? 'gray' : 'primary')
-                    ->visible(fn (): bool => $this->canManageSync())
+                // Two actions with a fixed meaning instead of one toggle: the row is
+                // read again when the action runs, so a toggle confirmed as a
+                // deselection would select an ID a colleague deselected meanwhile.
+                Action::make('selectId')
+                    ->label(__('Select this ID'))
+                    ->icon(Heroicon::OutlinedPlusCircle)
+                    ->color('primary')
+                    ->visible(fn (SyncIdListItem $record): bool => $this->canManageSync() && ! $record->selected)
                     ->authorize(fn (): bool => $this->canManageSync())
-                    ->disabled(fn (SyncIdListItem $record): bool => ! $record->selected && ! $record->isListed())
-                    ->tooltip(fn (SyncIdListItem $record): ?string => ! $record->selected && ! $record->isListed() ? __('Not on the list now; it can be selected when it returns.') : null)
-                    // Only a deselection has consequences worth a question.
-                    ->requiresConfirmation(fn (SyncIdListItem $record): bool => $record->selected)
-                    ->modal(fn (SyncIdListItem $record): bool => $record->selected)
+                    ->disabled(fn (SyncIdListItem $record): bool => ! $record->isListed())
+                    ->tooltip(fn (SyncIdListItem $record): ?string => ! $record->isListed() ? __('Not on the list now; it can be selected when it returns.') : null)
+                    ->action(function (SyncIdListItem $record): void {
+                        abort_unless($this->canManageSync(), 403);
+                        app(IdList::class)->setSelected([$record->external_id], true);
+                    }),
+                // Only a deselection has consequences worth a question.
+                Action::make('deselectId')
+                    ->label(__('Deselect'))
+                    ->icon(Heroicon::OutlinedMinusCircle)
+                    ->color('gray')
+                    ->visible(fn (SyncIdListItem $record): bool => $this->canManageSync() && $record->selected)
+                    ->authorize(fn (): bool => $this->canManageSync())
+                    ->requiresConfirmation()
                     ->modalHeading(__('Stop sending this ID?'))
                     ->modalDescription(fn (SyncIdListItem $record): string => $this->deselectWarning([$record->external_id]))
                     ->modalSubmitActionLabel(__('Deselect'))
                     ->action(function (SyncIdListItem $record): void {
                         abort_unless($this->canManageSync(), 403);
-                        app(IdList::class)->setSelected([$record->external_id], ! $record->selected);
+                        app(IdList::class)->setSelected([$record->external_id], false);
                     }),
             ])
             ->toolbarActions([

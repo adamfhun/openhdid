@@ -7,6 +7,7 @@ const dictionaries = {
         'Security questions': 'Biztonsági kérdések',
         'PIN': 'PIN',
         "This PIN is already in use. Choose another PIN.": "Ez a PIN-kód már foglalt. Válasszon másik PIN-kódot.",
+        "Too many PINs already in use were tried today. Try again tomorrow.": "Ma már túl sok foglalt PIN-kódot próbált beállítani. Kérjük, holnap próbálja újra.",
         "PIN changes are managed by the helpdesk.": "A PIN-kód módosítását az ügyfélszolgálat végzi.",
         "Your PIN is managed by the helpdesk. Contact them to set, replace or remove it.": "PIN-kódját az ügyfélszolgálat kezeli. Beállításához, cseréjéhez vagy törléséhez forduljon hozzánk.",
         "Contact the helpdesk to set your PIN.": "PIN-kódja beállításához forduljon az ügyfélszolgálathoz.",

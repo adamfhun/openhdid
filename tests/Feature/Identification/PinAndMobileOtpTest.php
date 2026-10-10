@@ -240,3 +240,18 @@ it('holds the global pin lock while it checks uniqueness and writes, so two clie
     expect(fn () => app(PinService::class)->setPin($other, '654321'))->toThrow(ValidationException::class);
     expect($other->fresh()->pin_hash)->toBeNull('nothing is written when the pin turns out to be taken');
 });
+
+it('never issues an IVR code equal to a live one-time code, because the phone menu accepts both', function (): void {
+    $codes = app(OneTimeCodes::class);
+    $holder = Client::factory()->synced()->create();
+    $other = Client::factory()->synced()->create();
+    $codes->issueUnique($holder, OneTimeCodePurpose::MobileOtp, fn (): string => '23456789', 10, 3);
+
+    $draws = ['23456789', '34567892'];
+    ['code' => $code] = $codes->issueUnique($other, OneTimeCodePurpose::IvrCode, function () use (&$draws): string {
+        return array_shift($draws);
+    }, 10, 3);
+
+    expect($code)->toBe('34567892')
+        ->and(app(MobileOtpService::class)->verifyCode('23456789', IdChannel::Ivr, purposes: [OneTimeCodePurpose::MobileOtp, OneTimeCodePurpose::IvrCode])?->client_id)->toBe($holder->id);
+});

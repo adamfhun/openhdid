@@ -92,8 +92,8 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.4.2 · 2026. október 9.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.2 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.4.3 · 2026. október 10.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.3 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv, felhasználói kézikönyv</span></div>
 </div>
@@ -240,7 +240,8 @@ docker compose exec web php artisan hdid:api-key:create "Prémium telefonközpon
     <li>az érvénytelen <code>APP_KEY</code>;</li>
     <li>ha az <code>APP_URL</code> nem https;</li>
     <li>a hiányzó adatbázis-adat;</li>
-    <li>élesben (<code>APP_ENV=production</code>) az <code>APP_DEBUG=true</code>, a <code>TRUSTED_PROXIES=*</code> és a <code>SESSION_SECURE_COOKIE=false</code>. A konténer ilyenkor 64-es kilépési kóddal áll meg, és a <code>restart</code> szabály miatt újraindulgat; az ok a <code>docker compose logs web</code> kimenetében. Részletes hibaüzenetekhez az üzemeltetési kézikönyv 5. fejezetének hibakeresési receptje való, nem a <code>production</code> környezet debug módja.</li>
+    <li>az ismeretlen <code>APP_ENV</code> érték: csak <code>production</code>, <code>staging</code>, <code>demo</code>, <code>local</code> vagy <code>testing</code> lehet, mert például a <code>prod</code> vagy a <code>Production</code> az éles védelmeket csendben kikapcsolná;</li>
+    <li>élesben (<code>APP_ENV=production</code>) az <code>APP_DEBUG=true</code>, a mindenkit megbízhatónak vevő <code>TRUSTED_PROXIES</code> (<code>*</code>, <code>**</code>, <code>0.0.0.0/0</code>, <code>::/0</code>), a <code>SESSION_SECURE_COOKIE=false</code>, az üres <code>DB_PASSWORD</code> (socketes kapcsolat kivételével), és ha a gyorsítótár, a sor vagy a munkamenet Redis-t használ, az üres <code>REDIS_PASSWORD</code>. A konténer ilyenkor 64-es kilépési kóddal áll meg, és a <code>restart</code> szabály miatt újraindulgat; az ok a <code>docker compose logs web</code> kimenetében. Részletes hibaüzenetekhez az üzemeltetési kézikönyv 5. fejezetének hibakeresési receptje való, nem a <code>production</code> környezet debug módja.</li>
 </ul>
 Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, valamint az önaláírt tanúsítványért.</li>
 <li><strong>Gyorsítótár.</strong> Az ellenőrzés után a konfiguráció, az útvonalak és az események gyorsítótára a memóriában lévő <code>/tmp</code>-be épül. A titkokat is tartalmazó konfigurációs gyorsítótár így lemezre sem kerül. A PHP-FPM dolgozói ezt olvassák, a konténer környezetét nem látják (<code>clear_env</code>).</li>
@@ -580,7 +581,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.4.2 · 2026. október 9.</div>
+<div class="foot">OpenHDID telepítési útmutató 1.4.3 · 2026. október 10.</div>
 </div>
 
 </body>

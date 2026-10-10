@@ -24,7 +24,9 @@
 #                     benne az APP_KEY és minden jelszó: ezt a fájlt védje a legjobban
 #   tls.tar.gz        a tanúsítvány és a kulcs (a tls mappa)
 #   info.txt          időpont, OpenHDID-verzió, image, adatbázis
-#   SHA256SUMS        ellenőrzőösszegek; visszaállítás előtt ellenőrizve
+#   SHA256SUMS        ellenőrzőösszegek; visszaállítás előtt ellenőrizve. A sérülést mutatják ki,
+#                     a szándékos módosítást nem (aki a mentést átírja, az összegeket is átírhatja):
+#                     csak olyan helyről állítson vissza, ahová illetéktelen nem írhat.
 #
 # Külső adatbázisnál (a db profil nélkül) az adatbázist az adatbázis üzemeltetője menti és
 # állítja vissza; a szkript a többit kezeli.
@@ -34,6 +36,10 @@
 # az alkalmazás saját felhasználója (uid 82) olvassa és írja, így rootful és rootless
 # Dockerrel is a konténer által látott tulajdonos áll vissza.
 #
+# A visszaállítás után mindenkinek újra be kell lépnie: a munkamenetek és a gyorsítótár
+# kiürülnek, hogy a mentés óta visszavont belépések ne éledjenek újra. A visszaállítás előtti
+# biztonsági mentésekből a legutóbbi 3 marad (--keep 0 mellett mind).
+#
 # Napi mentés cronnal (2:30-kor):  30 2 * * * /opt/openhdid/backup.sh --quiet
 # A mentéseket rendszeresen másolja a gazdagépen kívülre, titkosítva.
 set -euo pipefail
@@ -42,8 +48,14 @@ umask 077
 DIR=$(cd -- "$(dirname -- "$0")" && pwd -P)
 SELF="$DIR/$(basename -- "$0")"
 cd "$DIR"
+# The installation's own .env decides the project, its files and profiles: variables exported
+# in the operator's shell would point every command below at another project or drop the db profile.
+unset COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_ENV_FILES
 BACKUPS="$DIR/backup"
 STAMP_PATTERN='^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}$'
+SAFETY_SUFFIX=_visszaallitas-elott
+SAFETY_PATTERN="^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}${SAFETY_SUFFIX}\$"
+SAFETY_KEEP=3
 APP_SERVICES=(web worker sync-worker scheduler)
 
 KEEP=14
@@ -109,11 +121,27 @@ app_image() {
     grep -m1 '/openhdid:' <<<"$images" || true
 }
 
+# One run at a time. The lock names its process: a lock left behind by a run that was killed
+# (reboot, out of memory, kill -9) is recognised and lifted instead of stopping every later
+# nightly backup. A lock without a process id is lifted only after a minute: it may belong to a
+# run that has just created it, or to an older version of this script.
 lock() {
     mkdir -p "$BACKUPS"
     chmod 700 "$BACKUPS"
-    mkdir "$BACKUPS/.lock" 2>/dev/null \
-        || die "Már fut egy mentés vagy visszaállítás ($BACKUPS/.lock). Ha biztosan nem, törölje a mappát."
+    if ! mkdir "$BACKUPS/.lock" 2>/dev/null; then
+        local pid stale=0
+        pid=$(cat "$BACKUPS/.lock/pid" 2>/dev/null || true)
+        if [[ $pid =~ ^[0-9]+$ ]]; then
+            ps -p "$pid" >/dev/null 2>&1 || stale=1
+        elif [[ -n $(find "$BACKUPS/.lock" -maxdepth 0 -mmin +1 2>/dev/null) ]]; then
+            stale=1
+        fi
+        [[ $stale == 1 ]] || die "Már fut egy mentés vagy visszaállítás${pid:+ (folyamat: $pid)}."
+        rm -rf "$BACKUPS/.lock"
+        mkdir "$BACKUPS/.lock" 2>/dev/null || die "Már fut egy mentés vagy visszaállítás ($BACKUPS/.lock)."
+        say "    egy megszakadt futás zárját feloldottam"
+    fi
+    echo $$ > "$BACKUPS/.lock/pid"
     trap 'rm -rf "$BACKUPS/.lock" "$BACKUPS"/.tmp-*' EXIT
 }
 
@@ -156,7 +184,9 @@ create_backup() {
     target="$BACKUPS/$name"
     tmp="$BACKUPS/.tmp-$name"
     [[ ! -e $target ]] || die "Már van ilyen nevű mentés: $name"
-    mkdir "$tmp"
+    # Every step ends in die on failure: the safety backup before a restore runs where
+    # bash ignores errexit (if ! ...), and a half-written backup must never count as done.
+    mkdir "$tmp" || die "A mentés mappája nem hozható létre: $tmp"
 
     step "Mentés: backup/$name"
 
@@ -183,29 +213,50 @@ create_backup() {
     gzip -t "$tmp/tls.tar.gz" 2>/dev/null || die "A tls mappa mentése sérült."
     say "    beállítások és kulcsok: config.tar.gz, tls.tar.gz"
 
-    cat > "$tmp/info.txt" <<EOF
+    cat > "$tmp/info.txt" <<EOF || die "Az info.txt nem írható."
 created=$(date '+%Y-%m-%d %H:%M:%S %z')
 openhdid_version=$version
 image=$image
 database=$db_state
 host=$(hostname)
 EOF
-    (cd "$tmp" && checksum -- *.gz info.txt > SHA256SUMS)
-    chmod 600 "$tmp"/*
-    mv "$tmp" "$target"
+    (cd "$tmp" && checksum -- *.gz info.txt > SHA256SUMS) || die "Az ellenőrzőösszegek nem írhatók."
+    chmod 600 "$tmp"/* || die "A mentés fájljainak jogai nem állíthatók."
+    mv "$tmp" "$target" || die "A mentés nem nevezhető át: backup/$name"
     say "    kész: backup/$name"
 }
 
-prune() {
-    [[ $KEEP -gt 0 ]] || return 0
-    local all count
-    all=$(find "$BACKUPS" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | grep -E "$STAMP_PATTERN" | sort || true)
+# Keeps the latest N backups whose name matches the pattern (0 keeps all).
+prune_matching() {
+    local pattern=$1 keep=$2 all count
+    [[ $keep -gt 0 ]] || return 0
+    all=$(find "$BACKUPS" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | grep -E "$pattern" | sort || true)
     count=$(printf '%s' "$all" | grep -c . || true)
-    [[ $count -gt $KEEP ]] || return 0
-    printf '%s\n' "$all" | sed -n "1,$((count - KEEP))p" | while read -r old; do
+    [[ $count -gt $keep ]] || return 0
+    printf '%s\n' "$all" | sed -n "1,$((count - keep))p" | while read -r old; do
         rm -rf "${BACKUPS:?}/$old"
         say "    régi mentés törölve: backup/$old"
     done
+}
+
+# The safety backups hold the APP_KEY, every password and the data too: they are pruned
+# as well (the latest few stay), unless --keep 0 asks to keep everything.
+prune() {
+    prune_matching "$STAMP_PATTERN" "$KEEP"
+    [[ $KEEP == 0 ]] || prune_matching "$SAFETY_PATTERN" "$SAFETY_KEEP"
+}
+
+# A backup set may come back from storage outside this host. Its configuration archive may
+# hold only what config_archive writes, as plain files: no other file (this script, which
+# cron runs) and no links may reach the installation folder.
+check_config_archive() {
+    local archive=$1 names entries unexpected
+    names=$(tar tzf "$archive") || die "A beállítások mentése nem olvasható."
+    entries=$(tar tvzf "$archive") || die "A beállítások mentése nem olvasható."
+    unexpected=$(grep -vxE '(\./)?(\.env|db\.env|compose\.yaml|compose\.override\.yaml|ca(/[^/]+)*/?)' <<<"$names" || true)
+    [[ -z $unexpected ]] || die "A beállítások mentésében nem várt fájl van ($(tr '\n' ' ' <<<"$unexpected")); ezt a mentést nem ez a szkript készítette, vagy módosították. Nem állítom vissza."
+    unexpected=$(grep -vE '^[-d]' <<<"$entries" || true)
+    [[ -z $unexpected ]] || die "A beállítások mentésében hivatkozás vagy különleges fájl van; ezt a mentést nem állítom vissza."
 }
 
 list_backups() {
@@ -221,7 +272,7 @@ list_backups() {
 }
 
 restore_backup() {
-    local source image version db_state answer
+    local source image version db_state answer stage services differs=() f
     if [[ -z $NAME ]]; then
         NAME=$(find "$BACKUPS" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | grep -E "$STAMP_PATTERN" | sort | tail -n 1 || true)
         [[ -n $NAME ]] || die "Nincs mentés a $BACKUPS mappában."
@@ -233,17 +284,37 @@ restore_backup() {
     for f in config.tar.gz tls.tar.gz storage.tar.gz info.txt SHA256SUMS; do
         [[ -f $source/$f ]] || die "Hiányos mentés, nincs benne: $f"
     done
-    (cd "$source" && checksum -c SHA256SUMS >/dev/null 2>&1) || die "A mentés ellenőrzőösszege nem egyezik: a fájlok sérültek vagy módosultak."
+    # The sums show damage, not a deliberate change: whoever rewrites a backup can rewrite them too.
+    (cd "$source" && checksum -c SHA256SUMS >/dev/null 2>&1) \
+        || die "A mentés ellenőrzőösszege nem egyezik: a fájlok sérültek. Semmi nem változott."
 
     image=$(sed -n 's/^image=//p' "$source/info.txt")
     version=$(sed -n 's/^openhdid_version=//p' "$source/info.txt")
     db_state=$(sed -n 's/^database=//p' "$source/info.txt")
     [[ -n $image ]] || die "A mentés info.txt fájljából hiányzik az image."
+    [[ $db_state != included || -f $source/database.sql.gz ]] || die "Hiányos mentés, nincs benne: database.sql.gz"
+
+    # Whatever can refuse the restore is checked here, before anything is stopped or overwritten.
+    check_config_archive "$source/config.tar.gz"
+    stage=$(mktemp -d "$BACKUPS/.tmp-restore.XXXXXX") || die "Nem hozható létre ideiglenes mappa a $BACKUPS alatt."
+    (cd "$stage" && umask 022 && tar xzf "$source/config.tar.gz") || die "A beállítások mentése nem bontható ki."
+    if [[ $db_state == included ]]; then
+        services=$(cd "$stage" && docker compose config --services 2>/dev/null) \
+            || die "A mentett beállításokból a compose nem olvasható (docker compose config)."
+        grep -qx mariadb <<<"$services" || die "A mentés a beépített adatbázist tartalmazza, de a mentett .env-ben nincs db profil."
+    fi
+    mkdir -p tls
+    [[ -O tls ]] || die "A tls mappa nem az Ön tulajdona ($(ls -ld tls | awk '{print $3}')); állítsa át a tulajdonost, majd indítsa újra. Semmi nem változott."
+    for f in .env db.env compose.yaml compose.override.yaml; do
+        [[ -e $f || -e $stage/$f ]] || continue
+        cmp -s "$f" "$stage/$f" 2>/dev/null || differs+=("$f")
+    done
 
     step "Visszaállítás: backup/$NAME"
     say "    készült: $(sed -n 's/^created=//p' "$source/info.txt"), OpenHDID $version"
     say "    a jelenlegi adatbázis, storage kötet és beállítások helyére ez a mentés kerül;"
-    say "    a mentés óta keletkezett adatok elvesznek."
+    say "    a mentés óta keletkezett adatok elvesznek, és mindenkinek újra be kell lépnie."
+    [[ ${#differs[@]} == 0 ]] || say "    a mentés beállításai eltérnek a jelenlegitől: ${differs[*]}"
     if [[ $YES != 1 ]]; then
         [[ -t 0 ]] || die "Megerősítés kellene, de nincs terminál; nem interaktív futtatáshoz: --yes"
         read -r -p "    Folytatja? Írja be: igen > " answer || answer=""
@@ -251,21 +322,22 @@ restore_backup() {
     fi
 
     if [[ $SAFETY == 1 && -f .env ]]; then
-        if ! (QUIET=1 create_backup "_visszaallitas-elott"); then
+        if ! (QUIET=1 create_backup "$SAFETY_SUFFIX"); then
             die "A visszaállítás előtti biztonsági mentés nem sikerült, semmi nem változott. Ha a jelenlegi állapot úgyis menthetetlen: ./backup.sh restore $NAME --no-safety-backup"
         fi
-        say "    biztonsági mentés a jelenlegi állapotról: backup/ (…_visszaallitas-elott)"
+        say "    biztonsági mentés a jelenlegi állapotról: backup/ (…${SAFETY_SUFFIX})"
+        [[ $KEEP == 0 ]] || prune_matching "$SAFETY_PATTERN" "$SAFETY_KEEP"
     fi
 
     step "Alkalmazás leállítása"
     if [[ -f .env ]]; then
-        docker compose stop "${APP_SERVICES[@]}" >/dev/null 2>&1 || true
+        # A running worker or scheduler would keep writing while the tables are replaced.
+        docker compose stop "${APP_SERVICES[@]}" >/dev/null 2>&1 \
+            || die "Az alkalmazás nem állt le (docker compose ps); a visszaállítás nem kezdődött el."
     fi
 
     step "Beállítások és kulcsok"
-    local listing
-    listing=$(tar tzf "$source/config.tar.gz") || die "A beállítások mentése nem olvasható."
-    if grep -qE '^(\./)?ca(/|$)' <<<"$listing"; then
+    if grep -qE '^(\./)?ca(/|$)' <<<"$(tar tzf "$source/config.tar.gz")"; then
         rm -rf ca
     fi
     # The CA files must stay readable for the container user: the archived modes count, not this script's umask.
@@ -273,37 +345,45 @@ restore_backup() {
     chmod 600 .env db.env
     say "    .env, db.env, compose.yaml, ca visszaállítva (OpenHDID $version)"
 
-    # The container user writes the key back: the directory is opened for it for the
-    # moment of the restore only (the operator owns it, so no root is needed).
-    mkdir -p tls
-    [[ -O tls ]] || die "A tls mappa nem az Ön tulajdona ($(ls -ld tls | awk '{print $3}')); állítsa át a tulajdonost, majd indítsa újra."
-    chmod 777 tls
-    if ! run_web -v "$DIR/tls":/restore-tls --entrypoint sh web \
-        -c 'find /restore-tls -mindepth 1 -delete && tar xzf - -C /restore-tls' < "$source/tls.tar.gz"; then
-        chmod 755 tls
-        die "A tls mappa visszaállítása nem sikerült."
-    fi
-    chmod 755 tls
+    # The container user writes the key into a folder inside backup/ (700): open to that user,
+    # out of reach of every other local account. The finished folder then takes the place of tls.
+    local tls_new="$BACKUPS/.tmp-tls-$$" tls_old="$BACKUPS/.tls-elozo"
+    { mkdir "$tls_new" && chmod 777 "$tls_new"; } || die "Nem hozható létre ideiglenes mappa a tls-nek."
+    run_web -v "$tls_new":/restore-tls --entrypoint sh web -c 'tar xzf - -C /restore-tls' < "$source/tls.tar.gz" \
+        || die "A tls mappa visszaállítása nem sikerült."
+    chmod 755 "$tls_new"
+    rm -rf "$tls_old"
+    { mv tls "$tls_old" && mv "$tls_new" tls; } || die "A tls mappa cseréje nem sikerült; az előző tartalma: backup/.tls-elozo"
+    rm -rf "$tls_old"
     say "    tls mappa visszaállítva (a tulajdonos a konténer felhasználója)"
 
     if [[ $db_state == included ]]; then
-        bundled_db || die "A mentés a beépített adatbázist tartalmazza, de a visszaállított .env-ben nincs db profil."
         step "Adatbázis"
         docker compose up -d --wait --wait-timeout 300 mariadb >/dev/null 2>&1 || die "A mariadb nem indult el (docker compose logs mariadb)."
         docker compose exec -T mariadb sh -c "$DB_SHELL"'
             { echo "SET FOREIGN_KEY_CHECKS=0;"
               mariadb -u"$u" -N -B "$db" -e "SHOW TABLES" | sed "s/.*/DROP TABLE IF EXISTS \`&\`;/"
             } | mariadb -u"$u" "$db"' </dev/null || die "Az adatbázis kiürítése nem sikerült."
-        gzip -dc "$source/database.sql.gz" | docker compose exec -T mariadb sh -c "$DB_SHELL"'exec mariadb -u"$u" "$db"' \
+        # Sandbox mode: a dump is data, its client commands (\! shell, file access) are refused.
+        gzip -dc "$source/database.sql.gz" | docker compose exec -T mariadb sh -c "$DB_SHELL"'exec mariadb --sandbox -u"$u" "$db"' \
             || die "Az adatbázis visszatöltése nem sikerült."
-        say "    adatbázis visszatöltve"
+        # Sessions and cache as of the backup time would bring back sign-ins revoked since then
+        # (sign-out everywhere, closed accounts, lockouts): they start empty.
+        docker compose exec -T mariadb sh -c "$DB_SHELL"'
+            mariadb -u"$u" -N -B "$db" -e "SHOW TABLES" | grep -xE "sessions|cache|cache_locks" \
+                | sed "s/.*/DELETE FROM \`&\`;/" | mariadb -u"$u" "$db"' </dev/null \
+            || die "A munkamenetek és a gyorsítótár kiürítése nem sikerült."
+        say "    adatbázis visszatöltve; a munkamenetek és a gyorsítótár üresek"
     else
         say "    külső adatbázis: állítsa vissza a mentéssel egyidejű állapotra az adatbázis üzemeltetőjével"
     fi
 
     step "Storage kötet"
-    run_web --entrypoint sh web -c 'find /app/storage -mindepth 1 -delete && tar xzf - -C /app/storage' \
-        < "$source/storage.tar.gz" || die "A storage kötet visszaállítása nem sikerült."
+    # File sessions and the file cache go too, for the same reason as the tables above.
+    run_web --entrypoint sh web -c 'find /app/storage -mindepth 1 -delete && tar xzf - -C /app/storage &&
+        for d in /app/storage/framework/sessions /app/storage/framework/cache; do
+            if [ -d "$d" ]; then find "$d" -mindepth 1 -type f ! -name .gitignore -delete; fi
+        done' < "$source/storage.tar.gz" || die "A storage kötet visszaállítása nem sikerült."
     say "    storage kötet visszaállítva"
 
     step "Indítás"

@@ -252,6 +252,21 @@ it('accepts an ID token only once and audits the replay', function (): void {
         ->toMatchArray(['method' => 'sso.entra.mobile', 'reason' => 'invalid_credentials', 'detail' => 'token_replayed', 'email' => 'c@x.hu']);
 });
 
+it('does not take a re-encoded signature for a new ID token', function (string $variant): void {
+    Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    FakeOidc::fake([], ENTRA_ISSUER, ENTRA_DISCOVERY);
+    $idToken = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu'], ENTRA_ISSUER);
+
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'phone'])->assertOk();
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken.$variant, 'device_name' => 'thief'])->assertUnprocessable();
+
+    $this->assertDatabaseCount('personal_access_tokens', 1);
+    expect(AuditLog::query()->where('event', 'login.rejected')->sole()->context['detail'])->toBe('token_replayed');
+})->with([
+    'padding' => ['=='],
+    'stray character' => ['!'],
+]);
+
 it('accepts an ID token only within the configured minutes of its issue', function (int $maxAge, int $ageMinutes, bool $accepted): void {
     app(Settings::class)->set(SettingKey::SsoMobileTokenMaxAgeMinutes, $maxAge);
     Client::factory()->synced()->create(['email' => 'c@x.hu']);

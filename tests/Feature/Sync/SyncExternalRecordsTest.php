@@ -2,8 +2,10 @@
 
 use App\Auth\AccountLogin;
 use App\Auth\LoginRejectedException;
+use App\Auth\Passwordless\OneTimeCodes;
 use App\Auth\Role;
 use App\Clients\ClientLinks;
+use App\Enums\OneTimeCodePurpose;
 use App\Enums\PhoneNumberSource;
 use App\Enums\PhoneVerificationSource;
 use App\Enums\PrincipalType;
@@ -905,4 +907,58 @@ it('does not persist a pending classification change in a trial run', function (
 
     expect($run->stats['kind_pending'])->toBe(1)
         ->and(ExternalRecord::query()->where('external_id', 1)->first()->pending_kind)->toBeNull();
+});
+
+it('signs an account out everywhere when the directory changes who it is', function (string $change): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([row('1', 'a@x.hu'), row('2', 'b@x.hu')]));
+    $client = Client::query()->where('email', 'a@x.hu')->firstOrFail();
+    $client->createToken('phone');
+    $client->forceFill(['remember_token' => 'cookie-token'])->saveQuietly();
+    $epoch = (int) $client->fresh()->session_epoch;
+    ['token' => $link] = app(OneTimeCodes::class)->issueToken($client, OneTimeCodePurpose::MagicLink, 60, 'a@x.hu');
+
+    $sync->run(readerOf(match ($change) {
+        'renamed e-mail' => [row('1', 'uj@x.hu'), row('2', 'b@x.hu')],
+        'reissued record' => [row('9', 'a@x.hu'), row('2', 'b@x.hu')],
+        'conflicting e-mail' => [row('1', 'b@x.hu')],
+    }));
+
+    $client->refresh();
+    expect($client->tokens()->count())->toBe(0)
+        ->and($client->remember_token)->not->toBe('cookie-token')
+        ->and((int) $client->session_epoch)->toBeGreaterThan($epoch)
+        ->and(app(OneTimeCodes::class)->peekToken(OneTimeCodePurpose::MagicLink, $link))->toBeNull('a link sent to the old identity no longer works')
+        ->and(AuditLog::query()->where('event', 'account.access_revoked')->where('subject_id', $client->id)->value('context'))->toHaveKey('reason');
+})->with([
+    'renamed e-mail' => ['renamed e-mail'],
+    'reissued record' => ['reissued record'],
+    'conflicting e-mail' => ['conflicting e-mail'],
+]);
+
+it('signs a staff member out everywhere when the directory renames their e-mail, but not when it first adopts a local admin', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $user = User::factory()->withRole(Role::Agent)->create(['email' => 'regi@staff.hu']);
+    $user->createToken('cli');
+    $sync = app(SyncExternalRecords::class);
+
+    $sync->run(readerOf([row('7', 'regi@staff.hu')]));
+    expect($user->tokens()->count())->toBe(1, 'binding the existing account to its directory row changes nobody');
+
+    $sync->run(readerOf([row('7', 'uj@staff.hu')]));
+    expect($user->tokens()->count())->toBe(0)
+        ->and(AuditLog::query()->where('event', 'account.access_revoked')->where('subject_id', $user->id)->value('context')['reason'])->toBe('email_changed');
+});
+
+it('does not sign an unchanged account out on a repeated run', function (): void {
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(readerOf([row('1', 'a@x.hu')]));
+    $client = Client::query()->where('email', 'a@x.hu')->firstOrFail();
+    $client->createToken('phone');
+
+    $sync->run(readerOf([row('1', 'a@x.hu')]));
+
+    expect($client->tokens()->count())->toBe(1)
+        ->and(AuditLog::query()->where('event', 'account.access_revoked')->exists())->toBeFalse();
 });

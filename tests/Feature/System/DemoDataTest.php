@@ -5,7 +5,9 @@ use App\Auth\Role;
 use App\Enums\PrincipalType;
 use App\Models\Call;
 use App\Models\Client;
+use App\Models\SyncIdListItem;
 use App\Models\User;
+use App\Sync\IdList;
 use Database\Seeders\DemoSeeder;
 use Faker\Generator;
 
@@ -24,7 +26,9 @@ it('loads the documented demo accounts without the Faker dev dependency', functi
         ->and($anna->pin_hash)->not->toBeNull()
         ->and(Client::query()->where('email', 'bela@example.test')->sole()->implicit_package)->toBe('Basic')
         ->and(User::query()->where('email', 'like', '%@example.test')->count())->toBe(3)
-        ->and(Call::withTrashed()->count())->toBeGreaterThan(3);
+        ->and(Call::withTrashed()->count())->toBeGreaterThan(3)
+        ->and(SyncIdListItem::query()->count())->toBe(21)
+        ->and(app(IdList::class)->selectedIds())->toBe(['11', '21', '25', '36', '51']);
 
     expect(app(AccountLogin::class)->assertEligible($agent, PrincipalType::User, 'password'))->toBe($agent);
 });
