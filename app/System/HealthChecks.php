@@ -17,6 +17,7 @@ use App\Models\SyncRun;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Support\HuDate;
+use App\Support\OutboundProxy;
 use App\Sync\ApiTokens;
 use App\Sync\SyncExternalRecords;
 use Illuminate\Contracts\Cache\Repository as Cache;
@@ -46,9 +47,6 @@ class HealthChecks
         private readonly Retention $retention,
     ) {}
 
-    /**
-     * @return list<Check>
-     */
     public function loginLinkPreview(): Check
     {
         $label = __('Login link preview');
@@ -60,6 +58,27 @@ class HealthChecks
         return Check::warn('login_link_preview', $label, __('On: the panel shows every client login link it sends, so staff could sign in as the client. Switch it off before go-live.'));
     }
 
+    public function outboundProxy(): Check
+    {
+        $label = __('Outbound proxy');
+
+        if (($problem = OutboundProxy::problem()) !== null) {
+            return Check::fail('proxy', $label, $problem);
+        }
+
+        if (($proxy = OutboundProxy::display()) === null) {
+            return Check::ok('proxy', $label, __('None: outbound requests go direct.'));
+        }
+
+        return Check::ok('proxy', $label, __('Outbound requests go through :proxy; direct: :hosts.', [
+            'proxy' => $proxy,
+            'hosts' => implode(', ', [...OutboundProxy::ALWAYS_DIRECT, ...OutboundProxy::exceptions()]),
+        ]));
+    }
+
+    /**
+     * @return list<Check>
+     */
     public function all(): array
     {
         $checks = [
@@ -77,6 +96,7 @@ class HealthChecks
             'package_overrides' => [__('Package overrides'), $this->packageOverrides(...)],
             'shared_numbers' => [__('Shared phone numbers'), $this->sharedPhoneNumbers(...)],
             'oidc' => [__('Single sign-on'), $this->oidc(...)],
+            'proxy' => [__('Outbound proxy'), $this->outboundProxy(...)],
             'login_link_preview' => [__('Login link preview'), $this->loginLinkPreview(...)],
             'storage' => [__('Storage'), $this->storage(...)],
             'retention' => [__('Data retention'), $this->retention(...)],
@@ -118,6 +138,7 @@ class HealthChecks
             'api_keys' => __('Red: a mobile app backend key has no signing secret, so every request with it is refused (signing is mandatory for this scope). Issue one under API keys › Signing secret and hand it to the operator of the mobile backend, or revoke the key if it is not used. Yellow: a scope (call center or mobile backend) has no active key, so that partner cannot call in; create one under API keys and hand it over, or ignore this while the integration is not live yet.'),
             'package_overrides' => __('Informational: these clients carry a temporary manual package. Nothing to fix, but review the list now and then and end an override EMD has caught up with.'),
             'shared_numbers' => __('A number on file for more than one client recognises nobody in the phone menu, so those callers are not asked for their PIN. Open Shared phone numbers, decide whose number it is and remove it from the others; a number EMD lists for several people has to be corrected in the directory.'),
+            'proxy' => __('Red: HDID_HTTP_PROXY is not a usable address; write it as http://host:port, with a password as http://user:password@host:port (special characters percent-encoded, @ as %40). Proxies with Windows (NTLM) sign-in are not supported. Internal servers reached without the proxy (master data, ADFS, Exchange, SMS gateway) go into HDID_NO_PROXY, comma-separated. After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM and php artisan queue:restart.'),
             'oidc' => __('A provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*). Either fill in the configuration or switch the provider off, otherwise the login button leads to an error.'),
             'storage' => __('Red: the public disk is not writable, fix the permissions of storage/app/public. Yellow: run "php artisan storage:link" on the server, otherwise uploaded logos and images do not show.'),
             'retention' => __('The daily "hdid:prune" task has not run for days. It runs through the scheduler, so check that tile first; run "php artisan hdid:prune" by hand to catch up.'),

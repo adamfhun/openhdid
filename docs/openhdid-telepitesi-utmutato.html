@@ -92,8 +92,8 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.4.3 · 2026. október 10.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.3 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.4.4 · 2026. október 10.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.4 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv, felhasználói kézikönyv</span></div>
 </div>
@@ -165,7 +165,7 @@ sudo usermod -aG docker &lt;üzemeltető felhasználó&gt;</code></pre>
     <li>Bejövő: 443 a böngészőknek, a telefonközpontnak és a mobil kiszolgálónak; 80 csak a böngészős HTTPS-átirányításhoz kell.</li>
     <li>Kimenő, a konténerekből: Exchange (EWS) vagy SMTP, Ozeki SMS-átjáró, Microsoft Entra és ADFS, az ügyféltörzs gépi felülete, valamint a DNS.</li>
     <li>Az image letöltéséhez a <code>ghcr.io</code> kell; zárt hálózatban saját registrybe tükrözhető.</li>
-    <li><strong>Proxy mögött:</strong> a Docker-démon nem örökli a felhasználó <code>http_proxy</code>/<code>https_proxy</code> változóit, a letöltés 30 másodperc után időtúllépéssel elhal; a proxyt systemd drop-innal kell megadni (üzemeltetési kézikönyv 6. fejezet). Az alkalmazás kimenő kapcsolatai (Exchange, SMS-átjáró, SSO, ügyféltörzs) proxyval nincsenek kipróbálva, közvetlen kijáratot tervezzen hozzájuk.</li>
+    <li><strong>Proxy mögött:</strong> a Docker-démon nem örökli a felhasználó <code>http_proxy</code>/<code>https_proxy</code> változóit, a letöltés 30 másodperc után időtúllépéssel elhal; a proxyt systemd drop-innal kell megadni (üzemeltetési kézikönyv 6. fejezet). Az alkalmazás kimenő kapcsolatai (Exchange, SMS-átjáró, ADFS, Entra, ügyféltörzs) ettől függetlenül a <code>HDID_HTTP_PROXY</code> kulccsal mennek proxyn át, a <code>HDID_NO_PROXY</code> listában felsorolt belső kiszolgálók kivételével (lásd a „Külső rendszerek” táblázatot). A konténer örökölt <code>HTTP_PROXY</code>/<code>HTTPS_PROXY</code> változóit az alkalmazás nem használja.</li>
 </ul>
 <div class="callout gold"><p><strong>Kliens-IP a Docker mögött.</strong> Az IP-alapú forgalomkorlát és az auditnapló a kérés valódi forráscímére épül. IPv4-en a Docker megőrzi a kliens címét. IPv6-on, kikapcsolt <code>ip6tables</code> vagy a userland-proxy használata mellett viszont a konténer a Docker-átjáró címét látja. Telepítés után a <code>docker compose logs web</code> access logjában ellenőrizze, hogy az <code>ip</code> mező a valódi kliens címét mutatja-e. Ha nem, kapcsolja be a Docker IPv6-NAT-ját, vagy tegye a webet egy terheléselosztó mögé (<code>OPENHDID_TLS=off</code>, 6.5 pont).</p></div>
 
@@ -296,6 +296,8 @@ Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, vala
 <div class="tablewrap"><table>
 <thead><tr><th>Kulcsok</th><th>Jelentés</th></tr></thead>
 <tbody>
+<tr><td><code>HDID_HTTP_PROXY</code></td><td>üres</td><td>Kimenő proxy az alkalmazás minden HTTP(S)-kéréséhez (ügyféltörzs, Exchange, Ozeki SMS, ADFS, Entra), a web-, a worker- és az ütemező-konténerből egyaránt. Alakja <code>http://proxy.example.org:3128</code>, jelszóval <code>http://felhasznalo:jelszo@proxy.example.org:3128</code>; a felhasználónév és a jelszó különleges karakterei %-kódolva (<code>@</code> = <code>%40</code>, <code>$</code> = <code>%24</code>, <code>#</code> = <code>%23</code>). Windows-hitelesítésű (NTLM) proxy nem támogatott. Üresen minden kérés közvetlenül megy. Hibás címmel a konténer nem indul; a használt proxyt (jelszó nélkül) a Rendszerállapot „Kimenő proxy” kártyája mutatja. Az SMTP, az adatbázis és a Valkey nem HTTP, rájuk nem hat; az image letöltésére sem (az a Docker-démon proxyján megy).</td></tr>
+<tr><td><code>HDID_NO_PROXY</code></td><td>üres</td><td>A proxy nélkül elért kiszolgálók vesszővel: név (az aldomaineket is lefedi, például <code>belso.example.org</code> vagy <code>.belso.example.org</code>), IP-cím vagy tartomány (<code>10.0.0.0/8</code>), <code>*</code> = mind. A <code>localhost</code>, a <code>127.0.0.0/8</code> és a <code>::1</code> mindig közvetlen. Ide kerülnek a belső kiszolgálók: tipikusan az ügyféltörzs, az ADFS, a helyi Exchange és az SMS-átjáró.</td></tr>
 <tr><td><code>MAIL_MAILER</code></td><td><code>ews</code> / <code>smtp</code> / <code>log</code></td><td>Levelezési illesztő: <code>ews</code> az Exchange webszolgáltatás, <code>smtp</code> SMTP-kiszolgáló. A <code>log</code> csak naplóba ír, élesben a rendszerállapot figyelmeztet. Próba: <code>hdid:test-mail cím --now</code> (11. fejezet).</td></tr>
 <tr><td><code>MAIL_FROM_ADDRESS</code>, <code>MAIL_FROM_NAME</code></td><td>feladó cím és név</td><td>EWS-nél a feladó postafiók legyen az EWS-fiók, vagy annak legyen küldési joga rá.</td></tr>
 <tr><td><code>EWS_URL</code>, <code>EWS_AUTH</code>, <code>EWS_USERNAME</code>, <code>EWS_PASSWORD</code></td><td><code>https://…/EWS/Exchange.asmx</code>; <code>basic</code> / <code>ntlm</code> / <code>oauth</code></td><td>Az Exchange webszolgáltatás címe és hitelesítési módja; <code>basic</code> és <code>ntlm</code> esetén a postafiók felhasználója és jelszava. Tartományi felhasználónév (<code>DOMAIN\user</code>) idézőjel nélkül vagy aposztrófok között írandó.</td></tr>
@@ -519,7 +521,7 @@ openssl s_client -connect $H:443 -servername $H -tls1_2 -brief &lt;/dev/null    
 <div class="tablewrap"><table>
 <thead><tr><th>Terület</th><th>Védelem</th></tr></thead>
 <tbody>
-<tr><td>A02 hibás konfiguráció, ASVS V13</td><td>Nem root (uid 82), csak olvasható gyökér-fájlrendszer, minden Linux-képesség elvéve, <code>no-new-privileges</code>, setuid-bitek nélkül. Nincs Server/X-Powered-By fejléc, saját hibaoldal, csak az <code>index.php</code> fut. Hibás éles beállítással (debug, <code>*</code> proxy, nem biztonságos süti) a konténer nem indul.</td></tr>
+<tr><td>A02 hibás konfiguráció, ASVS V13</td><td>Nem root (uid 82), csak olvasható gyökér-fájlrendszer, minden Linux-képesség elvéve, <code>no-new-privileges</code>, setuid-bitek nélkül. Nincs Server/X-Powered-By fejléc, saját hibaoldal, csak az <code>index.php</code> fut. Ismeretlen <code>APP_ENV</code> értékkel, hibás éles beállítással (debug, mindenkit megbízhatónak vevő <code>TRUSTED_PROXIES</code>, nem biztonságos süti, üres adatbázis- vagy Redis-jelszó) és hibás kimenő proxycímmel (<code>HDID_HTTP_PROXY</code>) a konténer nem indul.</td></tr>
 <tr><td>A03 ellátási lánc, A08 integritás, ASVS V15</td><td>Minden alapimage digesttel, minden letöltés SHA-256-tal rögzítve; az nginx-forrás PGP-aláírással ellenőrzött; lockfájlos build, <code>npm ci --ignore-scripts</code>. Kiadás előtt: gitleaks, <code>composer audit</code>, <code>npm audit</code>, Hadolint, Trivy (javítható HIGH/CRITICAL leletnél a kiadás megáll). Aláírt image (cosign), build provenance és SBOM-igazolás; a CI action-jei commit-SHA-ra rögzítve.</td></tr>
 <tr><td>A04 kriptográfia, ASVS V12</td><td>Kizárólag TLS 1.3, ML-KEM hibrid kulcscsere, HSTS, indításkori tanúsítvány-ellenőrzés; belső CA a tanúsítványtár mellé, a TLS-ellenőrzés nem kapcsolható ki.</td></tr>
 <tr><td>Titkok, ASVS V13.3</td><td>Az image-ben nincs titok (gitleaks és Trivy titokkeresés). Titok fájlból (<code>*_FILE</code>); konfigurációs gyorsítótár csak memóriában; a migrációs adatbázisfiók jelszava csak a <code>mariadb</code> és a <code>migrate</code> szolgáltatásnál.</td></tr>
@@ -581,7 +583,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.4.3 · 2026. október 10.</div>
+<div class="foot">OpenHDID telepítési útmutató 1.4.4 · 2026. október 10.</div>
 </div>
 
 </body>

@@ -4,6 +4,38 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.4.4] – 2026-10-10
+
+### Magyar
+**Frissítés előtt:** két új, választható telepítési kulcs: `HDID_HTTP_PROXY` és `HDID_NO_PROXY` (üresen minden marad a régiben). Ha a konténerek eddig a környezetből (például a Docker kliens `proxies` beállításából) kapott `HTTP_PROXY`/`HTTPS_PROXY` változón keresztül értek ki, ezt mostantól a `HDID_HTTP_PROXY` adja: a worker és az ütemező eddig követte a környezet proxyját, a web nem, az alkalmazás mostantól egyiket sem használja.
+
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- ÜZ-07: a telepítés megadhat egy kimenő proxyt, amelyen az alkalmazás minden kimenő kérése (ügyféltörzs, Exchange, SMS-átjáró, ADFS, Entra) megy, a felsorolt belső kiszolgálók és maga a szerver kivételével; felhasználónévvel és jelszóval is, Windows-hitelesítésű (NTLM) proxy nélkül (megrendelői döntés); proxy nélkül minden kérés közvetlenül megy.
+
+Részletek:
+- Új telepítési kulcsok: `HDID_HTTP_PROXY` (például `http://proxy.example.org:3128`, jelszóval `http://felhasznalo:jelszo@proxy.example.org:3128`, a különleges karakterek %-kódolva) és `HDID_NO_PROXY` (vesszővel: név az aldomainjeivel, IP-cím, `10.0.0.0/8` alakú tartomány; a `localhost`, a `127.0.0.0/8` és a `::1` mindig közvetlen). A web-, a worker- és az ütemező-konténer egyformán használja; az SMTP, az adatbázis és a Valkey nem HTTP, az image letöltése továbbra is a Docker-démon proxyján megy.
+- Hibás `HDID_HTTP_PROXY` címmel (nem támogatott séma, hiányzó gép, útvonal) a konténer nem indul; az érték, mivel jelszót tartalmazhat, nem kerül a naplóba.
+- Új Rendszerállapot-kártya: „Kimenő proxy” (a cím jelszó nélkül és a kivételek; hibás címnél piros).
+- Az ügyféltörzs kapcsolódási hibája proxyn át a proxyt is megnevezi, és megmondja, hogy a proxy nem érhető el, felhasználónevet és jelszót kér (407), nem engedi a címet (403), vagy nem éri el a címet (5xx: belső kiszolgáló a `HDID_NO_PROXY`-ba).
+- `TROUBLESHOOTING.md`: a 4. pont mutatja, milyen proxyt használ az alkalmazás, a 8. pont ügyféltörzs-ellenőrzése proxyn át elért címnél az utat és a HTTPS-próbát adja; a felhasználó proxyváltozóit kiíró parancs a jelszót `***`-gal takarja.
+- A Docker-démon proxyja és az alkalmazás proxyja külön beállítás; az OpenHDID telepítési útmutató és üzemeltetési kézikönyv mindkettőt leírja.
+- A dokumentumok verziója 1.4.4.
+
+### English
+**Before upgrading:** two new, optional deployment keys: `HDID_HTTP_PROXY` and `HDID_NO_PROXY` (empty keeps everything as before). If the containers reached out through `HTTP_PROXY`/`HTTPS_PROXY` taken from the environment (for example the Docker client's `proxies` setting), `HDID_HTTP_PROXY` now has to give it: the worker and the scheduler used to follow the environment's proxy and the web container did not; the application now uses neither.
+
+Rule changes in one sentence each (with the specification's identifiers):
+- ÜZ-07: a deployment can name an outbound proxy for every outbound request of the application (master data, Exchange, SMS gateway, ADFS, Entra), except the listed internal servers and the server itself; with a user name and password too, without Windows (NTLM) proxy sign-in (owner decision); without one every request goes direct.
+
+Details:
+- New deployment keys: `HDID_HTTP_PROXY` (for example `http://proxy.example.org:3128`, with a password `http://user:password@proxy.example.org:3128`, special characters percent-encoded) and `HDID_NO_PROXY` (comma-separated: a name with its subdomains, an IP address, a range such as `10.0.0.0/8`; `localhost`, `127.0.0.0/8` and `::1` always go direct). The web, worker and scheduler containers use it alike; SMTP, the database and Valkey are not HTTP, and pulling the image still goes through the Docker daemon's proxy.
+- With an unusable `HDID_HTTP_PROXY` (unsupported scheme, no host, a path) the container does not start; the value is never logged, as it may carry a password.
+- New status tile: "Outbound proxy" (the address without the password and the exceptions; red for an unusable address).
+- A master-data connection failure through the proxy names the proxy too and tells whether the proxy is unreachable, asks for a user name and password (407), refuses the address (403) or cannot reach it (5xx: an internal server belongs into `HDID_NO_PROXY`).
+- `TROUBLESHOOTING.md`: point 4 shows which proxy the application uses, the master-data check of point 8 gives the route and the HTTPS test for an address reached through the proxy; the command printing the user's proxy variables masks the password with `***`.
+- The Docker daemon's proxy and the application's proxy are separate settings; the OpenHDID installation guide and operations manual (Hungarian) describe both.
+- The documents carry version 1.4.4.
+
 ## [1.4.3] – 2026-10-10
 
 ### Magyar

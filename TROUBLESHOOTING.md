@@ -57,14 +57,15 @@ docker compose run --rm --no-deps web artisan hdid:health
 
 ## 4. Image-letöltés és proxy / Image pull and proxy
 
-A Docker-démon nem örökli a felhasználó proxyját. Az első két sor megmutatja, van-e proxy, és látja-e a démon;
-a két `curl` közül a `HTTP/2 401` a jó válasz (IPv4, illetve IPv6).
+A Docker-démon nem örökli a felhasználó proxyját. Az első két sor megmutatja, van-e proxy (a jelszó helyett
+`***`), és látja-e a démon; a két `curl` közül a `HTTP/2 401` a jó válasz (IPv4, illetve IPv6).
 
-The Docker daemon does not inherit the user's proxy. The first two lines show whether there is a proxy and
-whether the daemon sees it; for the two `curl` calls `HTTP/2 401` is the good answer (IPv4 and IPv6).
+The Docker daemon does not inherit the user's proxy. The first two lines show whether there is a proxy (with
+`***` for a password) and whether the daemon sees it; for the two `curl` calls `HTTP/2 401` is the good answer
+(IPv4 and IPv6).
 
 ```sh
-env | grep -i proxy
+env | grep -i proxy | sed -E 's#//[^@/]*@#//***@#'
 docker info | grep -i proxy
 curl -4 -sSI https://ghcr.io/v2/ | head -1
 curl -6 -sSI https://ghcr.io/v2/ | head -1
@@ -83,6 +84,18 @@ sudo systemctl daemon-reload && sudo systemctl restart docker
 # eltávolítás / removal
 sudo rm /etc/systemd/system/docker.service.d/http-proxy.conf
 sudo systemctl daemon-reload && sudo systemctl restart docker
+```
+
+Az alkalmazás kimenő kérései (ügyféltörzs, Exchange, Ozeki SMS, ADFS, Entra) ettől függetlenül a `.env`
+`HDID_HTTP_PROXY` kulcsán mennek, a `HDID_NO_PROXY` kivételeivel; a konténer `HTTP_PROXY` változóit nem
+használják. Mit használ az alkalmazás (a jelszó nélkül):
+
+The application's outbound requests (master data, Exchange, Ozeki SMS, ADFS, Entra) use `HDID_HTTP_PROXY` in
+`.env` instead, except for the `HDID_NO_PROXY` hosts; they ignore the container's `HTTP_PROXY` variables. What
+the application uses (without the password):
+
+```sh
+docker compose exec web php artisan tinker --execute '$c = app(App\System\HealthChecks::class)->outboundProxy(); echo $c->status->value, ": ", $c->detail, PHP_EOL;'
 ```
 
 ## 5. Docker-jogosultság / Docker permissions
@@ -168,17 +181,24 @@ docker compose up -d --force-recreate
 ## 8. Ügyféltörzs elérhetősége / Master data (EMD) reachability
 
 Minden beállított ügyféltörzs-cím a konténerből: DNS, TCP és HTTPS, a nyers hibaüzenettel
-(cURL 6: DNS, 7: elutasítva, 28: időtúllépés, 60: tanúsítvány).
+(cURL 6: DNS, 7: elutasítva, 28: időtúllépés, 60: tanúsítvány). Proxyn át elért címnél (`HDID_HTTP_PROXY`)
+a nevet a proxy oldja fel, ezért ott csak az út és a HTTPS látszik; a 7-es hiba ekkor a proxyra vonatkozik,
+a `CONNECT tunnel failed, response 407` jelszót kér, a `403` tiltott címet, az `5xx` el nem ért (belső) címet
+jelent, ez utóbbi a `HDID_NO_PROXY` listába való.
 
 Every configured master-data address from inside the container: DNS, TCP and HTTPS with the raw error
-(cURL 6: DNS, 7: refused, 28: timeout, 60: certificate).
+(cURL 6: DNS, 7: refused, 28: timeout, 60: certificate). For an address reached through the proxy
+(`HDID_HTTP_PROXY`) the proxy resolves the name, so only the route and HTTPS are shown; error 7 then concerns
+the proxy, `CONNECT tunnel failed, response 407` means it wants a password, `403` a forbidden address, `5xx`
+an address it cannot reach (an internal one, which belongs into `HDID_NO_PROXY`).
 
 ```sh
 docker compose exec web php artisan tinker --execute 'foreach (["login_url","refresh_url","id_list_url","api_url"] as $k) { $u = config("hdid.sync.$k"); if (! $u) { echo "$k: nincs beállítva
-"; continue; } $h = parse_url($u, PHP_URL_HOST); $p = parse_url($u, PHP_URL_PORT) ?: (parse_url($u, PHP_URL_SCHEME) === "http" ? 80 : 443); $ip = filter_var($h, FILTER_VALIDATE_IP) ? $h : gethostbyname($h); echo "$k: $h:$p
-  DNS:   ".($ip === $h && ! filter_var($h, FILTER_VALIDATE_IP) ? "NEM OLDÓDIK FEL" : $ip)."
+"; continue; } $h = parse_url($u, PHP_URL_HOST); $p = parse_url($u, PHP_URL_PORT) ?: (parse_url($u, PHP_URL_SCHEME) === "http" ? 80 : 443); echo "$k: $h:$p
+"; if (App\Support\OutboundProxy::routes($u)) { echo "  Út:    proxyn át (".App\Support\OutboundProxy::display().")
+"; } else { $ip = filter_var($h, FILTER_VALIDATE_IP) ? $h : gethostbyname($h); echo "  DNS:   ".($ip === $h && ! filter_var($h, FILTER_VALIDATE_IP) ? "NEM OLDÓDIK FEL" : $ip)."
 "; $s = @fsockopen($ip, $p, $en, $es, 5); echo "  TCP:   ".($s ? "kapcsolódik" : "HIBA ($es)")."
-"; try { $r = Illuminate\Support\Facades\Http::timeout(10)->connectTimeout(5)->get($u); echo "  HTTPS: válaszol (HTTP ".$r->status().")
+"; } try { $r = Illuminate\Support\Facades\Http::timeout(10)->connectTimeout(5)->get($u); echo "  HTTPS: válaszol (HTTP ".$r->status().")
 "; } catch (Throwable $e) { echo "  HTTPS: ".preg_replace("/ \(see .*\$/s", "", $e->getMessage())."
 "; } }'
 ```

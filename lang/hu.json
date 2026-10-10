@@ -1454,5 +1454,19 @@
     "Signing secret (shown once as well; hand it over together with the key):": "Aláíró titok (ez is csak most látszik; a kulccsal együtt adja át):",
     "API key and signing secret created": "API kulcs és aláíró titok létrehozva",
     "A mobile app backend key always signs its requests; issue a new secret instead.": "A mobilalkalmazás kiszolgálójának kulcsa mindig aláírja a kéréseit; helyette adjon ki új titkot.",
-    "Without a signing secret, so every request with them is refused: :names": "Aláíró titok nélkül, ezért minden kérésük elutasítva: :names"
+    "Without a signing secret, so every request with them is refused: :names": "Aláíró titok nélkül, ezért minden kérésük elutasítva: :names",
+    "an invalid address": "érvénytelen cím",
+    "HDID_HTTP_PROXY is not a proxy address such as http://proxy.example.org:3128 (the value is not shown, it may contain a password).": "A HDID_HTTP_PROXY nem proxycím, mint például http://proxy.example.org:3128 (az értéket nem mutatjuk, jelszót tartalmazhat).",
+    ":target via the proxy :proxy": ":target, proxy: :proxy",
+    "the proxy name does not resolve (DNS); check HDID_HTTP_PROXY": "a proxy neve nem oldható fel (DNS); ellenőrizze a HDID_HTTP_PROXY értékét",
+    "the proxy refused the connection or is unreachable from the container (HDID_HTTP_PROXY, firewall, port)": "a proxy elutasította a kapcsolatot, vagy a konténerből nem érhető el (HDID_HTTP_PROXY, tűzfal, port)",
+    "no answer in time, from the proxy or from the address behind it": "nem jött válasz időben a proxytól vagy a mögötte lévő címtől",
+    "the proxy asks for a user name and password: give them in HDID_HTTP_PROXY (http://user:password@host:port); proxies with Windows (NTLM) sign-in are not supported": "a proxy felhasználónevet és jelszót kér: adja meg őket a HDID_HTTP_PROXY értékében (http://felhasznalo:jelszo@gep:port); Windows-hitelesítésű (NTLM) proxy nem támogatott",
+    "the proxy does not allow this address: ask its administrator to allow it, or list an internal server in HDID_NO_PROXY": "a proxy nem engedi ezt a címet: kérje az engedélyezését a proxy gazdájától, belső kiszolgálónál pedig vegye fel a HDID_NO_PROXY listába",
+    "the proxy could not reach the address (HTTP :status); an internal server belongs in HDID_NO_PROXY": "a proxy nem érte el a címet (HTTP :status); belső kiszolgáló a HDID_NO_PROXY listába való",
+    "the proxy refused the connection (HTTP :status)": "a proxy elutasította a kapcsolatot (HTTP :status)",
+    "Outbound proxy": "Kimenő proxy",
+    "None: outbound requests go direct.": "Nincs: a kimenő kérések közvetlenül mennek.",
+    "Outbound requests go through :proxy; direct: :hosts.": "A kimenő kérések a :proxy proxyn át mennek; közvetlenül: :hosts.",
+    "Red: HDID_HTTP_PROXY is not a usable address; write it as http://host:port, with a password as http://user:password@host:port (special characters percent-encoded, @ as %40). Proxies with Windows (NTLM) sign-in are not supported. Internal servers reached without the proxy (master data, ADFS, Exchange, SMS gateway) go into HDID_NO_PROXY, comma-separated. After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM and php artisan queue:restart.": "Piros: a HDID_HTTP_PROXY nem használható cím; alakja http://gep:port, jelszóval http://felhasznalo:jelszo@gep:port (a különleges karakterek %-kódolva, a @ például %40). Windows-hitelesítésű (NTLM) proxy nem támogatott. A proxy nélkül elért belső kiszolgálók (ügyféltörzs, ADFS, Exchange, SMS-átjáró) vesszővel elválasztva a HDID_NO_PROXY listába kerülnek. Módosítás után a szolgáltatásokat újra kell indítani: docker compose up -d, hagyományos telepítésnél php artisan config:cache, majd a PHP-FPM újraindítása és php artisan queue:restart."
 }

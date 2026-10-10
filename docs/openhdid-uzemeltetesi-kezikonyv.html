@@ -92,8 +92,8 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">A konténeres OpenHDID napi üzemeltetése: ellenőrzés, szolgáltatások kezelése, naplók és felügyelet, ütemezett feladatok, a leggyakoribb helyzetek, mentés és visszaállítás, frissítés, skálázás és biztonsági karbantartás.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.4.3 · 2026. október 10.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.3 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.4.4 · 2026. október 10.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.4 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>telepítési útmutató, felhasználói kézikönyv</span></div>
 </div>
@@ -229,7 +229,7 @@ docker compose logs --no-log-prefix web | grep '"status":429' | wc -l  # forgalo
 <p>Az összes diagnosztikai parancs egy helyen, másolható formában: a kiadás <code>TROUBLESHOOTING.md</code> mellékletében (állapot, újrainduló szolgáltatás, proxy, Docker-jogosultság, fájltulajdonos, ügyféltörzs-elérés és -belépés, tanúsítvány-lánc és belső CA, egyszeri bejelentkezés, a belépés elutasításának oka, levél és SMS, mentés).</p>
 <h3>A konténer nem indul el vagy újraindulgat</h3>
 <ol class="steps">
-    <li><code>docker compose ps</code> és <code>docker compose logs --tail=50 &lt;szolgáltatás&gt;</code>. Az indítószkript <code>openhdid: ERROR:</code> sora megnevezi az okot: hiányzó vagy hibás <code>APP_KEY</code>, nem https <code>APP_URL</code>, hiányzó adatbázis-adat, élesben tiltott beállítás, tanúsítványhiba, nem írható <code>storage</code> kötet.</li>
+    <li><code>docker compose ps</code> és <code>docker compose logs --tail=50 &lt;szolgáltatás&gt;</code>. Az indítószkript <code>openhdid: ERROR:</code> sora megnevezi az okot: hiányzó vagy hibás <code>APP_KEY</code>, nem https <code>APP_URL</code>, hiányzó adatbázis-adat, élesben tiltott beállítás, hibás kimenő proxycím (<code>HDID_HTTP_PROXY</code>; az értéket a napló nem írja ki), tanúsítványhiba, nem írható <code>storage</code> kötet.</li>
     <li>Ha csak a <code>web</code> indul újra („restarting”), az ok a tanúsítvány vagy az nginx: a <code>docker compose run --rm --no-deps web tls-check</code> futó <code>web</code> nélkül is ellenőrzi a fájlokat (hiányzó <code>fullchain.pem</code>/<code>privkey.pem</code>, nem olvasható kulcs, névegyezés, csonka lánc). Az <code>artisan</code> parancsok ekkor is futnak: <code>docker compose run --rm --no-deps web artisan hdid:make-admin …</code>.</li>
     <li>A <code>migrate</code> hibájánál a többi szolgáltatás nem indul: <code>docker compose logs migrate</code>. Jellemző okok: az adatbázis nem érhető el 120 másodpercen belül, hibás migrációs jelszó a <code>db.env</code>-ben, vagy a migrációs fióknak nincs joga.</li>
     <li>Javítás után: <code>docker compose up -d</code>.</li>
@@ -244,6 +244,17 @@ EOF
 sudo systemctl daemon-reload &amp;&amp; sudo systemctl restart docker
 docker info | grep -i proxy</code></pre>
 <p>Ha nincs proxy, az IPv6 lehet félig beállítva: a <code>curl -4</code> és a <code>curl -6</code> a <code>https://ghcr.io/v2/</code> címre mutatja meg (<code>HTTP/2 401</code> a jó válasz); az IPv4 előnyben részesítése a <code>/etc/gai.conf</code> <code>precedence ::ffff:0:0/96 100</code> sorával.</p>
+<h3>Az alkalmazás kimenő kérései proxy mögött</h3>
+<p>Az image letöltése a Docker-démon proxyján megy (előző pont), az alkalmazás kimenő kérései (ügyféltörzs, Exchange, Ozeki SMS, ADFS, Entra) viszont a <code>.env</code> <code>HDID_HTTP_PROXY</code> kulcsán; a konténer <code>HTTP_PROXY</code>/<code>HTTPS_PROXY</code> változóit az alkalmazás nem használja. A használt proxyt (jelszó nélkül) és a kivételeket a Rendszerállapot „Kimenő proxy” kártyája mutatja, parancssorból:</p>
+<pre><code>docker compose exec web php artisan tinker --execute '$c = app(App\System\HealthChecks::class)-&gt;outboundProxy(); echo $c-&gt;status-&gt;value, ": ", $c-&gt;detail, PHP_EOL;'</code></pre>
+<p>Az ügyféltörzs kapcsolódási hibája proxyn át a proxyt is megnevezi („…, proxy: http://proxy.example.org:3128: …”), és az okot:</p>
+<ul>
+    <li><strong>a proxy elutasította a kapcsolatot vagy nem érhető el, illetve a neve nem oldható fel:</strong> a <code>HDID_HTTP_PROXY</code> gépneve vagy portja hibás, vagy a tűzfal nem engedi a konténerből;</li>
+    <li><strong>a proxy felhasználónevet és jelszót kér (407):</strong> <code>http://felhasznalo:jelszo@gep:port</code> alakban kell megadni, a különleges karakterek %-kódolva (<code>@</code> = <code>%40</code>, <code>$</code> = <code>%24</code>, <code>#</code> = <code>%23</code>); Windows-hitelesítésű (NTLM) proxy nem támogatott;</li>
+    <li><strong>a proxy nem engedi a címet (403):</strong> a proxy gazdájának kell engedélyeznie, belső kiszolgálónál a <code>HDID_NO_PROXY</code> a megoldás;</li>
+    <li><strong>a proxy nem érte el a címet (5xx):</strong> jellemzően belső kiszolgáló, amelyet a proxy nem lát: vegye fel a <code>HDID_NO_PROXY</code> listába (név, <code>.domain</code>, IP-cím vagy <code>10.0.0.0/8</code> alakú tartomány).</li>
+</ul>
+<p>A <code>.env</code> módosítása után <code>docker compose up -d</code>; a konténerek az új értékkel indulnak újra. Az ügyféltörzs-címek proxytudatos ellenőrzése a <code>TROUBLESHOOTING.md</code> 8. pontjában áll.</p>
 <h3>„permission denied … docker.sock”</h3>
 <p>A futtató felhasználó nincs a <code>docker</code> csoportban, vagy a tagság még nem él: <code>sudo usermod -aG docker &lt;felhasználó&gt;</code>, majd új bejelentkezés (vagy <code>newgrp docker</code>); ellenőrzés <code>id</code> és <code>docker ps</code>. Ha a Docker kliens a Podman socketjét keresi, a korábbi <code>DOCKER_HOST</code> változót kell törölni (<code>unset DOCKER_HOST</code>, a profilból is), és a <code>docker context use default</code> parancsot futtatni.</p>
 <h3>Belépés elutasítva „hibás felhasználónév vagy jelszó” üzenettel</h3>
@@ -359,8 +370,8 @@ Kérés: POST ".config("hdid.sync.login_url")."
 </ul>
 <ol class="steps">
     <li><strong>Az image ellenőrzése</strong> (választható, ajánlott):
-<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.4.3 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.4.3 \
+<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.4.4 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.4.4 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre></li>
     <li><strong>Mentés:</strong> <code>./backup.sh</code> (7. fejezet).</li>
@@ -482,7 +493,7 @@ cosign verify ghcr.io/adamfhun/openhdid:1.4.3 \
 <tr><td>SemVer</td><td>Semantic Versioning – szemantikus verziózás (fő.al.javító).</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID üzemeltetési kézikönyv 1.4.3 · 2026. október 10.</div>
+<div class="foot">OpenHDID üzemeltetési kézikönyv 1.4.4 · 2026. október 10.</div>
 </div>
 
 </body>

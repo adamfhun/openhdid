@@ -168,6 +168,21 @@ function check_env(string $role): void
     if ($production && $trustAll !== []) {
         $errors[] = 'TRUSTED_PROXIES='.implode(',', $trustAll).' trusts every address and is not allowed in production; list the load balancer addresses.';
     }
+    // The application's outbound requests (master data, Exchange, SMS, ADFS,
+    // Entra) go through HDID_HTTP_PROXY; an address cURL cannot use would fail
+    // each of them. The value is never echoed: it may carry a password.
+    $outboundProxy = env_value('HDID_HTTP_PROXY');
+    if ($outboundProxy !== null) {
+        $parts = parse_url(str_contains($outboundProxy, '://') ? $outboundProxy : 'http://'.$outboundProxy);
+        if ($parts === false
+            || ! in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https', 'socks4', 'socks4a', 'socks5', 'socks5h'], true)
+            || empty($parts['host'])
+            || ! in_array($parts['path'] ?? '', ['', '/'], true)
+            || isset($parts['query'])
+            || isset($parts['fragment'])) {
+            $errors[] = 'HDID_HTTP_PROXY must be a proxy address such as http://proxy.example.org:3128 or http://user:password@proxy.example.org:3128 (the value is not shown, it may contain a password).';
+        }
+    }
     if ($production && ! env_bool('SESSION_SECURE_COOKIE', true)) {
         $errors[] = 'SESSION_SECURE_COOKIE=false is not allowed in production.';
     }

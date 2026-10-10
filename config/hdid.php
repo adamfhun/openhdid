@@ -72,6 +72,16 @@ return [
         'default_region' => env('HDID_PHONE_REGION', 'HU'),
     ],
 
+    // Proxy of the application's outbound HTTP(S) requests (master data, Exchange, SMS gateway, ADFS,
+    // Entra), e.g. http://proxy.example.org:3128, with a password http://user:password@proxy.example.org:3128.
+    // Empty: every request goes direct, whatever HTTP_PROXY or HTTPS_PROXY the process inherited.
+    'http' => [
+        'proxy' => env('HDID_HTTP_PROXY') ?: null,
+        // Hosts reached without the proxy, comma-separated: a name covers its subdomains too
+        // (example.org, .example.org), an IP address or a range (10.0.0.0/8); * means all.
+        'no_proxy' => env('HDID_NO_PROXY') ?: null,
+    ],
+
     'sync' => $sync + [
         // Former SYNC_* names in use, shown as a note on the status page.
         'legacy_env' => $emdLegacy,

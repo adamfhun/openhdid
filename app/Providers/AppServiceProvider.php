@@ -16,6 +16,7 @@ use App\Sms\OzekiSmsSender;
 use App\Sms\SmsSender;
 use App\Support\ApiSignatureDocs;
 use App\Support\HuDate;
+use App\Support\OutboundProxy;
 use App\Support\PhoneNormalizer;
 use Dedoc\Scramble\Scramble;
 use Dedoc\Scramble\Support\Generator\OpenApi;
@@ -69,6 +70,10 @@ class AppServiceProvider extends ServiceProvider
 
         // A long-running worker must not keep the settings of a past request.
         Queue::before(fn () => $this->app->make(Settings::class)->forgetLocal());
+
+        // Every outbound request (master data, Exchange, SMS gateway, ADFS,
+        // Entra) goes through the configured proxy, or explicitly direct.
+        $this->app->make(Http::class)->globalOptions(fn (): array => OutboundProxy::options());
 
         Event::listen(Authenticated::class, RememberClientLocale::class);
         Event::listen(Login::class, fn (Login $event) => $this->app->make(AuthSessions::class)->stamp($event));
