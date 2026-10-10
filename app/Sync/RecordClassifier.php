@@ -29,6 +29,16 @@ class RecordClassifier
     }
 
     /**
+     * The lists this run classifies by, as compared, for the run report.
+     *
+     * @return array{users: list<string>, clients: list<string>}
+     */
+    public function domainLists(): array
+    {
+        return ['users' => $this->normalized(SettingKey::SyncUserDomains), 'clients' => $this->normalized(SettingKey::SyncClientDomains)];
+    }
+
+    /**
      * Why classify() returned null for this row.
      */
     public function skipReason(ExternalRecordDto $dto): string

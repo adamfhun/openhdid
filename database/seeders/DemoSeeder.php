@@ -169,7 +169,8 @@ class DemoSeeder extends Seeder
 
     /**
      * A small ID list (organizations of the master data system) for the
-     * Settings › EMD tab: a few selected, one that has left the list.
+     * Settings › EMD tab: a few selected, one that has left the list, and a
+     * long name that shows how the name column wraps.
      */
     private static function idList(): void
     {
@@ -179,6 +180,7 @@ class DemoSeeder extends Seeder
             31 => 'Észak Energia Zrt.', 34 => 'Fehérvári Építő Kft.', 36 => 'Győri Járműipar Zrt.', 39 => 'Hajdú Élelmiszer Kft.',
             42 => 'Kecskeméti Kertészet Bt.', 45 => 'Miskolci Acél Zrt.', 48 => 'Nyírségi Gyümölcs Kft.', 51 => 'Pécsi Egyetemi Szolgáltató Kft.',
             54 => 'Soproni Textil Zrt.', 57 => 'Szegedi Paprika Kft.', 61 => 'Tiszai Vegyi Zrt.', 64 => 'Zalai Olaj Kft.',
+            66 => 'Közép-dunántúli Regionális Fejlesztési és Beruházási Ügynökség Nonprofit Korlátolt Felelősségű Társaság',
         ];
         $selected = [11, 21, 25, 36, 51];
 

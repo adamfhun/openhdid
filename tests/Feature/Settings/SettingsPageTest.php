@@ -23,6 +23,35 @@ beforeEach(function (): void {
     Filament::setCurrentPanel('admin');
 });
 
+it('saves only what was changed on the page, so a page opened earlier cannot undo another admin\'s change', function (): void {
+    $earlier = Livewire::test(ManageSettings::class);
+
+    // Meanwhile another admin sets the staff domain and the premium package list.
+    app(Settings::class)->setMany([
+        SettingKey::SyncUserDomains->value => ['domain.com'],
+        SettingKey::PackagesPremium->value => ['Premium+', 'Gold'],
+    ]);
+
+    // The package lists were not touched here: Save asks nothing about them and saves at once.
+    $earlier->fillForm([ManageSettings::fieldName(SettingKey::PortalLegalName) => 'Helpdesk Kft.'])
+        ->mountAction('save')
+        ->assertHasNoFormErrors();
+
+    $settings = app(Settings::class);
+    expect($settings->array(SettingKey::SyncUserDomains))->toBe(['domain.com'])
+        ->and($settings->array(SettingKey::PackagesPremium))->toBe(['Premium+', 'Gold'])
+        ->and($settings->string(SettingKey::PortalLegalName))->toBe('Helpdesk Kft.');
+
+    // After saving, the page shows the current values, so its next save starts from them.
+    $earlier->assertFormSet([ManageSettings::fieldName(SettingKey::SyncUserDomains) => ['domain.com']])
+        ->fillForm([ManageSettings::fieldName(SettingKey::SyncUserDomains) => ['domain.com', 'other.com']])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect($settings->array(SettingKey::SyncUserDomains))->toBe(['domain.com', 'other.com'])
+        ->and($settings->array(SettingKey::PackagesPremium))->toBe(['Premium+', 'Gold']);
+});
+
 it('saves separate pin limits and ivr and dictated code lengths', function (): void {
     Livewire::test(ManageSettings::class)
         ->fillForm([

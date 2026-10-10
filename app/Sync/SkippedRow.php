@@ -2,6 +2,8 @@
 
 namespace App\Sync;
 
+use App\Models\ExternalRecord;
+
 /**
  * A source row the importer could not or would not use, with the reason,
  * so the run report can say which rows were dropped and why.
@@ -44,8 +46,18 @@ final readonly class SkippedRow
         return new self($reason, $sample);
     }
 
+    /**
+     * An unclassified row also names the domain it was compared by, so a
+     * mismatch with the domain lists shows in the run report.
+     */
     public static function fromDto(string $reason, ExternalRecordDto $dto): self
     {
-        return new self($reason, ['external_id' => (string) $dto->externalId, 'email' => $dto->email, 'name' => $dto->name]);
+        $sample = ['external_id' => (string) $dto->externalId, 'email' => $dto->email, 'name' => $dto->name];
+
+        if ($reason === self::REASON_UNCLASSIFIED) {
+            $sample['domain'] = (string) ExternalRecord::domainOf($dto->email);
+        }
+
+        return new self($reason, $sample);
     }
 }

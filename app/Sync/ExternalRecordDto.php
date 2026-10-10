@@ -31,6 +31,24 @@ final readonly class ExternalRecordDto
     ) {}
 
     /**
+     * The address as the importer stores and classifies it: a "Name <address>"
+     * or "mailto:" form reduced to the address, without whitespace, control or
+     * invisible format characters, in lower case. A no-break or zero-width
+     * space from a spreadsheet cell does not show on screen, yet it would put
+     * the row outside every domain list.
+     */
+    public static function normalizeEmail(string $value): string
+    {
+        if (preg_match('/<([^<>]*@[^<>]*)>/u', $value, $match) === 1) {
+            $value = $match[1];
+        }
+
+        $value = preg_replace('/[\p{Z}\p{C}]+/u', '', $value) ?? trim($value);
+
+        return mb_strtolower((string) preg_replace('/^mailto:/i', '', $value));
+    }
+
+    /**
      * Build from an associative row using a column mapping
      * (`target => source column`). A mapped column that the row does not
      * carry falls back to the field's own name, so a file with the default
@@ -50,6 +68,7 @@ final readonly class ExternalRecordDto
 
         $externalId = $pick('external_id');
         $email = $pick('email');
+        $email = $email === null ? null : (self::normalizeEmail($email) ?: null);
 
         if ($externalId === null || $email === null || ! preg_match(self::EXTERNAL_ID_PATTERN, $externalId)) {
             return null;
@@ -79,7 +98,7 @@ final readonly class ExternalRecordDto
         return new self(
             externalId: (int) $externalId,
             name: $pick('name') ?? $email,
-            email: mb_strtolower($email),
+            email: $email,
             company: $pick('company'),
             phones: $phones,
             attributes: array_diff_key($row, array_flip($mappedColumns)),

@@ -98,6 +98,13 @@ class SyncRunResource extends BaseResource
                 TextEntry::make('stats.incoming.invalid_row')->label(__('Invalid records'))->placeholder('-'),
                 TextEntry::make('stats.incoming.duplicate')->label(__('Repeated external ids'))->visible(fn (SyncRun $record) => ($record->stats['incoming']['duplicate'] ?? 0) > 0),
                 TextEntry::make('stats.incoming.duplicate_email')->label(__('Repeated e-mail addresses'))->visible(fn (SyncRun $record) => ($record->stats['incoming']['duplicate_email'] ?? 0) > 0),
+                // The lists this run compared the e-mail domains with, as compared (normalised).
+                TextEntry::make('domains_users')->label(__('Staff domains of the run'))
+                    ->state(fn (SyncRun $record): string => implode(', ', $record->stats['domains']['users'] ?? []) ?: __('none'))
+                    ->visible(fn (SyncRun $record): bool => isset($record->stats['domains'])),
+                TextEntry::make('domains_clients')->label(__('Client domains of the run'))
+                    ->state(fn (SyncRun $record): string => implode(', ', $record->stats['domains']['clients'] ?? []) ?: __('none'))
+                    ->visible(fn (SyncRun $record): bool => isset($record->stats['domains'])),
             ]),
             RepeatableEntry::make('stats.preview')->label(__('Incoming records (first 10 accepted)'))->columnSpanFull()->schema([
                 TextEntry::make('external_id')->label(__('External ID')),

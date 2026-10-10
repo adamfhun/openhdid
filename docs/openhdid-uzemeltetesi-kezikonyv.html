@@ -92,8 +92,8 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">A konténeres OpenHDID napi üzemeltetése: ellenőrzés, szolgáltatások kezelése, naplók és felügyelet, ütemezett feladatok, a leggyakoribb helyzetek, mentés és visszaállítás, frissítés, skálázás és biztonsági karbantartás.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.4.4 · 2026. október 10.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.4 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.4.5 · 2026. október 10.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.4.5 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>telepítési útmutató, felhasználói kézikönyv</span></div>
 </div>
@@ -370,8 +370,8 @@ Kérés: POST ".config("hdid.sync.login_url")."
 </ul>
 <ol class="steps">
     <li><strong>Az image ellenőrzése</strong> (választható, ajánlott):
-<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.4.4 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.4.4 \
+<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.4.5 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.4.5 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre></li>
     <li><strong>Mentés:</strong> <code>./backup.sh</code> (7. fejezet).</li>
@@ -493,7 +493,7 @@ cosign verify ghcr.io/adamfhun/openhdid:1.4.4 \
 <tr><td>SemVer</td><td>Semantic Versioning – szemantikus verziózás (fő.al.javító).</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID üzemeltetési kézikönyv 1.4.4 · 2026. október 10.</div>
+<div class="foot">OpenHDID üzemeltetési kézikönyv 1.4.5 · 2026. október 10.</div>
 </div>
 
 </body>

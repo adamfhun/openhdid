@@ -84,7 +84,7 @@ it('queues a panel trial run and shows the completed counts and escaped preview'
     $component = Livewire::test(ManageSyncRuns::class)->mountAction(TestAction::make('view')->table($run));
     $page = $component->instance();
     $html = $page->getSchema($page->getMountedActionSchemaName())->toHtml();
-    expect($html)->toContain(__('Current active accounts'), __('Incoming records after domain filtering'), __('Invalid phone numbers (first 50)'), 'hibás szám', 'one@client.hu')
+    expect($html)->toContain(__('Current active accounts'), __('Incoming records after domain filtering'), __('Invalid phone numbers (first 50)'), 'hibás szám', 'one@client.hu', __('Client domains of the run'), 'client.hu')
         ->not->toContain('<script>alert(1)</script>');
     Http::assertSentCount(2);
 });

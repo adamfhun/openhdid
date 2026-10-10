@@ -4,6 +4,32 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.4.5] – 2026-10-10
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- ÜZ-01: a beállítások oldal csak az ott módosított mezőket menti; egy korábban megnyitott oldal mentése nem írja vissza azt, amit közben más mentett, és mentés után az oldal a tárolt értékeket mutatja.
+- NYT-02: a domainek összevetése előtt az e-mail-címből és a domainlistából eltűnnek a láthatatlan és szóköz jellegű karakterek, a „Név <cím>” és a „mailto:” alak a címre egyszerűsödik; a besorolatlan kihagyott sor a vizsgált domaint, a futás a használt domainlistákat mutatja.
+
+Részletek:
+- Hibajavítás: egyetlen munkatársi domain mellett egy próbafuttatás minden sort „A domain egyik besorolási listában sem szerepel” okkal kihagyott, mert az átvétel által olvasott munkatársi domainlista üres volt. A beállítások oldal mentéskor minden mezőt elküldött, és a tárolttól eltérőt kiírta, így egy korábban megnyitott oldal mentése visszaírta a közben más által (vagy más lapon) mentett értéket. Mostantól csak az oldalon módosított mezők íródnak.
+- Megelőzés: az e-mail-cím és a domainlista az összevetés előtt megtisztul a láthatatlan és szóköz jellegű karakterektől (például a táblázatból jövő nem törő vagy nulla szélességű szóköz), a „Név <cím>” és a „mailto:” alak a címre egyszerűsödik; a tisztítás a már tárolt domainlistára is hat. Ha egy korábban átvett tétel e-mail-címe ilyen karaktert vitt, a következő átvétel a tisztított címre javítja; ez címváltozásnak számít, a fiók meglévő belépései megszűnnek.
+- A futás részletei (Ügyféltörzs-átvételek) az „Érkező rekordok domainszűrés után” blokkban megmutatják a futás munkatársi és ügyfél-domainjeit, a besorolatlan kihagyott sor a vizsgált domaint (`domain=…`).
+- ID-lista (Beállítások › Ügyféltörzs (EMD)): a hosszú név nagyjából 65–70 karakter után több sorba tördelődik, keskeny képernyőn hamarabb, így nem tolja ki oldalra a többi oszlopot; a sor többi értéke függőlegesen középre igazodik. A demóadatok ID-listája egy hosszú nevű szervezettel bővült, ezen látszik a tördelés.
+- A dokumentumok verziója 1.4.5.
+
+### English
+Rule changes in one sentence each (with the specification's identifiers):
+- ÜZ-01: the settings page saves only the fields changed on it; saving a page opened earlier no longer writes back what someone saved in the meantime, and after saving the page shows the stored values.
+- NYT-02: before domains are compared, whitespace-like and invisible characters are removed from the e-mail address and the domain lists, and a "Name <address>" or "mailto:" form is reduced to the address; an unclassified skipped row shows the compared domain, and the run records the domain lists it used.
+
+Details:
+- Bug fix: with a single staff domain, a dry run skipped every row as "the domain is on neither classification list", because the staff domain list the sync read was empty. The settings page sent every field on save and wrote whatever differed from the stored value, so saving a page opened earlier wrote back a value someone had saved in the meantime (or in another tab). Now only the fields changed on the page are written.
+- Prevention: the e-mail address and the domain lists are cleaned of whitespace-like and invisible characters before comparing (for example a no-break or zero-width space from a spreadsheet), and a "Name <address>" or "mailto:" form is reduced to the address; the cleaning also applies to domain lists already stored. When a record imported earlier carried such a character in its e-mail, the next sync corrects it to the cleaned address; this counts as an address change, so the account's existing sign-ins end.
+- The run details (Master data syncs) show the run's staff and client domains in the "Incoming records after domain filtering" block, and an unclassified skipped row its compared domain (`domain=…`).
+- ID list (Settings › Master data (EMD)): a long name wraps after about 65–70 characters, earlier on a narrow screen, so it no longer pushes the other columns out of view; the other values of the row are centred vertically. The demo ID list gained an organisation with a long name that shows the wrapping.
+- The documents carry version 1.4.5.
+
 ## [1.4.4] – 2026-10-10
 
 ### Magyar

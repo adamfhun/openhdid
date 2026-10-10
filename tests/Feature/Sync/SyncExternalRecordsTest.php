@@ -138,6 +138,54 @@ it('classifies only explicitly listed e-mail domains', function (): void {
         ->and(Client::query()->where('email', 'ann@customer.hu')->exists())->toBeTrue();
 });
 
+it('classifies an e-mail with invisible characters or a display name, with only a staff list set', function (string $raw): void {
+    app(Settings::class)->set(SettingKey::SyncUserDomains, ['domain.com']);
+    app(Settings::class)->set(SettingKey::SyncClientDomains, []);
+
+    $item = ExternalRecordDto::fromRow(['external_id' => '1', 'email' => $raw, 'name' => 'Anna'], []);
+    $run = app(SyncExternalRecords::class)->run(readerOf([$item]));
+
+    expect($run->stats['incoming']['users'])->toBe(1)
+        ->and($run->stats['incoming']['unclassified'])->toBe(0)
+        ->and(ExternalRecord::query()->sole()->email)->toBe('anna@domain.com');
+})->with([
+    'no-break space after' => ["anna@domain.com\u{00A0}"],
+    'zero-width space inside' => ["anna@domain.com\u{200B}"],
+    'byte order mark before' => ["\u{FEFF}anna@domain.com"],
+    'tab and line break' => ["\tanna@domain.com\r\n"],
+    'display name' => ['Anna Kovács <Anna@Domain.com>'],
+    'mailto prefix' => ['mailto:anna@domain.com'],
+]);
+
+it('ignores invisible characters and quotes in the configured domains, stored ones too', function (string $stored): void {
+    Setting::query()->updateOrCreate(['key' => SettingKey::SyncUserDomains->value], ['value' => [$stored]]);
+    app(Settings::class)->forget();
+
+    $run = app(SyncExternalRecords::class)->run(readerOf([row('1', 'anna@domain.com')]), dryRun: true);
+
+    expect($run->stats['incoming']['users'])->toBe(1)
+        ->and($run->stats['domains'])->toBe(['users' => ['domain.com'], 'clients' => ['x.hu']]);
+})->with([
+    'no-break space' => ["domain.com\u{00A0}"],
+    'zero-width space' => ["\u{200B}domain.com"],
+    'straight quotes' => ['"domain.com"'],
+    'typographic quotes' => ['„domain.com”'],
+    'at sign and upper case' => ['@DOMAIN.COM'],
+]);
+
+it('names the compared domain of an unclassified row and records the domain lists of the run', function (): void {
+    app(Settings::class)->set(SettingKey::SyncUserDomains, ['domain.com']);
+    app(Settings::class)->set(SettingKey::SyncClientDomains, []);
+
+    $run = app(SyncExternalRecords::class)->run(readerOf([row('1', 'anna@hu.domain.com')]), dryRun: true);
+
+    expect($run->stats['domains'])->toBe(['users' => ['domain.com'], 'clients' => []])
+        ->and($run->skipped_rows)->toBe([[
+            'reason' => SkippedRow::REASON_UNCLASSIFIED,
+            'sample' => ['external_id' => '1', 'email' => 'anna@hu.domain.com', 'name' => 'Name 1', 'domain' => 'hu.domain.com'],
+        ]]);
+});
+
 it('skips rows whose domain is not listed', function (): void {
     app(Settings::class)->set(SettingKey::SyncClientDomains, []);
 

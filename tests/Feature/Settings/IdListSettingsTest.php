@@ -11,6 +11,7 @@ use App\Sync\IdList;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
+use Filament\Tables\Columns\TextColumn;
 use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 
@@ -55,6 +56,16 @@ it('lists the stored IDs alphabetically in a paged table and searches by name or
         ->searchTable('Zebra')->assertCanSeeTableRecords([$zebra])->assertCanNotSeeTableRecords([$ag])
         ->searchTable('40')->assertCanSeeTableRecords([$alma])->assertCanNotSeeTableRecords([$zebra, $ag])
         ->searchTable(null)->filterTable('listed', false)->assertCanSeeTableRecords([$gone])->assertCanNotSeeTableRecords([$ag, $zebra, $alma]);
+});
+
+it('wraps a long name at about 65–70 characters, so the other columns stay in view', function (): void {
+    $long = SyncIdListItem::factory()->create(['external_id' => '66', 'name' => 'Közép-dunántúli Regionális Fejlesztési és Beruházási Ügynökség Nonprofit Korlátolt Felelősségű Társaság']);
+
+    Livewire::test(ManageSettings::class)
+        ->assertTableColumnExists('name', fn (TextColumn $column): bool => $column->canWrap()
+            && str_contains((string) ($column->getExtraAttributes()['class'] ?? ''), 'max-w-[54ch]'))
+        ->assertCanSeeTableRecords([$long])
+        ->assertSeeHtml('max-w-[54ch]');
 });
 
 it('selects a row at once, without a dialog, as one audited change', function (): void {

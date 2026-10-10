@@ -54,6 +54,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
+use Livewire\Attributes\Locked;
 use RuntimeException;
 
 /**
@@ -77,6 +78,16 @@ class ManageSettings extends Page implements HasTable
     /** @var array<string, mixed> */
     public ?array $data = [];
 
+    /**
+     * The values the form was filled with, as stored. Save writes only the
+     * keys whose value differs from these, so a page opened earlier cannot
+     * undo what another admin saved in the meantime.
+     *
+     * @var array<string, mixed>
+     */
+    #[Locked]
+    public array $loaded = [];
+
     public static function getNavigationLabel(): string
     {
         return __('Settings');
@@ -94,14 +105,85 @@ class ManageSettings extends Page implements HasTable
 
     public function mount(): void
     {
+        $this->fillFromSettings();
+    }
+
+    /**
+     * Fill the form with the stored values and remember them as the base
+     * that Save compares with.
+     */
+    private function fillFromSettings(): void
+    {
         $settings = app(Settings::class);
         $values = [];
+        $this->loaded = [];
 
         foreach (SettingKey::cases() as $key) {
-            $values[static::fieldName($key)] = $this->toFormValue($key, $settings->get($key));
+            $formValue = $this->toFormValue($key, $settings->get($key));
+            $values[static::fieldName($key)] = $formValue;
+            $this->loaded[$key->value] = $this->asStored($key, $formValue);
         }
 
         $this->form->fill($values);
+    }
+
+    /**
+     * A form value in the shape the settings store keeps it, so an untouched
+     * field compares equal to what the page was filled with.
+     */
+    private function asStored(SettingKey $key, mixed $formValue): mixed
+    {
+        $value = $key->type()->cast($this->fromFormValue($key, $formValue));
+
+        return in_array($key, [SettingKey::SyncUserDomains, SettingKey::SyncClientDomains], true)
+            ? SettingRules::normalizeDomains((array) $value)
+            : $value;
+    }
+
+    /**
+     * The keys changed on this page, as stored, keyed by setting key. Keys
+     * the user may not change (the EMD request settings without sync
+     * management) never count.
+     *
+     * @param  array<string, mixed>  $state  form state keyed by field name
+     * @return array<string, mixed>
+     */
+    private function pageChanges(array $state): array
+    {
+        $changes = [];
+
+        foreach (SettingKey::cases() as $key) {
+            if ($key->requiresSyncManage() && ! $this->canManageSync()) {
+                continue;
+            }
+
+            $value = $this->asStored($key, $state[static::fieldName($key)] ?? null);
+            if ($value !== ($this->loaded[$key->value] ?? null)) {
+                $changes[$key->value] = $value;
+            }
+        }
+
+        return $changes;
+    }
+
+    /**
+     * The values Save would leave in place: the stored ones with this page's
+     * changes on top, keyed by setting key.
+     *
+     * @param  array<string, mixed>  $changes
+     * @return array<string, mixed>
+     */
+    private function valuesAfterSave(array $changes): array
+    {
+        $settings = app(Settings::class);
+        $settings->forgetLocal();
+        $values = [];
+
+        foreach (SettingKey::cases() as $key) {
+            $values[$key->value] = array_key_exists($key->value, $changes) ? $changes[$key->value] : $settings->get($key);
+        }
+
+        return $values;
     }
 
     public function form(Schema $schema): Schema
@@ -127,33 +209,23 @@ class ManageSettings extends Page implements HasTable
         abort_unless(static::canAccess(), 403);
 
         $state = $this->form->getState();
-        $this->assertConsistent($state);
         $settings = app(Settings::class);
-        $values = [];
+        // Only what was changed here is written; the rest stays as stored,
+        // including what another admin saved since this page was opened.
+        $changes = $this->pageChanges($state);
+        $values = $this->valuesAfterSave($changes);
 
-        foreach (SettingKey::cases() as $key) {
-            if ($key->requiresSyncManage() && ! $this->canManageSync()) {
-                $values[$key->value] = $settings->get($key);
-
-                continue;
-            }
-            $values[$key->value] = $this->fromFormValue($key, $state[static::fieldName($key)] ?? null);
-        }
-
+        $this->assertConsistent(collect($values)->mapWithKeys(fn (mixed $value, string $key) => [static::fieldName(SettingKey::from($key)) => $value])->all());
         $this->validateValues($values);
         $impact = $this->assertPackageListsUsable($values);
-        if (! $this->canManageSync()) {
-            $values = array_filter($values, fn (string $key): bool => ! SettingKey::from($key)->requiresSyncManage(), ARRAY_FILTER_USE_KEY);
-        }
-        $replaced = $this->replacedImages($settings, $values);
-        $settings->setMany($values);
+        $replaced = $this->replacedImages($settings, $changes);
+        $settings->setMany($changes);
         $this->deleteImages($replaced);
         // Entitlement follows the lists at once; the links of sponsors whose
         // package left the premium list end now, not at the hourly sweep.
         $endedLinks = $impact['changed'] ? app(ClientLinks::class)->endLinksOfIneligibleSponsors() : 0;
-        foreach ([SettingKey::SyncUserDomains, SettingKey::SyncClientDomains] as $key) {
-            $this->data[static::fieldName($key)] = $settings->array($key);
-        }
+        // The page now shows what is stored, other admins' changes included.
+        $this->fillFromSettings();
 
         $saved = Notification::make()->title(__('Settings saved'))->success();
         if ($endedLinks > 0 || $impact['downgraded']['count'] > 0 || $impact['upgraded']['count'] > 0) {
@@ -198,15 +270,18 @@ class ManageSettings extends Page implements HasTable
     }
 
     /**
-     * The package-list impact of the form as it stands (for the confirmation).
+     * The package-list impact of saving the form as it stands: only the lists
+     * changed on this page count (for the confirmation).
      *
      * @return array<string, mixed>
      */
     private function packageImpact(): array
     {
+        $values = $this->valuesAfterSave($this->pageChanges($this->data ?? []));
+
         return app(PackageListImpact::class)->estimate(
-            (array) ($this->data[static::fieldName(SettingKey::PackagesPremium)] ?? []),
-            (array) ($this->data[static::fieldName(SettingKey::PackagesStandard)] ?? []),
+            (array) ($values[SettingKey::PackagesPremium->value] ?? []),
+            (array) ($values[SettingKey::PackagesStandard->value] ?? []),
         );
     }
 
@@ -318,7 +393,9 @@ class ManageSettings extends Page implements HasTable
             ->emptyStateHeading(__('The ID list is empty'))
             ->emptyStateDescription(__('Fetch it from the API with the button above.'))
             ->columns([
-                TextColumn::make('name')->label(__('Name'))->searchable()->sortable()->weight('semibold'),
+                // A long name wraps at about 65–70 characters instead of pushing the other columns out of view.
+                TextColumn::make('name')->label(__('Name'))->searchable()->sortable()->weight('semibold')
+                    ->wrap()->extraAttributes(['class' => 'max-w-[54ch]']),
                 TextColumn::make('external_id')->label(__('ID'))->searchable()->sortable(),
                 IconColumn::make('selected')->label(__('Selected'))->boolean()->falseIcon(Heroicon::OutlinedMinus)->falseColor('gray')->alignCenter(),
                 TextColumn::make('removed_at')->label(__('On the list'))->badge()

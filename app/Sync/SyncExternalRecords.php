@@ -164,6 +164,7 @@ class SyncExternalRecords
         $stats = ['read' => 0, 'skipped' => 0, 'created' => 0, 'updated' => 0, 'missing' => 0, 'closed' => 0, 'provisioned' => 0];
         $stats['current'] = ['users' => User::query()->open()->count(), 'clients' => Client::query()->open()->count()];
         $stats['incoming'] = ['users' => 0, 'clients' => 0, 'unclassified' => 0, 'invalid_row' => 0, 'duplicate' => 0, 'duplicate_email' => 0];
+        $stats['domains'] = $this->classifier->domainLists();
         $stats['preview'] = [];
         $stats['invalid_phones'] = 0;
         $stats['phone_warnings'] = [];

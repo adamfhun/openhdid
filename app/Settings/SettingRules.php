@@ -150,9 +150,22 @@ class SettingRules
     public static function normalizeDomains(array $domains): array
     {
         return array_values(array_unique(array_filter(array_map(
-            fn ($domain): string => mb_strtolower(trim(ltrim(trim((string) $domain), '@'))),
+            fn ($domain): string => self::normalizeDomain((string) $domain),
             $domains,
         ))));
+    }
+
+    /**
+     * A domain as the classifier compares it: without whitespace, control or
+     * invisible characters (a pasted no-break or zero-width space), without a
+     * leading @, surrounding quotes or a trailing dot, in lower case.
+     */
+    public static function normalizeDomain(string $domain): string
+    {
+        $domain = preg_replace('/[\p{Z}\p{C}]+/u', '', $domain) ?? trim($domain);
+        $domain = preg_replace('/^[@"\'„“”‘’]+|["\'„“”‘’.]+$/u', '', $domain) ?? $domain;
+
+        return mb_strtolower($domain);
     }
 
     /**
