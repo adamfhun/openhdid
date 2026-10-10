@@ -2,11 +2,8 @@
 
 namespace App\Policies;
 
-use App\Auth\Permission;
-
-class ClientPhoneNumberPolicy extends PermissionPolicy
-{
-    protected Permission $view = Permission::ClientsView;
-
-    protected ?Permission $manage = Permission::ClientsManage;
-}
+/**
+ * A phone number goes with its client: same permissions, and out of reach
+ * when the client is not served.
+ */
+class ClientPhoneNumberPolicy extends ClientPolicy {}

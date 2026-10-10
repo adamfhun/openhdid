@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Resources\Clients\Pages;
 use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
 use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\Concerns\GuardsUnsavedChanges;
 use App\Models\Client;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
@@ -17,6 +18,8 @@ use Filament\Resources\Pages\EditRecord;
 
 class EditClient extends EditRecord
 {
+    use GuardsUnsavedChanges;
+
     protected static string $resource = ClientResource::class;
 
     /** Set by the confirmed Save action; a plain form submit (Enter) never sets it. */
@@ -61,7 +64,8 @@ class EditClient extends EditRecord
             ->action(function (): void {
                 $this->sponsorChangeConfirmed = true;
                 $this->save();
-            });
+            })
+            ->after(fn (array $arguments) => $this->followLeaveLink($arguments));
     }
 
     /**
@@ -119,7 +123,11 @@ class EditClient extends EditRecord
         /** @var Client $client */
         $client = $this->getRecord();
         $names = $client->activeLinks()->with('linked')->get()
-            ->map(fn ($link): string => $link->linked?->name ?? __('deleted client'))
+            ->map(fn ($link): string => match (true) {
+                $link->linked === null => __('deleted client'),
+                ! app(ClientTiers::class)->isServed($link->linked) => __('client not served at present'),
+                default => $link->linked->name,
+            })
             ->sort(fn (string $a, string $b): int => strcoll($a, $b))
             ->values();
 
@@ -131,6 +139,6 @@ class EditClient extends EditRecord
      */
     protected function getRedirectUrl(): string
     {
-        return $this->getResource()::getUrl('view', ['record' => $this->getRecord()]);
+        return ClientResource::afterSaveUrl($this->getRecord());
     }
 }

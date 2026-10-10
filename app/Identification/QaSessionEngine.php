@@ -165,7 +165,8 @@ class QaSessionEngine
             }
 
             if (! $this->isIdentifiable($client)) {
-                $this->finish($session, IdSessionStatus::Failed, 'account_closed');
+                $this->finish($session, IdSessionStatus::Failed, 'account_closed',
+                    ! $client->isClosed() && $this->tiers->heldBackByPremiumOnly($client) ? ['premium_only' => true] : []);
 
                 return new IdentificationException(__('The client\'s account is closed or no longer entitled; it cannot be identified.'));
             }
@@ -309,14 +310,17 @@ class QaSessionEngine
         $this->finish($session, $status, $reason);
     }
 
-    private function finish(IdSession $session, IdSessionStatus $status, string $reason): IdSession
+    /**
+     * @param  array<string, mixed>  $context  extra audit detail (premium_only: the mode turned the client away)
+     */
+    private function finish(IdSession $session, IdSessionStatus $status, string $reason, array $context = []): IdSession
     {
         $finished = IdSession::query()->whereKey($session->id)->open()
             ->update(['status' => $status, 'outcome_reason' => $reason, 'decided_at' => now()]);
         $session->refresh();
 
         if ($finished === 1) {
-            $this->auditor->record('id_session.finished', $session, ['status' => $status->value, 'reason' => $reason]);
+            $this->auditor->record('id_session.finished', $session, ['status' => $status->value, 'reason' => $reason] + $context);
             app(ClientPhones::class)->verifyFromIdentifiedCall($session);
         }
 

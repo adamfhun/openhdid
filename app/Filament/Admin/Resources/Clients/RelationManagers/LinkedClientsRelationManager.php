@@ -4,7 +4,9 @@ namespace App\Filament\Admin\Resources\Clients\RelationManagers;
 
 use App\Auth\Permission;
 use App\Clients\ClientLinks;
+use App\Clients\ClientTiers;
 use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\Concerns\RequiresServedOwner;
 use App\Models\Client;
 use App\Models\ClientLink;
 use Filament\Actions\Action;
@@ -24,6 +26,8 @@ use Illuminate\Validation\ValidationException;
  */
 class LinkedClientsRelationManager extends RelationManager
 {
+    use RequiresServedOwner;
+
     protected static string $relationship = 'sponsoredLinks';
 
     public static function getTitle(Model $ownerRecord, string $pageClass): string
@@ -34,6 +38,35 @@ class LinkedClientsRelationManager extends RelationManager
     public static function canViewForRecord(Model $ownerRecord, string $pageClass): bool
     {
         return app(ClientLinks::class)->canSponsor($ownerRecord) || $ownerRecord->sponsoredLinks()->exists();
+    }
+
+    /**
+     * Clients a sponsor can link, by name, e-mail, company or external id:
+     * served now, not already linked, without a premium of their own.
+     *
+     * @return array<string, string>
+     */
+    public static function linkableClients(Client $sponsor, string $search): array
+    {
+        $links = app(ClientLinks::class);
+
+        return static::servedClients()
+            ->with(['externalRecord', 'phoneNumbers'])
+            ->whereKeyNot($sponsor->getKey())
+            ->whereDoesntHave('sponsorLinks', fn (Builder $q) => $q->whereNull('ended_at'))
+            ->where(fn (Builder $q) => $q->where('name', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%")
+                ->orWhereHas('externalRecord', fn (Builder $r) => $r->where('company', 'like', "%{$search}%")->orWhere('external_id', ctype_digit($search) ? (int) $search : -1)))
+            ->orderBy('name')->limit(20)->get()
+            ->filter(fn (Client $c) => $links->needsSponsor($c))
+            ->mapWithKeys(fn (Client $c) => [$c->id => static::optionLabel($c)])->all();
+    }
+
+    /**
+     * @return Builder<Client>
+     */
+    private static function servedClients(): Builder
+    {
+        return Client::query()->tap(fn (Builder $query) => app(ClientTiers::class)->scopeServed($query));
     }
 
     /**
@@ -75,7 +108,10 @@ class LinkedClientsRelationManager extends RelationManager
         $links = app(ClientLinks::class);
 
         return $table
-            ->modifyQueryUsing(fn (Builder $query) => $query->with(['linked', 'createdBy', 'endedBy']))
+            ->modifyQueryUsing(fn (Builder $query) => $query->with(['linked', 'createdBy', 'endedBy'])
+                // Premium-only hides the links of clients not served now; a deleted client's link stays listed.
+                ->when(app(ClientTiers::class)->premiumOnly(), fn (Builder $links) => $links
+                    ->whereHas('linked', fn (Builder $linked) => app(ClientTiers::class)->scopeServed($linked->withTrashed()))))
             ->columns([
                 TextColumn::make('linked.name')->label(__('Client'))->weight('semibold')
                     ->description(fn (ClientLink $record) => $record->linked?->email)
@@ -102,21 +138,13 @@ class LinkedClientsRelationManager extends RelationManager
                     ->tooltip(fn () => static::linkBlocker($this->getOwnerRecord(), $links))
                     ->schema([
                         Select::make('client_id')->label(__('Client'))->required()->searchable()->allowHtml()
-                            ->getSearchResultsUsing(fn (string $search) => Client::query()
-                                ->with(['externalRecord', 'phoneNumbers'])
-                                ->whereKeyNot($this->getOwnerRecord()->getKey())
-                                ->whereDoesntHave('sponsorLinks', fn (Builder $q) => $q->whereNull('ended_at'))
-                                ->where(fn (Builder $q) => $q->where('name', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%")
-                                    ->orWhereHas('externalRecord', fn (Builder $r) => $r->where('company', 'like', "%{$search}%")->orWhere('external_id', ctype_digit($search) ? (int) $search : -1)))
-                                ->orderBy('name')->limit(20)->get()
-                                ->filter(fn (Client $c) => $links->needsSponsor($c))
-                                ->mapWithKeys(fn (Client $c) => [$c->id => static::optionLabel($c)])->all())
-                            ->getOptionLabelUsing(fn ($value) => ($c = Client::query()->with(['externalRecord', 'phoneNumbers'])->find($value)) ? static::optionLabel($c) : null)
+                            ->getSearchResultsUsing(fn (string $search) => static::linkableClients($this->getOwnerRecord(), $search))
+                            ->getOptionLabelUsing(fn ($value) => ($c = static::servedClients()->with(['externalRecord', 'phoneNumbers'])->find($value)) ? static::optionLabel($c) : null)
                             ->helperText(__('Only clients without an implicit premium package of their own can be linked, and each client can be linked to one sponsor at a time.')),
                     ])
                     ->action(function (array $data) use ($links): void {
                         try {
-                            $links->link($this->getOwnerRecord(), Client::query()->findOrFail($data['client_id']), auth()->user());
+                            $links->link($this->getOwnerRecord(), static::servedClients()->findOrFail($data['client_id']), auth()->user());
                             Notification::make()->title(__('Client linked'))->success()->send();
                         } catch (ValidationException $e) {
                             Notification::make()->title($e->validator->errors()->first())->danger()->send();

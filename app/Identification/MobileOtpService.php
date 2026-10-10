@@ -143,9 +143,11 @@ class MobileOtpService
         }
 
         // The code was live, but the account behind it is no longer allowed
-        // in: consumed all the same, refused, and recorded against the client.
+        // in: consumed all the same, refused, and recorded against the client
+        // (premium_only when the open account is turned away by that mode).
         if ($record->client->isClosed() || ! $this->tiers->isEntitled($record->client)) {
-            $this->auditor->record('id_session.code_refused', $record->client, ['channel' => $channel->value, 'call_id' => $call?->id, 'reason' => 'account_closed'], $agent);
+            $this->auditor->record('id_session.code_refused', $record->client, ['channel' => $channel->value, 'call_id' => $call?->id, 'reason' => 'account_closed']
+                + ($this->tiers->heldBackByPremiumOnly($record->client) && ! $record->client->isClosed() ? ['premium_only' => true] : []), $agent);
 
             return null;
         }

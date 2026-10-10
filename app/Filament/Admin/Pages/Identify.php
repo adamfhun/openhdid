@@ -12,6 +12,7 @@ use App\Enums\IdChannel;
 use App\Enums\IdMethod;
 use App\Enums\IdSessionStatus;
 use App\Enums\StepVerdict;
+use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Identification\ClientAnswers;
 use App\Identification\IdentificationException;
 use App\Identification\PinService;
@@ -74,7 +75,7 @@ class Identify extends Page
 
     public function mount(string $client): void
     {
-        $this->clientId = Client::query()->findOrFail($client)->id;
+        $this->clientId = ClientResource::getEloquentQuery()->findOrFail($client)->id;
 
         if ($this->call !== null) {
             $call = Call::query()->whereKey($this->call)->first();
@@ -158,7 +159,7 @@ class Identify extends Page
 
     public function getClient(): Client
     {
-        return Client::query()->with(['phoneNumbers', 'externalRecord'])->findOrFail($this->clientId);
+        return ClientResource::getEloquentQuery()->with(['phoneNumbers', 'externalRecord'])->findOrFail($this->clientId);
     }
 
     /**

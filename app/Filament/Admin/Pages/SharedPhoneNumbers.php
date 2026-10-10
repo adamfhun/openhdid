@@ -4,6 +4,7 @@ namespace App\Filament\Admin\Pages;
 
 use App\Auth\Permission;
 use App\Clients\ClientPhones;
+use App\Clients\ClientTiers;
 use App\Enums\PhoneNumberSource;
 use App\Filament\Admin\NavigationGroup;
 use App\Filament\Admin\Resources\Clients\ClientResource;
@@ -60,7 +61,7 @@ class SharedPhoneNumbers extends Page implements HasTable
 
     public static function getNavigationBadge(): ?string
     {
-        $count = Cache::remember('clients:shared-phone-number-count', 60, fn (): int => app(ClientPhones::class)->sharedNumberCount());
+        $count = Cache::remember('clients:shared-phone-number-count:'.(app(ClientTiers::class)->premiumOnly() ? 'premium' : 'all'), 60, fn (): int => app(ClientPhones::class)->sharedNumberCount());
 
         return $count > 0 ? (string) $count : null;
     }

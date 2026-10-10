@@ -38,6 +38,8 @@ enum SettingKey: string
     // Packages that grant portal access, by service level
     case PackagesPremium = 'packages.premium';
     case PackagesStandard = 'packages.standard';
+    // Serve premium clients only: the standard list stops granting anything
+    case PackagesPremiumOnly = 'packages.premium_only';
 
     // Support contact shown to clients, by service level
     case SupportStandardEmail = 'support.standard_email';
@@ -168,7 +170,8 @@ enum SettingKey: string
             self::PinUniqueRequired,
             self::ClientsListRelevantOnly,
             self::SyncUniqueDomains,
-            self::ClientsUnlinkedBadge => SettingType::Boolean,
+            self::ClientsUnlinkedBadge,
+            self::PackagesPremiumOnly => SettingType::Boolean,
 
             self::ClientLoginMagicLinkTtlMinutes,
             self::ClientLoginOtpSmsTtlMinutes,
@@ -256,6 +259,7 @@ enum SettingKey: string
             self::PremiumBackgroundImage, self::PremiumLoginBackgroundImage => null,
 
             self::PackagesPremium, self::PackagesStandard => [],
+            self::PackagesPremiumOnly => false,
 
             self::SupportStandardEmail, self::SupportStandardPhone, self::SupportStandardHours => null,
             self::SupportPremiumEmail, self::SupportPremiumPhone, self::SupportPremiumHours => null,

@@ -3,6 +3,7 @@
 namespace App\Filament\Admin\Resources\MessageTemplates\Pages;
 
 use App\Filament\Admin\Resources\MessageTemplates\MessageTemplateResource;
+use App\Filament\Concerns\GuardsUnsavedChanges;
 use App\Messaging\Channel;
 use App\Messaging\Messenger;
 use App\Messaging\TemplateRenderer;
@@ -16,6 +17,8 @@ use Throwable;
 
 class EditMessageTemplate extends EditRecord
 {
+    use GuardsUnsavedChanges;
+
     protected static string $resource = MessageTemplateResource::class;
 
     public function getTitle(): string

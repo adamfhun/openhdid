@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\V1;
 
+use App\Clients\ClientTiers;
 use App\Models\Call;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -31,14 +32,15 @@ class CallResource extends JsonResource
             'caller_number_raw' => $this->caller_number_raw,
             'status' => $this->status->value,
             'queue' => $this->queue,
-            'client' => $this->whenLoaded('client', fn () => $this->client === null ? null : [
+            'client' => $this->whenLoaded('client', fn () => ! app(ClientTiers::class)->isServed($this->client) ? null : [
                 'id' => $this->client->id,
                 'name' => $this->client->name,
                 'has_pin' => $this->client->hasPin(),
                 'pin_locked' => $this->client->pin_locked_until !== null && $this->client->pin_locked_until->isFuture(),
             ]),
             'ambiguous' => ($this->metadata['ambiguous_number'] ?? false) === true,
-            'identified' => $this->relationLoaded('idSessions') ? $this->passedSession() !== null : null,
+            // A client no longer served is not reported, identified or not.
+            'identified' => $this->relationLoaded('idSessions') ? $this->passedSession() !== null && app(ClientTiers::class)->isServed($this->client) : null,
             'arrived_at' => $this->arrived_at,
             'ended_at' => $this->ended_at,
         ];

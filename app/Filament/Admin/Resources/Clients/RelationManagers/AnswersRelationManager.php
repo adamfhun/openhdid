@@ -2,6 +2,7 @@
 
 namespace App\Filament\Admin\Resources\Clients\RelationManagers;
 
+use App\Filament\Concerns\RequiresServedOwner;
 use App\Models\ClientAnswer;
 use Filament\Actions\DeleteAction;
 use Filament\Resources\RelationManagers\RelationManager;
@@ -16,6 +17,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class AnswersRelationManager extends RelationManager
 {
+    use RequiresServedOwner;
+
     protected static string $relationship = 'answers';
 
     public static function getTitle(Model $ownerRecord, string $pageClass): string

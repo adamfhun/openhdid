@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Resources\Clients\RelationManagers;
 use App\Clients\ClientPhones;
 use App\Enums\PhoneNumberSource;
 use App\Enums\PhoneVerificationSource;
+use App\Filament\Concerns\RequiresServedOwner;
 use App\Models\Client;
 use App\Models\ClientPhoneNumber;
 use App\Support\HuDate;
@@ -34,6 +35,8 @@ use Illuminate\Database\Eloquent\Model;
  */
 class PhoneNumbersRelationManager extends RelationManager
 {
+    use RequiresServedOwner;
+
     protected static string $relationship = 'phoneNumbers';
 
     public static function getTitle(Model $ownerRecord, string $pageClass): string
@@ -54,7 +57,7 @@ class PhoneNumbersRelationManager extends RelationManager
                     }
                 })
                 ->dehydrateStateUsing(fn (string $state): string => app(PhoneNormalizer::class)->normalize($state) ?? $state),
-            Text::make(fn (Get $get): string => __('This number is already on file for :names. If you continue, the phone menu will not recognise the caller from this number, so the PIN check there will not work for any of these clients.', ['names' => $this->otherHolders($get('number_e164'))->pluck('name')->implode(', ')]))
+            Text::make(fn (Get $get): string => __('This number is already on file for :names. If you continue, the phone menu will not recognise the caller from this number, so the PIN check there will not work for any of these clients.', ['names' => app(ClientPhones::class)->holderNames($this->otherHolders($get('number_e164')))]))
                 ->color('warning')
                 ->weight('semibold')
                 ->visible(fn (Get $get): bool => $this->otherHolders($get('number_e164'))->isNotEmpty()),

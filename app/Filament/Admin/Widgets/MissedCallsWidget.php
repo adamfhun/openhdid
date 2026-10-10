@@ -3,6 +3,7 @@
 namespace App\Filament\Admin\Widgets;
 
 use App\Auth\Permission;
+use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
 use App\Filament\Admin\Pages\Identify;
 use App\Filament\Admin\Pages\SearchClients;
@@ -44,7 +45,8 @@ class MissedCallsWidget extends TableWidget
                 TextColumn::make('caller_number_e164')->label(__('Number'))->placeholder(__('withheld'))->copyable()
                     ->state(fn (Call $record) => $record->callerNumber())
                     ->tooltip(fn (Call $record) => $record->caller_number_e164 === null && $record->caller_number_raw !== null ? __('Number as the call center sent it; it could not be normalised, so no client was matched by it.') : null),
-                TextColumn::make('client.name')->label(__('Client'))->placeholder(__('Unknown caller'))->weight('bold'),
+                TextColumn::make('client.name')->label(__('Client'))->placeholder(__('Unknown caller'))->weight('bold')
+                    ->state(fn (Call $record): ?string => app(ClientTiers::class)->servedName($record->client)),
                 TextColumn::make('tier')->label(__('Level'))->badge()
                     ->formatStateUsing(fn (?ClientTier $state) => $state?->label() ?? '-')
                     ->color(fn (?ClientTier $state) => $state === ClientTier::Premium ? 'warning' : 'gray'),
@@ -55,7 +57,7 @@ class MissedCallsWidget extends TableWidget
                     ->label(__('Identify'))
                     ->icon('heroicon-o-identification')
                     ->button()
-                    ->url(fn (Call $call): string => $call->client_id !== null
+                    ->url(fn (Call $call): string => app(ClientTiers::class)->isServed($call->client)
                         ? Identify::getUrl(['client' => $call->client_id, 'call' => $call->id])
                         : SearchClients::getUrl(['call' => $call->id, 'q' => $call->callerNumber()])),
                 Action::make('handled')

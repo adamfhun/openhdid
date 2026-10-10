@@ -8,6 +8,7 @@ use App\Clients\PackageListImpact;
 use App\Enums\ClientTier;
 use App\Filament\Actions\ExportTableAction;
 use App\Filament\Admin\Clusters\System;
+use App\Filament\Concerns\GuardsUnsavedChanges;
 use App\Identification\MobileOtpService;
 use App\Identification\PinService;
 use App\Models\Call;
@@ -23,6 +24,7 @@ use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkAction;
 use Filament\Forms\Components\ColorPicker;
+use Filament\Forms\Components\Field;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\KeyValue;
 use Filament\Forms\Components\Radio;
@@ -40,6 +42,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Text;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
@@ -48,9 +51,11 @@ use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
@@ -63,6 +68,7 @@ use RuntimeException;
  */
 class ManageSettings extends Page implements HasTable
 {
+    use GuardsUnsavedChanges;
     use InteractsWithTable;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCog6Tooth;
@@ -87,6 +93,13 @@ class ManageSettings extends Page implements HasTable
      */
     #[Locked]
     public array $loaded = [];
+
+    /**
+     * The consequences the save confirmation showed (null: none was needed).
+     * The save goes through only if they still hold when it runs.
+     */
+    #[Locked]
+    public ?string $shownConfirmation = null;
 
     public static function getNavigationLabel(): string
     {
@@ -125,6 +138,7 @@ class ManageSettings extends Page implements HasTable
         }
 
         $this->form->fill($values);
+        $this->rememberData();
     }
 
     /**
@@ -153,11 +167,13 @@ class ManageSettings extends Page implements HasTable
         $changes = [];
 
         foreach (SettingKey::cases() as $key) {
-            if ($key->requiresSyncManage() && ! $this->canManageSync()) {
+            // A field the form does not hand back (disabled, or not the
+            // user's to change) keeps its stored value.
+            if (($key->requiresSyncManage() && ! $this->canManageSync()) || ! array_key_exists(static::fieldName($key), $state)) {
                 continue;
             }
 
-            $value = $this->asStored($key, $state[static::fieldName($key)] ?? null);
+            $value = $this->asStored($key, $state[static::fieldName($key)]);
             if ($value !== ($this->loaded[$key->value] ?? null)) {
                 $changes[$key->value] = $value;
             }
@@ -204,9 +220,47 @@ class ManageSettings extends Page implements HasTable
             ->statePath('data');
     }
 
+    /**
+     * Saving always goes through the Save action, so a save that needs a
+     * confirmation cannot skip it, however it is called.
+     */
     public function save(): void
     {
+        $this->mountAction('save');
+    }
+
+    /**
+     * One save at a time: the checks across keys (premium-only needs a
+     * premium package, the package lists must leave nobody without access)
+     * hold for what is stored only if no other save lands between the check
+     * and the write. Inside the lock the stored values are read afresh, and
+     * the save stops when its consequences are no longer the ones confirmed.
+     */
+    private function persist(Action $action): void
+    {
         abort_unless(static::canAccess(), 403);
+
+        try {
+            Cache::lock('hdid:settings-save', 60)->block(15, fn () => $this->persistLocked($action));
+        } catch (LockTimeoutException) {
+            Notification::make()->warning()->title(__('Another save of the settings is in progress; try again in a moment.'))->send();
+            $action->halt();
+        }
+    }
+
+    private function persistLocked(Action $action): void
+    {
+        app(Settings::class)->forgetLocal();
+
+        $confirmation = $this->confirmationText();
+        if ($confirmation !== $this->shownConfirmation) {
+            $this->shownConfirmation = $confirmation;
+            Notification::make()->warning()->persistent()
+                ->title(__('What this save does has changed'))
+                ->body(__('Another save changed the stored settings since this one was started. Check the consequences again, then save.'))
+                ->send();
+            $action->halt();
+        }
 
         $state = $this->form->getState();
         $settings = app(Settings::class);
@@ -258,6 +312,7 @@ class ManageSettings extends Page implements HasTable
         $impact = app(PackageListImpact::class)->estimate(
             (array) ($values[SettingKey::PackagesPremium->value] ?? []),
             (array) ($values[SettingKey::PackagesStandard->value] ?? []),
+            (bool) ($values[SettingKey::PackagesPremiumOnly->value] ?? false),
         );
         $errors = app(PackageListImpact::class)->errors($impact);
 
@@ -280,6 +335,30 @@ class ManageSettings extends Page implements HasTable
         $values = $this->valuesAfterSave($this->pageChanges($this->data ?? []));
 
         return app(PackageListImpact::class)->estimate(
+            (array) ($values[SettingKey::PackagesPremium->value] ?? []),
+            (array) ($values[SettingKey::PackagesStandard->value] ?? []),
+            (bool) ($values[SettingKey::PackagesPremiumOnly->value] ?? false),
+        );
+    }
+
+    /**
+     * Whether this page switches premium-only mode on (it was off when loaded).
+     */
+    private function switchesPremiumOnlyOn(): bool
+    {
+        return ($this->pageChanges($this->data ?? [])[SettingKey::PackagesPremiumOnly->value] ?? false) === true;
+    }
+
+    /**
+     * Who would stop being served, with the package lists as they would be saved.
+     *
+     * @return array{count: int, hidden: int, sample: list<string>}
+     */
+    private function premiumOnlyImpact(): array
+    {
+        $values = $this->valuesAfterSave($this->pageChanges($this->data ?? []));
+
+        return app(PackageListImpact::class)->premiumOnlyImpact(
             (array) ($values[SettingKey::PackagesPremium->value] ?? []),
             (array) ($values[SettingKey::PackagesStandard->value] ?? []),
         );
@@ -352,17 +431,41 @@ class ManageSettings extends Page implements HasTable
      */
     public function saveAction(): Action
     {
-        $impact = app(PackageListImpact::class);
+        $needsConfirmation = fn (): bool => $this->needsConfirmation();
 
         return Action::make('save')->label(__('Save'))->keyBindings(['mod+s'])
             // A custom heading or description opens the modal on its own in Filament;
             // modal() keeps a plain save one click.
-            ->requiresConfirmation(fn (): bool => $impact->needsConfirmation($this->packageImpact()))
-            ->modal(fn (): bool => $impact->needsConfirmation($this->packageImpact()))
-            ->modalHeading(__('Apply the package list change?'))
-            ->modalDescription(fn (): string => $impact->summary($this->packageImpact()))
+            ->requiresConfirmation($needsConfirmation)
+            ->modal($needsConfirmation)
+            ->mountUsing(function (): void {
+                $this->shownConfirmation = $this->confirmationText();
+            })
+            ->modalHeading(fn (): string => $this->switchesPremiumOnlyOn() ? __('Serve premium clients only?') : __('Apply the package list change?'))
+            ->modalDescription(fn (): string => (string) $this->shownConfirmation)
             ->modalSubmitActionLabel(__('Save'))
-            ->action(fn () => $this->save());
+            ->action(fn (Action $action) => $this->persist($action))
+            ->after(fn (array $arguments) => $this->followLeaveLink($arguments));
+    }
+
+    private function needsConfirmation(): bool
+    {
+        return $this->switchesPremiumOnlyOn() || app(PackageListImpact::class)->needsConfirmation($this->packageImpact());
+    }
+
+    /**
+     * What saving the form as it stands would do, spelled out for the
+     * confirmation; null when the save needs none.
+     */
+    private function confirmationText(): ?string
+    {
+        if (! $this->needsConfirmation()) {
+            return null;
+        }
+
+        $impact = app(PackageListImpact::class);
+
+        return trim(($this->switchesPremiumOnlyOn() ? $impact->premiumOnlySummary($this->premiumOnlyImpact()).' ' : '').$impact->summary($this->packageImpact()));
     }
 
     /**
@@ -661,10 +764,45 @@ class ManageSettings extends Page implements HasTable
         return str_replace('.', '__', $key->value);
     }
 
+    /**
+     * A setting's field. While premium-only is switched on in the form, the
+     * standard level's settings say what they do now: the package list grants
+     * nothing, and the contacts are what a turned-away standard client sees
+     * on the portal's login page (so they stay editable).
+     */
     private function field(SettingKey $key): Component
+    {
+        $field = $this->baseField($key);
+        $premiumOnly = fn (Get $get): bool => (bool) $get(static::fieldName(SettingKey::PackagesPremiumOnly));
+
+        if (! $field instanceof Field) {
+            return $field;
+        }
+
+        if (in_array($key, [SettingKey::SupportStandardEmail, SettingKey::SupportStandardPhone, SettingKey::SupportStandardHours], true)) {
+            return $field->helperText(fn (Get $get): ?string => $premiumOnly($get)
+                ? __('While only premium clients are served, a standard client turned away on the portal\'s login page sees this contact.')
+                : null);
+        }
+
+        if ($key === SettingKey::PackagesStandard) {
+            return $field->helperText(fn (Get $get): string => $premiumOnly($get)
+                ? __('Grants nothing while only premium clients are served; it applies again once that is switched off.')
+                : __('Clients whose package is listed here get the standard portal. Clients in neither list cannot sign in.'));
+        }
+
+        return $field;
+    }
+
+    private function baseField(SettingKey $key): Component
     {
         $name = static::fieldName($key);
         $label = $key->label();
+
+        if ($key === SettingKey::PackagesPremiumOnly) {
+            return Toggle::make($name)->label($label)->inline(false)->live()->columnSpanFull()
+                ->helperText(__('On: only clients whose implicit or explicit package (or a temporary override) is on the premium list are served. Standard clients cannot sign in to the portal, the phone menu does not recognise them, and no staff view shows them; a thin bar on top of the panel says so. Nothing is deleted or closed, and the sync keeps importing them: switching off brings everything back. Switching on asks for confirmation with the number of clients affected.'));
+        }
 
         if ($key === SettingKey::SyncExportPayload || $key === SettingKey::SyncIdListPayload) {
             return Textarea::make($name)->label($key === SettingKey::SyncExportPayload ? __('EMD export JSON payload') : $label)
@@ -733,10 +871,10 @@ class ManageSettings extends Page implements HasTable
                     SettingKey::CallsStaleAfterHours => __('A call whose end the call center never reported (lost event, PBX restart) is closed as missed after this many hours, so it does not stay on the dashboard forever.'),
                     default => null,
                 }),
+            // A removed or replaced image is deleted from the disk once the change
+            // is saved (replacedImages), never while the form is still open: a
+            // discarded change would otherwise point to a missing file.
             SettingType::Image => FileUpload::make($name)->label($label)->image()->disk('public')->directory('branding')->visibility('public')
-                // Without this the removed file only leaves the form state and
-                // stays on the public disk for good.
-                ->deleteUploadedFileUsing(fn (string $file) => Storage::disk('public')->delete($file))
                 ->maxSize(4096)->imagePreviewHeight('120')->columnSpan(1),
             SettingType::Text => match ($key) {
                 SettingKey::CallsDefaultTier => Select::make($name)->label($label)->required()->native(false)

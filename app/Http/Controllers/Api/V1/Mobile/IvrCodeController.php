@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1\Mobile;
 
+use App\Clients\ClientTiers;
 use App\Enums\OneTimeCodePurpose;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuthenticateApiKey;
@@ -41,6 +42,12 @@ class IvrCodeController extends Controller
 
         if ($client === null) {
             throw ValidationException::withMessages(['client' => __('No open client account matches the given identity.')]);
+        }
+
+        // A client whose package grants no portal access (in premium-only mode
+        // every standard client) gets no code: the phone menu would refuse it.
+        if (! app(ClientTiers::class)->isEntitled($client)) {
+            throw ValidationException::withMessages(['client' => __('This client is not entitled to identification codes.')]);
         }
 
         $issued = $otp->issue($client, 'mobile_backend', OneTimeCodePurpose::IvrCode, [

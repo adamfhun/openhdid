@@ -4,6 +4,7 @@ namespace App\System;
 
 use App\Auth\Oidc\OidcProvider;
 use App\Clients\ClientPhones;
+use App\Clients\ClientTiers;
 use App\Enums\ApiKeyScope;
 use App\Enums\OutboundMessageStatus;
 use App\Enums\PrincipalType;
@@ -46,6 +47,18 @@ class HealthChecks
         private readonly Settings $settings,
         private readonly Retention $retention,
     ) {}
+
+    public function premiumOnly(): Check
+    {
+        $label = __('Premium clients only');
+        $tiers = app(ClientTiers::class);
+
+        if (! $tiers->premiumOnly()) {
+            return Check::ok('premium_only', $label, __('Off: premium and standard clients are served.'));
+        }
+
+        return Check::warn('premium_only', $label, __('On: only premium clients are served; :n open standard client(s) held back.', ['n' => $tiers->heldBackCount()]));
+    }
 
     public function loginLinkPreview(): Check
     {
@@ -98,6 +111,7 @@ class HealthChecks
             'oidc' => [__('Single sign-on'), $this->oidc(...)],
             'proxy' => [__('Outbound proxy'), $this->outboundProxy(...)],
             'login_link_preview' => [__('Login link preview'), $this->loginLinkPreview(...)],
+            'premium_only' => [__('Premium clients only'), $this->premiumOnly(...)],
             'storage' => [__('Storage'), $this->storage(...)],
             'retention' => [__('Data retention'), $this->retention(...)],
         ];
@@ -122,6 +136,7 @@ class HealthChecks
     public static function hint(string $key): ?string
     {
         return match ($key) {
+            'premium_only' => __('Yellow: Settings › Packages › "Premium only" is on, so only premium clients are served; standard clients cannot sign in, the phone menu does not recognise them and no staff view shows them. Their data is kept and the sync keeps importing them. Switch it off to serve them again; the number shown is how many open standard clients are held back.'),
             'login_link_preview' => __('Yellow: Settings › Client login › "Magic link preview in panel" is on, so every sent client login link is shown to the staff member who sends it. Meant for test environments only; switch it off for production.'),
             'sync_auth' => config('hdid.sync.token_keep_alive')
                 ? __('EMD API tokens are refreshed every 15 minutes when EMD_SYNC_TOKEN_KEEP_ALIVE is enabled. Check the login/refresh URLs, credentials, scheduler and hdid:emd-sync-token. The EMD sync run checks the export separately.')
@@ -422,7 +437,9 @@ class HealthChecks
     public function packageOverrides(): Check
     {
         $label = __('Package overrides');
-        $active = Client::query()->whereNotNull('package_override')->where('package_override_until', '>=', now())->with('packageOverrideBy')->orderBy('package_override_until')->get();
+        $active = Client::query()->whereNotNull('package_override')->where('package_override_until', '>=', now())
+            ->tap(fn ($query) => app(ClientTiers::class)->scopeServed($query))
+            ->with('packageOverrideBy')->orderBy('package_override_until')->get();
 
         if ($active->isEmpty()) {
             return Check::ok('package_overrides', $label, __('No manual override; every package comes from EMD.'));

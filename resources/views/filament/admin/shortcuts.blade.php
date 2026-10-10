@@ -6,6 +6,7 @@
         }
 
         event.preventDefault();
-        window.location.assign(@js($searchUrl));
+        // A page with unsaved changes asks first (unsaved-guard-script).
+        window.hdidLeave ? window.hdidLeave(@js($searchUrl)) : window.location.assign(@js($searchUrl));
     });
 </script>

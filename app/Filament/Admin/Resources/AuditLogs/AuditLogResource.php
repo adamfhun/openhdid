@@ -2,6 +2,7 @@
 
 namespace App\Filament\Admin\Resources\AuditLogs;
 
+use App\Clients\ClientTiers;
 use App\Filament\Admin\Clusters\System;
 use App\Filament\Admin\Pages\ManageSettings;
 use App\Filament\Admin\Resources\ApiKeys\ApiKeyResource;
@@ -169,8 +170,9 @@ class AuditLogResource extends BaseResource
      * Human label and, where the panel has a page for it, a link to the record
      * itself. Child records of a client (session, phone number, link, code,
      * answer) lead to the client, whose page lists them. The ids in the modal
-     * only appear when there is nothing to link to (no page, or the record
-     * is gone for good).
+     * only appear when there is nothing to link to (no page, the record is
+     * gone for good, or premium-only mode does not serve the client). The
+     * audit log is the record of what happened, so it keeps the names.
      *
      * @return array{label: ?string, url: ?string}
      */
@@ -179,30 +181,30 @@ class AuditLogResource extends BaseResource
         return match (true) {
             $model === null => ['label' => null, 'url' => null],
             $model instanceof User => ['label' => $model->name, 'url' => UserResource::getUrl('edit', ['record' => $model])],
-            $model instanceof Client => ['label' => $model->name, 'url' => ClientResource::getUrl('view', ['record' => $model])],
+            $model instanceof Client => ['label' => $model->name, 'url' => static::clientUrl($model)],
             $model instanceof Call => [
                 'label' => __('Call').' · '.($model->callerNumber() ?? '?').($model->client ? ' · '.$model->client->name : '').' · '.$model->arrived_at?->format(HuDate::DATETIME),
                 'url' => $model->external_call_id ? CallResource::getUrl('index', ['tableSearch' => $model->external_call_id]) : null,
             ],
             $model instanceof IdSession => [
                 'label' => __('Identification').' · '.($model->client?->name ?? '?').' · '.$model->started_at?->format(HuDate::DATETIME),
-                'url' => $model->client ? ClientResource::getUrl('view', ['record' => $model->client]) : null,
+                'url' => static::clientUrl($model->client),
             ],
             $model instanceof ClientPhoneNumber => [
                 'label' => __('Phone number').' · '.$model->number_e164.($model->client ? ' · '.$model->client->name : ''),
-                'url' => $model->client ? ClientResource::getUrl('view', ['record' => $model->client]) : null,
+                'url' => static::clientUrl($model->client),
             ],
             $model instanceof ClientLink => [
                 'label' => __('Link').' · '.($model->sponsor?->name ?? '?').' → '.($model->linked?->name ?? '?'),
-                'url' => $model->sponsor ? ClientResource::getUrl('view', ['record' => $model->sponsor]) : null,
+                'url' => static::clientUrl($model->sponsor),
             ],
             $model instanceof OneTimeCode => [
                 'label' => __('One-time code').($model->client ? ' · '.$model->client->name : ''),
-                'url' => $model->client ? ClientResource::getUrl('view', ['record' => $model->client]) : null,
+                'url' => static::clientUrl($model->client),
             ],
             $model instanceof ClientAnswer => [
                 'label' => __('Answer').($model->client ? ' · '.$model->client->name : ''),
-                'url' => $model->client ? ClientResource::getUrl('view', ['record' => $model->client]) : null,
+                'url' => static::clientUrl($model->client),
             ],
             $model instanceof Question => ['label' => __('Question').' · '.Str::limit((string) $model->currentVersion?->text, 60), 'url' => QuestionResource::getUrl('view', ['record' => $model])],
             $model instanceof QuestionVersion => [
@@ -219,6 +221,11 @@ class AuditLogResource extends BaseResource
             $model instanceof MessageTemplate => ['label' => $model->key->label().' · '.strtoupper($model->locale), 'url' => MessageTemplateResource::getUrl('edit', ['record' => $model])],
             default => ['label' => static::fallbackLabel($model->getMorphClass(), (string) $model->getKey()), 'url' => null],
         };
+    }
+
+    private static function clientUrl(?Client $client): ?string
+    {
+        return app(ClientTiers::class)->isServed($client) ? ClientResource::getUrl('view', ['record' => $client]) : null;
     }
 
     private static function fallbackLabel(string $type, ?string $id): string

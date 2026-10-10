@@ -32,7 +32,7 @@ class ListClients extends ListRecords
     public function getTabs(): array
     {
         $waiting = ClientResource::unlinkedPremiumCount();
-        $closing = static::closingAtNextRun(Client::query())->count();
+        $closing = static::closingAtNextRun(ClientResource::getEloquentQuery())->count();
 
         return [
             'all' => Tab::make(__('All clients')),

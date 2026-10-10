@@ -95,7 +95,8 @@ class UserReport
     private function calls(CarbonImmutable $from, CarbonImmutable $until): array
     {
         $summary = $this->callStats->summarize($from, $until);
-        $tiers = $this->tiers->activeTiers();
+        // The levels as configured: a period before premium-only went on keeps its standard calls.
+        $tiers = $this->tiers->configuredTiers();
 
         $byTier = Call::withTrashed()
             ->whereNotNull('agent_user_id')

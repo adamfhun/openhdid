@@ -3,6 +3,7 @@
 namespace App\Filament\Admin\Resources\Clients\RelationManagers;
 
 use App\Filament\Admin\Resources\IdSessions\IdSessionResource;
+use App\Filament\Concerns\RequiresServedOwner;
 use Filament\Resources\RelationManagers\RelationManager;
 use Filament\Schemas\Schema;
 use Filament\Tables\Table;
@@ -10,6 +11,8 @@ use Illuminate\Database\Eloquent\Model;
 
 class IdSessionsRelationManager extends RelationManager
 {
+    use RequiresServedOwner;
+
     protected static string $relationship = 'idSessions';
 
     public static function getTitle(Model $ownerRecord, string $pageClass): string

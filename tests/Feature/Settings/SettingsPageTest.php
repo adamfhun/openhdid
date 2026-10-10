@@ -3,6 +3,8 @@
 use App\Auth\Permission;
 use App\Auth\Role;
 use App\Filament\Admin\Pages\ManageSettings;
+use App\Models\Client;
+use App\Models\Setting;
 use App\Models\SyncIdListItem;
 use App\Models\User;
 use App\Settings\SettingKey;
@@ -13,6 +15,7 @@ use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Sleep;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Symfony\Component\HttpKernel\Exception\HttpException;
@@ -329,7 +332,7 @@ it('never seeds the shared settings cache from an uncommitted transaction', func
 
             // The pending value must not reach the cache every other process
             // reads; only the committed state may.
-            expect(Cache::get('hdid.settings'))->toBeNull();
+            expect(Cache::get('hdid.settings.'.Cache::get('hdid.settings.version')))->toBeNull();
 
             throw new RuntimeException('rollback');
         });
@@ -339,6 +342,68 @@ it('never seeds the shared settings cache from an uncommitted transaction', func
 
     app(Settings::class)->forget();
     expect(app(Settings::class)->int(SettingKey::CallsDashboardPollSeconds))->toBe(5, 'the rolled back value is gone');
+});
+
+it('does not let a read from before a save put the old values back in the cache', function (): void {
+    $settings = app(Settings::class);
+    $settings->forget();
+
+    // A request fixes its cache key and reads the table just before another save commits...
+    $staleKey = (fn (): string => $this->cacheKey())->call($settings);
+    $stale = Setting::query()->pluck('value', 'key')->all();
+
+    app(Settings::class)->set(SettingKey::PackagesPremiumOnly, true);
+
+    // ...and stores what it read only after that save cleared the cache.
+    Cache::put($staleKey, $stale, 3600);
+
+    $settings->forgetLocal();
+    expect($settings->bool(SettingKey::PackagesPremiumOnly))->toBeTrue();
+});
+
+it('saves the settings one at a time and gives up with a word when another save holds on', function (): void {
+    Sleep::fake(syncWithCarbon: true);
+    $other = Cache::lock('hdid:settings-save', 60);
+    $other->get();
+
+    Livewire::test(ManageSettings::class)
+        ->fillForm([ManageSettings::fieldName(SettingKey::PortalLegalName) => 'Új Kft.'])
+        ->call('save')
+        ->assertNotified(__('Another save of the settings is in progress; try again in a moment.'));
+
+    expect(app(Settings::class)->string(SettingKey::PortalLegalName))->not->toBe('Új Kft.');
+    $other->release();
+});
+
+it('checks a confirmed save against what another admin saved after the confirmation opened', function (): void {
+    Client::factory()->synced()->standard()->create();
+    Client::factory()->synced()->premium()->create();
+
+    $page = Livewire::test(ManageSettings::class)
+        ->fillForm([ManageSettings::fieldName(SettingKey::PackagesPremiumOnly) => true])
+        ->call('save')
+        ->assertActionMounted('save');
+
+    // Meanwhile another admin moves the only premium package to the standard list.
+    app(Settings::class)->setMany([SettingKey::PackagesPremium->value => [], SettingKey::PackagesStandard->value => ['Basic', 'Premium']]);
+
+    $page->callMountedAction()->assertNotified(__('What this save does has changed'))->assertActionMounted('save');
+    expect(app(Settings::class)->bool(SettingKey::PackagesPremiumOnly))->toBeFalse();
+
+    // Confirmed again with the new consequences, the cross-key rule refuses it on the stored lists.
+    $page->callMountedAction()->assertHasErrors(['data.'.ManageSettings::fieldName(SettingKey::PackagesPremiumOnly)]);
+    expect(app(Settings::class)->bool(SettingKey::PackagesPremiumOnly))->toBeFalse();
+});
+
+it('does not save past the confirmation when the save is called directly', function (): void {
+    Client::factory()->synced()->standard()->create();
+
+    Livewire::test(ManageSettings::class)
+        ->fillForm([ManageSettings::fieldName(SettingKey::PackagesPremiumOnly) => true])
+        ->call('save')
+        ->assertActionMounted('save');
+
+    expect(app(Settings::class)->bool(SettingKey::PackagesPremiumOnly))->toBeFalse();
 });
 
 it('rejects out-of-range login, session and SMS budget values without saving them', function (SettingKey $key, int $value): void {

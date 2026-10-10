@@ -30,10 +30,14 @@ class ClientPhones
     public function __construct(
         private readonly Settings $settings,
         private readonly Auditor $auditor,
+        private readonly ClientTiers $tiers,
     ) {}
 
     /**
-     * Open clients other than the given one that carry this number.
+     * Open clients other than the given one that carry this number. The
+     * holder checks count every open client, served or not: a number shared
+     * with a client hidden by premium-only mode is still shared, so the phone
+     * menu cannot tell the callers apart. Names are shown via holderNames().
      *
      * @return Collection<int, Client>
      */
@@ -44,6 +48,20 @@ class ClientPhones
             ->when($except !== null, fn (Builder $query) => $query->whereKeyNot($except->getKey()))
             ->orderBy('name')
             ->get();
+    }
+
+    /**
+     * The holders as a staff view may name them: the served ones by name, the
+     * ones hidden by premium-only mode only counted.
+     *
+     * @param  Collection<int, Client>  $holders
+     */
+    public function holderNames(Collection $holders): string
+    {
+        $named = $holders->filter(fn (Client $client): bool => $this->tiers->isServed($client))->pluck('name');
+        $hidden = $holders->count() - $named->count();
+
+        return $named->when($hidden > 0, fn ($names) => $names->push(__(':n client(s) not served at present', ['n' => $hidden])))->implode(', ');
     }
 
     public function isShared(ClientPhoneNumber $phone): bool
@@ -76,7 +94,9 @@ class ClientPhones
     }
 
     /**
-     * Every number row whose number is on file for more than one open client.
+     * Every number row whose number is on file for more than one open client,
+     * listing only the rows of clients the system serves (in premium-only mode
+     * a number shared with a hidden client shows with its served holder only).
      *
      * @return Builder<ClientPhoneNumber>
      */
@@ -92,7 +112,7 @@ class ClientPhones
                 ->whereNull('holders.closed_at')
                 ->groupBy('shared.number_e164')
                 ->havingRaw('COUNT(DISTINCT shared.client_id) > 1'))
-            ->whereHas('client', fn (Builder $query) => $query->open());
+            ->whereHas('client', fn (Builder $query) => $query->open()->tap(fn (Builder $served) => $this->tiers->scopeServed($served)));
     }
 
     public function sharedNumberCount(): int

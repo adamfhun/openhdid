@@ -314,7 +314,9 @@ class CallCenterService
         $call = Call::query()->where('external_call_id', $externalCallId)->first();
         $client = $call?->client;
 
-        if ($call === null || $client === null) {
+        // A call matched before premium-only went on keeps its client, but a
+        // client no longer served is no PIN holder for the phone menu.
+        if ($call === null || ! $this->tiers->isServed($client)) {
             return IvrResult::unknownCaller();
         }
 
@@ -383,11 +385,11 @@ class CallCenterService
     public function resolveNamedClient(?string $clientId, ?int $externalId): ?Client
     {
         if ($clientId !== null) {
-            return Client::query()->open()->find($clientId);
+            return Client::query()->open()->tap(fn ($q) => $this->tiers->scopeServed($q))->find($clientId);
         }
 
         if ($externalId !== null) {
-            return Client::query()->open()->whereHas('externalRecord', fn ($q) => $q->where('external_id', $externalId))->first();
+            return Client::query()->open()->tap(fn ($q) => $this->tiers->scopeServed($q))->whereHas('externalRecord', fn ($q) => $q->where('external_id', $externalId))->first();
         }
 
         return null;
@@ -402,7 +404,9 @@ class CallCenterService
      * The open client behind a caller's number. Verified numbers outrank
      * unverified ones and primary numbers outrank secondary ones; when the
      * best candidates still belong to different clients the number is
-     * ambiguous and nobody is matched — the caller has to identify.
+     * ambiguous and nobody is matched — the caller has to identify. In
+     * premium-only mode a standard caller is an unknown caller, but a number
+     * a premium client shares with a standard one still counts as shared.
      */
     public function match(?string $e164): PhoneMatch
     {
@@ -433,6 +437,8 @@ class CallCenterService
             return new PhoneMatch(null, ambiguous: true);
         }
 
-        return new PhoneMatch($best->client);
+        // A number shared with a client no longer served stays ambiguous (above);
+        // a number only such a client holds gives an unknown caller.
+        return $this->tiers->isServed($best->client) ? new PhoneMatch($best->client) : PhoneMatch::none();
     }
 }

@@ -222,7 +222,8 @@ class PinService
         }
 
         $session->forceFill(['status' => $status, 'outcome_reason' => $reason, 'decided_at' => now()])->save();
-        $this->auditor->record('id_session.finished', $session, ['status' => $status->value, 'reason' => $reason, 'method' => 'pin'], $agent);
+        $this->auditor->record('id_session.finished', $session, ['status' => $status->value, 'reason' => $reason, 'method' => 'pin']
+            + ($reason === 'account_closed' && ! $client->isClosed() && $this->tiers->heldBackByPremiumOnly($client) ? ['premium_only' => true] : []), $agent);
         app(ClientPhones::class)->verifyFromIdentifiedCall($session);
 
         return $session;

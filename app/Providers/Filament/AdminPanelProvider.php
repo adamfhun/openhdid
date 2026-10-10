@@ -13,6 +13,7 @@ use App\Filament\Admin\Widgets\MissedCallsWidget;
 use App\Filament\Admin\Widgets\OngoingCallsWidget;
 use App\Filament\Admin\Widgets\OverviewStatsWidget;
 use App\Filament\BrandedPanel;
+use App\Filament\Concerns\GuardsUnsavedChanges;
 use App\Filament\Pages\Auth\Login;
 use App\Http\Middleware\EnforceAuthSessions;
 use App\Localization\SetLocale;
@@ -71,6 +72,12 @@ class AdminPanelProvider extends PanelProvider
                 NavigationGroup::cases(),
             ))
             ->renderHook(PanelsRenderHook::USER_MENU_BEFORE, fn (): View => view('filament.admin.tier-switch'))
+            ->renderHook(PanelsRenderHook::TOPBAR_BEFORE, fn (): View => view('filament.admin.premium-only-bar'))
+            // Pages with a Save button ask before their unsaved changes are left behind.
+            ->renderHook(PanelsRenderHook::HEAD_END, fn (): View => view('filament.admin.unsaved-guard-script'))
+            ->renderHook(PanelsRenderHook::PAGE_END, fn (array $scopes): string => collect($scopes)
+                ->contains(fn (string $scope): bool => in_array(GuardsUnsavedChanges::class, class_uses_recursive($scope), true))
+                ? view('filament.admin.unsaved-guard')->render() : '')
             ->renderHook(PanelsRenderHook::BODY_END, fn (): View => view('filament.admin.shortcuts', ['searchUrl' => SearchClients::getUrl()]))
             ->renderHook(PanelsRenderHook::FOOTER, fn (): View => view('filament.admin.source-link', ['url' => app(Branding::class)->sourceUrl()]))
             ->userMenuItems([

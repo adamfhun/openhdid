@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Widgets;
 use App\Auth\Permission;
 use App\CallCenter\CallAlreadyClaimedException;
 use App\CallCenter\CallCenterService;
+use App\Clients\ClientTiers;
 use App\Enums\CallStatus;
 use App\Enums\ClientTier;
 use App\Filament\Actions\TakeCallAction;
@@ -52,13 +53,14 @@ class OngoingCallsWidget extends TableWidget
                     ->state(fn (Call $record) => $record->callerNumber())
                     ->tooltip(fn (Call $record) => $record->caller_number_e164 === null && $record->caller_number_raw !== null ? __('Number as the call center sent it; it could not be normalised, so no client was matched by it.') : null),
                 TextColumn::make('client.name')->label(__('Client'))
+                    ->state(fn (Call $call): ?string => app(ClientTiers::class)->servedName($call->client))
                     ->placeholder(fn (Call $call) => ($call->metadata['ambiguous_number'] ?? false) === true ? __('Shared number') : __('Unknown caller'))
                     ->tooltip(fn (Call $call) => match (true) {
                         ($call->metadata['ambiguous_number'] ?? false) === true => __('Several clients have this number on file; the caller has to identify.'),
-                        $call->client !== null => $call->client->externalRecord?->jobLabel() ?? __('No title or department in EMD'),
+                        app(ClientTiers::class)->isServed($call->client) => $call->client->externalRecord?->jobLabel() ?? __('No title or department in EMD'),
                         default => null,
                     })
-                    ->url(fn (Call $call) => $call->client ? ClientResource::getUrl('view', ['record' => $call->client]) : null)
+                    ->url(fn (Call $call) => app(ClientTiers::class)->isServed($call->client) ? ClientResource::getUrl('view', ['record' => $call->client]) : null)
                     ->weight('bold'),
                 TextColumn::make('tier')->label(__('Level'))->badge()
                     ->formatStateUsing(fn (?ClientTier $state) => $state?->label() ?? '-')
@@ -67,8 +69,12 @@ class OngoingCallsWidget extends TableWidget
                 TextColumn::make('identification')
                     ->label(__('Identification'))
                     ->badge()
-                    ->state(fn (Call $call): string => $call->passedSession() !== null ? __('Identified') : ($call->clientIdSessions()->isNotEmpty() ? __('Failed') : __('None')))
-                    ->color(fn (Call $call): string => $call->passedSession() !== null ? 'success' : ($call->clientIdSessions()->isNotEmpty() ? 'danger' : 'gray')),
+                    ->state(fn (Call $call): string => match (static::identificationOf($call)) {
+                        'passed' => __('Identified'), 'failed' => __('Failed'), default => __('None'),
+                    })
+                    ->color(fn (Call $call): string => match (static::identificationOf($call)) {
+                        'passed' => 'success', 'failed' => 'danger', default => 'gray',
+                    }),
                 TextColumn::make('status')->label(__('Status'))->badge()->formatStateUsing(fn (CallStatus $state) => __($state->value))->color(fn (CallStatus $state): string => $state === CallStatus::Active ? 'info' : 'warning'),
                 TextColumn::make('agent.name')->label(__('Agent'))->placeholder('-'),
             ])
@@ -99,9 +105,7 @@ class OngoingCallsWidget extends TableWidget
                             return;
                         }
 
-                        $this->redirect($call->client_id !== null
-                            ? Identify::getUrl(['client' => $call->client_id, 'call' => $call->id])
-                            : SearchClients::getUrl(['call' => $call->id]));
+                        $this->redirect(static::identifyUrl($call));
                     }),
                 Action::make('release')
                     ->authorize(fn (): bool => auth()->user()?->can(Permission::IdentificationRun->value) ?? false)
@@ -121,5 +125,30 @@ class OngoingCallsWidget extends TableWidget
                         }
                     }),
             ]);
+    }
+
+    /**
+     * How far the matched client got on this call; nothing about a client no
+     * longer served (premium-only mode), like the API.
+     */
+    public static function identificationOf(Call $call): ?string
+    {
+        if (! app(ClientTiers::class)->isServed($call->client)) {
+            return null;
+        }
+
+        return $call->passedSession() !== null ? 'passed' : ($call->clientIdSessions()->isNotEmpty() ? 'failed' : null);
+    }
+
+    /**
+     * Where "Identify" leads: the matched client's identification page, or
+     * the search when nobody is matched or the client is not served now
+     * (a call matched before premium-only went on).
+     */
+    public static function identifyUrl(Call $call): string
+    {
+        return app(ClientTiers::class)->isServed($call->client)
+            ? Identify::getUrl(['client' => $call->client_id, 'call' => $call->id])
+            : SearchClients::getUrl(['call' => $call->id]);
     }
 }

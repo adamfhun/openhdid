@@ -185,7 +185,7 @@ class ClientResource extends BaseResource
     public static function linkToSponsorAction(): Action
     {
         $links = app(ClientLinks::class);
-        $candidates = fn (): Builder => Client::query()->open()->whereIn('implicit_package', app(ClientTiers::class)->rawNames(app(ClientTiers::class)->packages(ClientTier::Premium)));
+        $candidates = fn (): Builder => static::sponsorCandidates();
 
         return Action::make('linkToSponsor')
             ->label(__('Link to a sponsor'))
@@ -205,17 +205,40 @@ class ClientResource extends BaseResource
                             ->orWhereHas('externalRecord', fn (Builder $r) => $r->where('company', 'like', "%{$search}%")->orWhere('external_id', ctype_digit($search) ? (int) $search : -1)))
                         ->orderBy('name')->limit(20)->get()
                         ->mapWithKeys(fn (Client $c) => [$c->id => LinkedClientsRelationManager::optionLabel($c)])->all())
-                    ->getOptionLabelUsing(fn ($value) => ($c = Client::query()->with(['externalRecord', 'phoneNumbers'])->find($value)) ? LinkedClientsRelationManager::optionLabel($c) : null)
+                    ->getOptionLabelUsing(fn ($value) => static::sponsorOptionLabel($value))
                     ->helperText(__('Search by name, e-mail, company or external id; only open clients with an implicit premium package are offered.')),
             ])
             ->action(function (Client $record, array $data) use ($links): void {
                 try {
-                    $links->link(Client::query()->findOrFail($data['sponsor_id']), $record, auth()->user());
+                    $links->link(static::sponsorCandidates()->findOrFail($data['sponsor_id']), $record, auth()->user());
                     Notification::make()->title(__('Client linked'))->success()->send();
                 } catch (ValidationException $e) {
                     Notification::make()->title($e->validator->errors()->first())->danger()->send();
                 }
             });
+    }
+
+    /**
+     * Who can be picked as a sponsor: open, served clients with an implicit
+     * premium package. The label lookup and the link itself go through this
+     * too, so a forged id names or links nobody else.
+     *
+     * @return Builder<Client>
+     */
+    public static function sponsorCandidates(): Builder
+    {
+        $tiers = app(ClientTiers::class);
+
+        return Client::query()->open()
+            ->whereIn('implicit_package', $tiers->rawNames($tiers->packages(ClientTier::Premium)))
+            ->tap(fn (Builder $query) => $tiers->scopeServed($query));
+    }
+
+    public static function sponsorOptionLabel(mixed $value): ?string
+    {
+        $client = is_scalar($value) ? static::sponsorCandidates()->with(['externalRecord', 'phoneNumbers'])->find($value) : null;
+
+        return $client instanceof Client ? LinkedClientsRelationManager::optionLabel($client) : null;
     }
 
     public static function endOverrideAction(): Action
@@ -227,7 +250,14 @@ class ClientResource extends BaseResource
             ->requiresConfirmation()
             ->modalDescription(__('EMD value applies again immediately.'))
             ->visible(fn (Client $record) => auth()->user()?->can(Permission::ClientsPackageOverride->value) && $record->hasActivePackageOverride())
-            ->action(fn (Client $record) => app(PackageOverrides::class)->end($record, 'manual', auth()->user()));
+            ->action(function (Client $record, $livewire): void {
+                app(PackageOverrides::class)->end($record, 'manual', auth()->user());
+
+                // Without the override the client may not be served (premium-only) any more.
+                if (! app(ClientTiers::class)->isServed($record->fresh())) {
+                    $livewire->redirect(static::afterSaveUrl($record->fresh()));
+                }
+            });
     }
 
     /**
@@ -431,8 +461,12 @@ class ClientResource extends BaseResource
             return __('The client can no longer sign in to the portal and cannot be identified until reopened.');
         }
 
-        $names = $linked->take(8)->map(fn (Client $c) => $c->name.' ('.$c->email.')')->implode(', ');
-        $more = $linked->count() > 8 ? ' '.__('and :n more', ['n' => $linked->count() - 8]) : '';
+        // Clients hidden by premium-only mode are closed too, so they are counted, but not named.
+        $named = $linked->filter(fn (Client $c): bool => app(ClientTiers::class)->isServed($c));
+        $names = $named->take(8)->map(fn (Client $c) => $c->name.' ('.$c->email.')')
+            ->when($linked->count() > $named->count(), fn ($list) => $list->push(__(':n client(s) not served at present', ['n' => $linked->count() - $named->count()])))
+            ->implode(', ');
+        $more = $named->count() > 8 ? ' '.__('and :n more', ['n' => $named->count() - 8]) : '';
 
         return __('This client sponsors :n linked client(s). Closing it also closes their accounts: :names:more. Reopening this client reopens them.', ['n' => $linked->count(), 'names' => $names, 'more' => $more]);
     }
@@ -581,10 +615,10 @@ class ClientResource extends BaseResource
                     ->options(collect(app(ClientTiers::class)->activeTiers())->mapWithKeys(fn (ClientTier $t) => [$t->value => $t->label()])->all())
                     ->query(fn (Builder $query, array $data) => $query->when($data['value'] ?? null, fn (Builder $q, string $v) => app(ClientTiers::class)->scopeClients($q, [ClientTier::from($v)]))),
                 SelectFilter::make('company')->label(__('Company'))->searchable()
-                    ->options(fn () => ExternalRecord::query()->whereNotNull('company')->distinct()->orderBy('company')->pluck('company', 'company'))
+                    ->options(fn () => static::servedRecords()->whereNotNull('company')->distinct()->orderBy('company')->pluck('company', 'company'))
                     ->query(fn (Builder $query, array $data) => $query->when($data['value'] ?? null, fn (Builder $q, string $v) => $q->whereHas('externalRecord', fn ($r) => $r->where('company', $v)))),
                 SelectFilter::make('email_domain')->label(__('E-mail domain'))->searchable()
-                    ->options(fn () => ExternalRecord::query()->whereNotNull('email_domain')->distinct()->orderBy('email_domain')->pluck('email_domain', 'email_domain'))
+                    ->options(fn () => static::servedRecords()->whereNotNull('email_domain')->distinct()->orderBy('email_domain')->pluck('email_domain', 'email_domain'))
                     ->query(fn (Builder $query, array $data) => $query->when($data['value'] ?? null, fn (Builder $q, string $v) => $q->whereHas('externalRecord', fn ($r) => $r->where('email_domain', $v)))),
                 SelectFilter::make('implicit_package')->label(__('Implicit package'))->searchable()
                     ->options(fn () => Client::query()->whereNotNull('implicit_package')->distinct()->orderBy('implicit_package')->pluck('implicit_package', 'implicit_package')),
@@ -715,6 +749,54 @@ class ClientResource extends BaseResource
     public static function unlinkedPremiumCount(): int
     {
         return static::scopeUnlinkedPremium(Client::query()->open())->count();
+    }
+
+    /**
+     * Directory records behind the clients the system serves (for the list's
+     * filter options, which would otherwise name what hidden clients carry).
+     *
+     * @return Builder<ExternalRecord>
+     */
+    private static function servedRecords(): Builder
+    {
+        $query = ExternalRecord::query();
+
+        if (app(ClientTiers::class)->premiumOnly()) {
+            $query->whereHas('client', fn (Builder $client) => app(ClientTiers::class)->scopeServed($client));
+        }
+
+        return $query;
+    }
+
+    /**
+     * Where to go after saving a client: its page, or the list with a word
+     * of explanation when premium-only mode no longer serves (shows) it.
+     */
+    public static function afterSaveUrl(Client $client): string
+    {
+        if (app(ClientTiers::class)->isServed($client)) {
+            return static::getUrl('view', ['record' => $client]);
+        }
+
+        Notification::make()->warning()
+            ->title(__('Saved; the client is not served at present (only premium clients are served), so it does not show in the lists.'))
+            ->send();
+
+        return static::getUrl('index');
+    }
+
+    /**
+     * Every page of the resource (list, view, edit, export) shows only the
+     * clients the system serves: in premium-only mode the premium ones.
+     *
+     * @return Builder<Client>
+     */
+    public static function getEloquentQuery(): Builder
+    {
+        $query = parent::getEloquentQuery();
+        app(ClientTiers::class)->scopeServed($query);
+
+        return $query;
     }
 
     public static function getNavigationBadge(): ?string

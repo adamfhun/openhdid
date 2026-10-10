@@ -3,6 +3,7 @@
 namespace App\Filament\Admin\Widgets;
 
 use App\Auth\Permission;
+use App\Clients\ClientTiers;
 use App\Enums\IdSessionStatus;
 use App\Models\Call;
 use App\Models\Client;
@@ -56,7 +57,7 @@ class OverviewStatsWidget extends StatsOverviewWidget
             ->where('status', IdSessionStatus::Passed)
             ->sum('n'))->all();
 
-        $clients = ! ($user?->can(Permission::ClientsView->value) ?? false) ? null : Client::query()->open()
+        $clients = ! ($user?->can(Permission::ClientsView->value) ?? false) ? null : Client::query()->open()->tap(fn ($query) => app(ClientTiers::class)->scopeServed($query))
             ->selectRaw('COUNT(*) as total, SUM(CASE WHEN pin_hash IS NOT NULL THEN 1 ELSE 0 END) as with_pin')
             ->first();
 

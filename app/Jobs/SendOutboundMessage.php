@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Audit\Auditor;
+use App\Clients\ClientTiers;
 use App\Enums\OutboundMessageStatus;
 use App\Mail\MagicLinkMail;
 use App\Mail\TemplatedMail;
@@ -30,6 +31,9 @@ use Throwable;
  *
  * The outcome of every message is an audit entry on the client it was
  * sent to (message.sent, or message.failed once the retries are used up).
+ * A message to a client the system no longer serves (premium-only mode was
+ * switched on after it was queued) is not sent: it is cancelled, its secret
+ * wiped, and the audit entry is message.cancelled.
  */
 class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
 {
@@ -48,13 +52,24 @@ class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
         return $this->messageId;
     }
 
-    public function handle(Mailer $mailer, SmsSender $sms, Auditor $auditor): void
+    public function handle(Mailer $mailer, SmsSender $sms, Auditor $auditor, ClientTiers $tiers): void
     {
         Cache::put(self::HEARTBEAT_KEY, now()->toIso8601String(), now()->addHours(6));
 
         $message = $this->claim();
 
         if ($message === null) {
+            return;
+        }
+
+        if ($message->client_id !== null && ! $tiers->isServed($message->client)) {
+            $message->forceFill([
+                'status' => OutboundMessageStatus::Cancelled,
+                'error' => __('Not sent: the client is not served (only premium clients are served).'),
+            ])->save();
+            $message->redactSecret();
+            $auditor->record('message.cancelled', $message->client, self::auditContext($message) + ['premium_only' => true]);
+
             return;
         }
 

@@ -57,7 +57,10 @@ class CallResource extends BaseResource
                 TextColumn::make('caller_number_e164')->label(__('Number'))->searchable()->placeholder(__('withheld'))
                     ->state(fn (Call $record) => $record->callerNumber())
                     ->tooltip(fn (Call $record) => $record->caller_number_e164 === null && $record->caller_number_raw !== null ? __('Number as the call center sent it; it could not be normalised, so no client was matched by it.') : null),
-                TextColumn::make('client.name')->label(__('Client'))->placeholder(__('unknown'))->searchable(),
+                TextColumn::make('client.name')->label(__('Client'))->placeholder(__('unknown'))
+                    ->searchable(query: fn (Builder $query, string $search): Builder => $query->whereHas('client', fn (Builder $client) => $client
+                        ->where('name', 'like', '%'.$search.'%')->tap(fn (Builder $served) => app(ClientTiers::class)->scopeServed($served))))
+                    ->state(fn (Call $record): ?string => app(ClientTiers::class)->servedName($record->client)),
                 TextColumn::make('agent.name')->label(__('Agent'))->placeholder('-'),
                 TextColumn::make('tier')->label(__('Level'))->badge()
                     ->formatStateUsing(fn (?ClientTier $state) => $state?->label() ?? '-')
@@ -66,7 +69,8 @@ class CallResource extends BaseResource
                 TextColumn::make('status')->label(__('Status'))->badge()->formatStateUsing(fn (CallStatus $state) => __($state->value)),
                 TextColumn::make('id_sessions_count')->label(__('Attempts'))->badge(),
                 TextColumn::make('wrap_up_note')->label(__('Call note'))->limit(40)->wrap()->placeholder('-')
-                    ->tooltip(fn (Call $record) => $record->wrap_up_note)
+                    ->state(fn (Call $record): ?string => app(ClientTiers::class)->servedText($record->client, $record->wrap_up_note))
+                    ->tooltip(fn (Call $record): ?string => app(ClientTiers::class)->servedText($record->client, $record->wrap_up_note))
                     ->toggleable(),
                 TextColumn::make('ended_at')->label(__('Ended'))->dateTime()->placeholder('-'),
             ])

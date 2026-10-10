@@ -7,11 +7,16 @@ use App\Models\Client;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 
 /**
  * Decides whether a client may use the portal and at which service level.
  * A client qualifies when its implicit or explicit package is listed in the
- * premium or the standard package list (case-insensitive, trimmed).
+ * premium or the standard package list (case-insensitive, trimmed). In
+ * premium-only mode the standard list grants nothing: every rule that asks
+ * for a client's level (portal, sign-in paths, phone menu, call views) then
+ * serves premium clients only, and the staff views hide everybody else
+ * through scopeServed() and isServed().
  */
 class ClientTiers
 {
@@ -59,6 +64,14 @@ class ClientTiers
 
         if ($client !== null && ($tier = $this->tierFor($client)) !== null) {
             return $tier;
+        }
+
+        // Premium-only has no standard level to fall back to: a caller nobody
+        // recognised on an unmapped queue may well be a premium client calling
+        // from another number, so the call stays in view. A queue mapped to
+        // standard keeps its level (and stays out of view).
+        if ($this->premiumOnly()) {
+            return ClientTier::Premium;
         }
 
         return ClientTier::tryFrom((string) $this->settings->string(SettingKey::CallsDefaultTier)) ?? ClientTier::Premium;
@@ -125,9 +138,26 @@ class ClientTiers
      */
     public function activeTiers(): array
     {
+        if ($this->premiumOnly()) {
+            return [ClientTier::Premium];
+        }
+
         $active = array_values(array_filter(ClientTier::cases(), fn (ClientTier $tier) => $this->packages($tier) !== []));
 
         return $active === [] ? ClientTier::cases() : $active;
+    }
+
+    /**
+     * The levels as configured, whatever the mode: reports cover the calls
+     * as they were recorded, standard ones included.
+     *
+     * @return list<ClientTier>
+     */
+    public function configuredTiers(): array
+    {
+        $configured = array_values(array_filter(ClientTier::cases(), fn (ClientTier $tier) => $this->configuredPackages($tier) !== []));
+
+        return $configured === [] ? ClientTier::cases() : $configured;
     }
 
     public function isActive(ClientTier $tier): bool
@@ -207,9 +237,23 @@ class ClientTiers
     }
 
     /**
+     * The package names that grant this level now: in premium-only mode the
+     * standard list grants nothing.
+     *
      * @return list<string>
      */
     public function packages(ClientTier $tier): array
+    {
+        return $tier === ClientTier::Standard && $this->premiumOnly() ? [] : $this->configuredPackages($tier);
+    }
+
+    /**
+     * The package names on the list as configured, whatever the mode; the
+     * package list checks of the settings page compare these.
+     *
+     * @return list<string>
+     */
+    public function configuredPackages(ClientTier $tier): array
     {
         $key = $tier === ClientTier::Premium ? SettingKey::PackagesPremium : SettingKey::PackagesStandard;
 
@@ -217,6 +261,119 @@ class ClientTiers
             fn ($name) => $this->normalize(is_string($name) ? $name : null),
             $this->settings->array($key),
         )));
+    }
+
+    public function premiumOnly(): bool
+    {
+        return $this->settings->bool(SettingKey::PackagesPremiumOnly);
+    }
+
+    /**
+     * Whether the system serves (shows, recognises) this client: everybody
+     * normally, only premium clients in premium-only mode.
+     */
+    public function isServed(?Client $client): bool
+    {
+        return $client !== null && (! $this->premiumOnly() || $this->tierFor($client) === ClientTier::Premium);
+    }
+
+    /**
+     * The client's name where a staff view may show it, null otherwise (an
+     * earlier call or session of a client no longer served shows as unknown).
+     */
+    public function servedName(?Client $client): ?string
+    {
+        return $this->isServed($client) ? $client->name : null;
+    }
+
+    /**
+     * Free text written about a client (a call note, the reason of a manual
+     * identification, a message's subject or error) where a staff view may
+     * show it; for a client no longer served, a marker instead.
+     */
+    public function servedText(?Client $client, ?string $text): ?string
+    {
+        return $text === null || $client === null || $this->isServed($client) ? $text : __('hidden (client not served at present)');
+    }
+
+    /**
+     * Restrict a client query (or a join on the clients table) to the clients
+     * the system serves; outside premium-only mode it changes nothing.
+     *
+     * @param  Builder<Client>|QueryBuilder  $query
+     */
+    public function scopeServed(Builder|QueryBuilder $query, string $table = 'clients'): void
+    {
+        if (! $this->premiumOnly()) {
+            return;
+        }
+
+        $raw = $this->rawNames($this->packages(ClientTier::Premium));
+
+        if ($raw === []) {
+            $query->whereRaw('1 = 0');
+
+            return;
+        }
+
+        $query->where(fn ($q) => $this->wherePackagesIn($q, $raw, $table));
+    }
+
+    /**
+     * Open clients the standard list would serve but premium-only mode holds
+     * back (zero outside the mode): for the status page.
+     */
+    public function heldBackCount(): int
+    {
+        if (! $this->premiumOnly()) {
+            return 0;
+        }
+
+        $standard = $this->rawNames($this->configuredPackages(ClientTier::Standard));
+
+        if ($standard === []) {
+            return 0;
+        }
+
+        // Counted as a difference: NOT over the nullable package columns would
+        // drop the rows SQL rates as unknown.
+        $onStandard = fn (): Builder => Client::query()->open()->where(fn (Builder $q) => $this->wherePackagesIn($q, $standard));
+        $premium = $this->rawNames($this->packages(ClientTier::Premium));
+
+        return $onStandard()->count() - ($premium === [] ? 0 : $onStandard()->where(fn (Builder $q) => $this->wherePackagesIn($q, $premium))->count());
+    }
+
+    /**
+     * Whether premium-only mode is why this client is not served: the
+     * configured lists put it on the standard level.
+     */
+    public function heldBackByPremiumOnly(Client $client): bool
+    {
+        if (! $this->premiumOnly() || $this->tierFor($client) !== null) {
+            return false;
+        }
+
+        $packages = array_filter([
+            $this->normalize($client->implicit_package),
+            $this->normalize($client->explicit_package),
+            $client->hasActivePackageOverride() ? $this->normalize($client->package_override) : null,
+        ]);
+
+        return array_intersect($packages, $this->configuredPackages(ClientTier::Standard)) !== [];
+    }
+
+    /**
+     * Implicit, explicit or a live override package among the raw names.
+     *
+     * @param  Builder<Client>|QueryBuilder  $query
+     * @param  list<string>  $raw
+     */
+    private function wherePackagesIn(Builder|QueryBuilder $query, array $raw, string $table = 'clients'): void
+    {
+        $query->whereIn($table.'.implicit_package', $raw)
+            ->orWhereIn($table.'.explicit_package', $raw)
+            ->orWhere(fn ($o) => $o->whereIn($table.'.package_override', $raw)
+                ->where(fn ($u) => $u->whereNull($table.'.package_override_until')->orWhere($table.'.package_override_until', '>=', now())));
     }
 
     private function normalize(?string $package): ?string

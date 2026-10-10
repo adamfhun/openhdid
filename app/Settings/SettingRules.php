@@ -3,6 +3,7 @@
 namespace App\Settings;
 
 use App\Auth\Oidc\OidcProvider;
+use App\Clients\PackageListImpact;
 use App\Enums\PrincipalType;
 use App\Identification\PinService;
 use App\Sync\RequestPayload;
@@ -74,6 +75,12 @@ class SettingRules
         }
 
         $errors = [...$errors, ...static::payloadErrors($values)];
+
+        // Premium-only with no premium package would serve nobody at all.
+        if (filter_var($values[SettingKey::PackagesPremiumOnly->value] ?? false, FILTER_VALIDATE_BOOL)
+            && PackageListImpact::normalizeList((array) ($values[SettingKey::PackagesPremium->value] ?? [])) === []) {
+            $errors[SettingKey::PackagesPremiumOnly->value] = __('Premium-only needs at least one package on the premium list; otherwise no client would be served.');
+        }
 
         if ($int(SettingKey::QaMinAcceptedToPass) > $int(SettingKey::QaMaxQuestionsPerSession)) {
             $errors[SettingKey::QaMinAcceptedToPass->value] = __('Accepted answers needed to pass cannot exceed the questions per session.');

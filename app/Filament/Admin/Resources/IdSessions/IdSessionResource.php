@@ -2,6 +2,7 @@
 
 namespace App\Filament\Admin\Resources\IdSessions;
 
+use App\Clients\ClientTiers;
 use App\Enums\IdChannel;
 use App\Enums\IdMethod;
 use App\Enums\IdSessionStatus;
@@ -55,13 +56,15 @@ class IdSessionResource extends BaseResource
     {
         return $schema->components([
             Section::make()->columns(3)->schema([
-                TextEntry::make('client.name')->label(__('Client'))->placeholder('-'),
+                TextEntry::make('client.name')->label(__('Client'))->placeholder('-')
+                    ->state(fn (IdSession $record): ?string => app(ClientTiers::class)->servedName($record->client)),
                 TextEntry::make('agent.name')->label(__('Agent'))->placeholder('-'),
                 TextEntry::make('call.external_call_id')->label(__('Call'))->placeholder('-'),
                 TextEntry::make('method')->label(__('Method'))->badge()->formatStateUsing(fn (IdMethod $state) => $state->label()),
                 TextEntry::make('channel')->label(__('Channel'))->badge()->formatStateUsing(fn (IdChannel $state) => __($state->value)),
                 TextEntry::make('status')->label(__('Status'))->badge()->formatStateUsing(fn (IdSessionStatus $state) => __($state->value))->color(fn (IdSessionStatus $state) => static::statusColor($state)),
-                TextEntry::make('outcome_reason')->label(__('Outcome'))->formatStateUsing(fn (?string $state) => $state ? __($state) : '-')->placeholder('-'),
+                TextEntry::make('outcome_reason')->label(__('Outcome'))->placeholder('-')
+                    ->formatStateUsing(fn (?string $state, IdSession $record) => $state ? app(ClientTiers::class)->servedText($record->client, __($state)) : '-'),
                 TextEntry::make('started_at')->label(__('Started'))->dateTime(),
                 TextEntry::make('decided_at')->label(__('Decided'))->dateTime()->placeholder('-'),
                 TextEntry::make('counts')->label(__('Accepted / rejected / undecided'))
@@ -81,12 +84,16 @@ class IdSessionResource extends BaseResource
             ->modifyQueryUsing(fn (Builder $query) => $query->with(['client', 'agent']))
             ->columns([
                 TextColumn::make('started_at')->label(__('Started'))->dateTime()->sortable(),
-                TextColumn::make('client.name')->label(__('Client'))->searchable()->placeholder('-'),
+                TextColumn::make('client.name')->label(__('Client'))->placeholder('-')
+                    ->searchable(query: fn (Builder $query, string $search): Builder => $query->whereHas('client', fn (Builder $client) => $client
+                        ->where('name', 'like', '%'.$search.'%')->tap(fn (Builder $served) => app(ClientTiers::class)->scopeServed($served))))
+                    ->state(fn (IdSession $record): ?string => app(ClientTiers::class)->servedName($record->client)),
                 TextColumn::make('agent.name')->label(__('Agent'))->placeholder('-'),
                 TextColumn::make('method')->label(__('Method'))->badge()->formatStateUsing(fn (IdMethod $state) => $state->label()),
                 TextColumn::make('channel')->label(__('Channel'))->badge()->formatStateUsing(fn (IdChannel $state) => __($state->value)),
                 TextColumn::make('status')->label(__('Status'))->badge()->formatStateUsing(fn (IdSessionStatus $state) => __($state->value))->color(fn (IdSessionStatus $state) => static::statusColor($state)),
-                TextColumn::make('outcome_reason')->label(__('Outcome'))->formatStateUsing(fn (?string $state) => $state ? __($state) : '-')->placeholder('-'),
+                TextColumn::make('outcome_reason')->label(__('Outcome'))->placeholder('-')
+                    ->formatStateUsing(fn (?string $state, IdSession $record) => $state ? app(ClientTiers::class)->servedText($record->client, __($state)) : '-'),
                 TextColumn::make('accepted_count')->label(__('OK'))->badge()->color('success'),
                 TextColumn::make('rejected_count')->label(__('Rejected'))->badge()->color('danger'),
             ])
@@ -96,7 +103,9 @@ class IdSessionResource extends BaseResource
                 SelectFilter::make('channel')->label(__('Channel'))->options(collect(IdChannel::cases())->mapWithKeys(fn ($c) => [$c->value => __($c->value)])),
                 SelectFilter::make('agent')->label(__('Agent'))->relationship('agent', 'name')->searchable()->preload(),
                 Filter::make('client')->schema([TextInput::make('client')->label(__('Client (name or e-mail)'))])
-                    ->query(fn (Builder $query, array $data) => $query->when($data['client'] ?? null, fn ($q, $v) => $q->whereHas('client', fn ($c) => $c->where('name', 'like', '%'.$v.'%')->orWhere('email', 'like', '%'.$v.'%')))),
+                    ->query(fn (Builder $query, array $data) => $query->when($data['client'] ?? null, fn ($q, $v) => $q->whereHas('client', fn ($c) => $c
+                        ->where(fn ($match) => $match->where('name', 'like', '%'.$v.'%')->orWhere('email', 'like', '%'.$v.'%'))
+                        ->tap(fn ($served) => app(ClientTiers::class)->scopeServed($served))))),
                 Filter::make('period')->label(__('Period'))->schema([
                     DatePicker::make('from')->label(__('From')),
                     DatePicker::make('until')->label(__('Until')),

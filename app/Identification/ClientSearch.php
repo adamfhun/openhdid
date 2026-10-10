@@ -48,6 +48,7 @@ class ClientSearch
                 }
             })
             ->when($tiers !== null, fn ($q) => $this->tiers->scopeClients($q, $tiers))
+            ->tap(fn ($q) => $this->tiers->scopeServed($q))
             ->orderBy('name')
             ->limit($limit)
             ->get();

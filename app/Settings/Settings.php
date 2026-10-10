@@ -9,6 +9,7 @@ use App\Models\Setting;
 use App\Models\User;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -16,10 +17,21 @@ use Illuminate\Validation\ValidationException;
  * map; any write invalidates it and is written to the audit log. The
  * in-process copy lives for one request or one queued job only (see
  * forgetLocal()), so long-running workers pick up panel changes.
+ *
+ * The map is cached under a key that carries a version, and every write
+ * replaces the version. A request that read the table just before a write
+ * committed may still store what it read, but under the old key, which
+ * nobody reads any more; with a fixed key it would have put the old values
+ * back in front of everyone until the next write.
  */
 class Settings
 {
     private const CACHE_KEY = 'hdid.settings';
+
+    private const VERSION_KEY = 'hdid.settings.version';
+
+    /** How long a cached map or version lives at most (seconds); a lost version only means one fresh read. */
+    private const CACHE_TTL = 86400;
 
     /** @var array<string, mixed>|null */
     private ?array $loaded = null;
@@ -166,13 +178,34 @@ class Settings
             return $this->loaded = $read();
         }
 
-        return $this->loaded = $this->cache->rememberForever(self::CACHE_KEY, $read);
+        // The key is fixed before the table is read: a write committing after
+        // this point moves the version on, so what is read here lands under a
+        // key that is no longer used.
+        return $this->loaded = $this->cache->remember($this->cacheKey(), self::CACHE_TTL, $read);
     }
 
     public function forget(): void
     {
         $this->loaded = null;
-        $this->cache->forget(self::CACHE_KEY);
+        $old = $this->cache->get(self::VERSION_KEY);
+        $this->cache->put(self::VERSION_KEY, Str::random(20), self::CACHE_TTL);
+
+        if (is_string($old)) {
+            $this->cache->forget(self::CACHE_KEY.'.'.$old);
+        }
+    }
+
+    private function cacheKey(): string
+    {
+        $version = $this->cache->get(self::VERSION_KEY);
+
+        if (! is_string($version)) {
+            // add() does not overwrite a version a concurrent write has just set.
+            $this->cache->add(self::VERSION_KEY, Str::random(20), self::CACHE_TTL);
+            $version = (string) $this->cache->get(self::VERSION_KEY);
+        }
+
+        return self::CACHE_KEY.'.'.$version;
     }
 
     /**

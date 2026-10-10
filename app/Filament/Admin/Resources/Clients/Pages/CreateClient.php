@@ -3,10 +3,13 @@
 namespace App\Filament\Admin\Resources\Clients\Pages;
 
 use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\Concerns\GuardsUnsavedChanges;
 use Filament\Resources\Pages\CreateRecord;
 
 class CreateClient extends CreateRecord
 {
+    use GuardsUnsavedChanges;
+
     protected static string $resource = ClientResource::class;
 
     /**
@@ -14,6 +17,6 @@ class CreateClient extends CreateRecord
      */
     protected function getRedirectUrl(): string
     {
-        return $this->getResource()::getUrl('view', ['record' => $this->getRecord()]);
+        return ClientResource::afterSaveUrl($this->getRecord());
     }
 }

@@ -2,6 +2,7 @@
 
 use App\Audit\Auditor;
 use App\Auth\Role;
+use App\Clients\ClientTiers;
 use App\Enums\OutboundMessageStatus;
 use App\Filament\Admin\Resources\OutboundMessages\Pages\ManageOutboundMessages;
 use App\Jobs\SendOutboundMessage;
@@ -53,7 +54,7 @@ it('wipes the secret body and meta when a queued message is cancelled from the p
         ->and($cancelled->meta)->toBeNull()
         ->and($cancelled->redacted_at)->not->toBeNull();
 
-    (new SendOutboundMessage($queued->id))->handle(app('mailer'), $this->sms, app(Auditor::class));
+    (new SendOutboundMessage($queued->id))->handle(app('mailer'), $this->sms, app(Auditor::class), app(ClientTiers::class));
 
     expect($queued->fresh()->status)->toBe(OutboundMessageStatus::Cancelled)
         ->and($this->sms->sent)->toBe([]);

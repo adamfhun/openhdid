@@ -2,6 +2,7 @@
 
 namespace App\Filament\Admin\Resources\ExternalRecords;
 
+use App\Clients\ClientTiers;
 use App\Enums\PrincipalType;
 use App\Filament\Admin\Clusters\System;
 use App\Filament\Admin\Resources\BaseResource;
@@ -71,6 +72,36 @@ class ExternalRecordResource extends BaseResource
         ]);
     }
 
+    /**
+     * In premium-only mode the client records of clients no longer served
+     * stay out of view, like the clients themselves.
+     *
+     * @return Builder<ExternalRecord>
+     */
+    public static function getEloquentQuery(): Builder
+    {
+        $query = parent::getEloquentQuery();
+
+        if (app(ClientTiers::class)->premiumOnly()) {
+            $query->where(fn (Builder $records) => $records->where('kind', PrincipalType::User)
+                ->orWhereHas('client', fn (Builder $client) => app(ClientTiers::class)->scopeServed($client)));
+        }
+
+        return $query;
+    }
+
+    /**
+     * What a filter offers, from the records the list may show: in
+     * premium-only mode a hidden client's company is not named either.
+     *
+     * @param  'company'|'email_domain'  $column
+     * @return array<string, string>
+     */
+    public static function filterOptions(string $column): array
+    {
+        return static::getEloquentQuery()->whereNotNull($column)->distinct()->orderBy($column)->pluck($column, $column)->all();
+    }
+
     public static function table(Table $table): Table
     {
         return $table
@@ -99,9 +130,9 @@ class ExternalRecordResource extends BaseResource
             ->filters([
                 SelectFilter::make('kind')->label(__('Kind'))->options(collect(PrincipalType::cases())->mapWithKeys(fn ($k) => [$k->value => $k->label()])),
                 SelectFilter::make('email_domain')->label(__('E-mail domain'))->searchable()
-                    ->options(fn () => ExternalRecord::query()->whereNotNull('email_domain')->distinct()->orderBy('email_domain')->pluck('email_domain', 'email_domain')),
+                    ->options(fn () => static::filterOptions('email_domain')),
                 SelectFilter::make('company')->label(__('Company'))->searchable()
-                    ->options(fn () => ExternalRecord::query()->whereNotNull('company')->distinct()->orderBy('company')->pluck('company', 'company')),
+                    ->options(fn () => static::filterOptions('company')),
                 TernaryFilter::make('missing')->label(__('Missing'))->queries(
                     true: fn (Builder $query) => $query->whereNotNull('missing_since'),
                     false: fn (Builder $query) => $query->whereNull('missing_since'),
@@ -133,6 +164,6 @@ class ExternalRecordResource extends BaseResource
      */
     public static function closingAtNextRunCount(): int
     {
-        return ExternalRecord::query()->fromDirectory()->closingAtNextRun(static::threshold())->count();
+        return static::getEloquentQuery()->fromDirectory()->closingAtNextRun(static::threshold())->count();
     }
 }

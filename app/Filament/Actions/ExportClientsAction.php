@@ -4,6 +4,8 @@ namespace App\Filament\Actions;
 
 use App\Clients\ClientExporter;
 use App\Clients\ClientExportField;
+use App\Clients\ClientTiers;
+use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Models\Client;
 use App\Models\User;
 use Filament\Actions\Action;
@@ -39,7 +41,9 @@ class ExportClientsAction
             ->schema(function () use ($exporter, $user): array {
                 $fields = [
                     Toggle::make('filtered_only')->label(__('Only the clients matching the current list filter'))->default(false)
-                        ->helperText(__('Off: every client, closed accounts included, regardless of the list filter and tab.')),
+                        ->helperText(fn (): string => app(ClientTiers::class)->premiumOnly()
+                            ? __('Off: every client served at present (only premium clients are served), closed accounts included, regardless of the list filter and tab.')
+                            : __('Off: every client, closed accounts included, regardless of the list filter and tab.')),
                 ];
 
                 foreach ($exporter->options($user()) as $group => $options) {
@@ -67,7 +71,7 @@ class ExportClientsAction
                 $filteredOnly = (bool) ($data['filtered_only'] ?? false);
 
                 /** @var Builder<Client> $query */
-                $query = $filteredOnly ? $livewire->getFilteredSortedTableQuery() : Client::query()->orderBy('name');
+                $query = $filteredOnly ? $livewire->getFilteredSortedTableQuery() : ClientResource::getEloquentQuery()->orderBy('name');
 
                 return ExportTableAction::stream(
                     $exporter->prepare($query),

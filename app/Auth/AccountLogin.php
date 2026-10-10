@@ -70,11 +70,15 @@ class AccountLogin
         $rejection = $this->rejectionFor($principal);
 
         if ($rejection !== null) {
+            // Premium-only mode turns standard clients away with the usual
+            // "not entitled"; the audit names the mode, so staff see why.
+            $heldBack = $rejection === LoginRejection::NotEntitled && $principal instanceof Client && $this->tiers->heldBackByPremiumOnly($principal);
+
             $this->auditor->record('login.rejected', $principal, $context + [
                 'principal' => $type->value,
                 'method' => $method,
                 'reason' => $rejection->value,
-            ]);
+            ] + ($heldBack ? ['premium_only' => true] : []));
 
             throw new LoginRejectedException($rejection);
         }
