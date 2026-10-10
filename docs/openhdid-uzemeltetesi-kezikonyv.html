@@ -373,7 +373,8 @@ Kérés: POST ".config("hdid.sync.login_url")."
 <pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.5.0 --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:1.5.0 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre></li>
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre>
+Az aláírás ellenőrzéséhez cosign 3 vagy újabb kell: az image-ek a Sigstore-csomag formátumban vannak aláírva, ezt a cosign 2 nem keresi, és „no signatures found” hibát ad.</li>
     <li><strong>Mentés:</strong> <code>./backup.sh</code> (7. fejezet).</li>
     <li><strong>Frissítés:</strong> az <code>OPENHDID_VERSION</code> átírása, majd <code>docker compose pull &amp;&amp; docker compose up -d</code>. A migrációk automatikusan lefutnak, a szolgáltatások az új image-dzsel indulnak.</li>
     <li><strong>Ellenőrzés:</strong> <code>docker compose ps</code>, Rendszerállapot (a fejlécben az új verzió), a telepítési útmutató 12. fejezetének próbái.</li>

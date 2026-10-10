@@ -91,14 +91,17 @@ Versions follow [Semantic Versioning](https://semver.org). A platform update (PH
 
 The image contains only what runs the application: Alpine Linux, PHP-FPM with the required extensions, nginx built from source with the headers-more module, and the application with its production dependencies. It runs as an unprivileged user (uid 82) with a read-only root file system, and every base image and download in the `Dockerfile` is pinned by digest or checksum.
 
-Every image is signed and carries a build provenance and an SBOM attestation:
+Every image is signed and carries a build provenance and an SBOM attestation. Set `v` to the version you install (the `OPENHDID_VERSION` of your `.env`):
 
 ```sh
-gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.2.0 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.2.0 \
+v=1.5.0
+gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+The signature check needs cosign 3 or later. The images are signed in the Sigstore bundle format, which cosign 2 does not look for: it reports "no signatures found".
 
 ## Scaling
 

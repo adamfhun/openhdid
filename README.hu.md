@@ -97,14 +97,17 @@ Az image csak a futtatáshoz szükséges részeket tartalmazza:
 
 Nem privilegizált felhasználóként (uid 82) fut, csak olvasható gyökér-fájlrendszerrel. A `Dockerfile` minden alapimage-et és letöltést digesttel vagy ellenőrzőösszeggel rögzít.
 
-Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz:
+Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz. A `v` a telepített verzió (a `.env` `OPENHDID_VERSION` értéke):
 
 ```sh
-gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.2.0 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.2.0 \
+v=1.5.0
+gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+Az aláírás ellenőrzéséhez cosign 3 vagy újabb kell. Az image-ek a Sigstore-csomag formátumban vannak aláírva, ezt a cosign 2 nem keresi, és „no signatures found” hibát ad.
 
 ## Skálázás
 
