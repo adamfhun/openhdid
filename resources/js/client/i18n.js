@@ -52,6 +52,7 @@ const dictionaries = {
         'This account is not present in Enterprise Master Data.': 'Ez a fiók nem szerepel az ügyféltörzsben.',
         'This account does not match its Enterprise Master Data record.': 'A fiók adatai eltérnek az ügyféltörzsben nyilvántartott adatoktól.',
         'The sign-in service is not available right now. Please try again later.': 'A bejelentkezési szolgáltatás most nem érhető el. Kérjük, próbálja újra később.',
+        'The sign-in service did not send a usable e-mail address, so the account cannot be identified. Please report this to the operator of the system.': 'A bejelentkezési szolgáltatás nem küldött használható e-mail-címet, ezért a fiók nem azonosítható. Kérjük, jelezze a rendszer üzemeltetőjének.',
         'This account has no access.': 'Ennek a fióknak nincs hozzáférése.',
         'The login link or code is not valid or has expired.': 'A belépési link vagy kód érvénytelen vagy lejárt.',
         'Login failed.': 'A belépés nem sikerült.',

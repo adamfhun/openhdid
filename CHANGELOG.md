@@ -4,6 +4,40 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.5.1] – 2026-10-14
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- BEL-00.1: az ADFS-belépés fiókot kötő e-mail-igénye (claimje) telepítéskor megadható, az access token igényei is számítanak, és az eseménynapló a döntés minden lépését rögzíti; a tokenek naplózása hibakereséshez bekapcsolható.
+
+**Frissítés előtt:** migráció nincs; új, választható telepítési kulcsok: `USER_ADFS_EMAIL_CLAIM`, `CLIENT_ADFS_EMAIL_CLAIM`, `USER_ADFS_SCOPES`, `CLIENT_ADFS_SCOPES`, `USER_ADFS_RESOURCE`, `CLIENT_ADFS_RESOURCE`, `HDID_ADFS_DEBUG` (alapból `false`). Üresen az ADFS a `emailaddress`, `email`, `upn`, `preferred_username`, `unique_name` sorrendben keres, az ID tokenben és az access tokenben is (eddig `email`, `upn`, `preferred_username`, `unique_name`, csak az ID tokenben). Ha a tokenekben a fiók címétől eltérő `emailaddress` érkezik, a régi viselkedés a `USER_ADFS_EMAIL_CLAIM=email,upn,preferred_username,unique_name` értékkel állítható vissza.
+
+Részletek:
+- Az igény neve a teljes igénytípus-URI végére is illeszkedik (`…/claims/emailaddress`); a többértékű igény csak egyetlen címmel használható.
+- Az ADFS access tokenjének igényei csak akkor számítanak, ha a token ugyanazzal a kulccsal aláírt, a felderítési dokumentum `access_token_issuer` kibocsátójától származik, nem járt le és ennek az alkalmazásnak szól (`appid`); egyébként a rendszer csak az ID tokent nézi, és az okot naplózza. Az `allatclaims` hatókör nem kell.
+- Választható további hatókör (`*_ADFS_SCOPES`) és Web API-azonosító (`*_ADFS_RESOURCE`, a `resource` paraméterben).
+- Eseménynapló: a sikeres és az elutasított ADFS-belépés megnevezi a döntő igényt és tokent, a kihagyott igényeket az okkal (`missing`, `empty`, `domain_account`, `not_an_email`, `several_addresses`) és az access token állapotát; használható igény híján a keresett igényeket és a két token igényneveit is, értékek nélkül. Az ADFS visszautasításának szövege (`error_description`, MSIS-kóddal) is bekerül. Entránál a nem ellenőrzött `email` igény `unverified` okkal jelenik meg.
+- Használható e-mail-igény híján új elutasítási ok és üzenet: `no_email_claim`, „A bejelentkezési szolgáltatás nem küldött használható e-mail-címet, ezért a fiók nem azonosítható.” (eddig „érvénytelen adatok”).
+- `HDID_ADFS_DEBUG=true`: minden ADFS-belépés az engedélykérést, a tokenválaszt a két token visszafejtett fejlécével és igényeivel, valamint a döntést `ADFS debug:` üzenettel warning szinten naplózza; a nyers token és a frissítő token nem kerül bele. Amíg be van kapcsolva, a „Belépési szolgáltatók” csempe sárga; a csempe a keresett ADFS-igényeket is mutatja.
+- Platform: nginx 1.31.7 mainline (korábban 1.31.6), az ellenőrző Trivy 0.76.0.
+- A dokumentumok verziója 1.5.1.
+
+### English
+Rule changes in one sentence each (with the specification's identifiers):
+- BEL-00.1: the claim that binds an ADFS sign-in to an account is set at installation, the access token's claims count too, and the audit log records every step of the decision; logging the tokens can be switched on for troubleshooting.
+
+**Before upgrading:** no migration; new optional installation keys: `USER_ADFS_EMAIL_CLAIM`, `CLIENT_ADFS_EMAIL_CLAIM`, `USER_ADFS_SCOPES`, `CLIENT_ADFS_SCOPES`, `USER_ADFS_RESOURCE`, `CLIENT_ADFS_RESOURCE`, `HDID_ADFS_DEBUG` (default `false`). Left empty, ADFS looks for `emailaddress`, `email`, `upn`, `preferred_username`, `unique_name` in this order, in the ID token and the access token (previously `email`, `upn`, `preferred_username`, `unique_name`, ID token only). If the tokens carry an `emailaddress` other than the account's address, `USER_ADFS_EMAIL_CLAIM=email,upn,preferred_username,unique_name` restores the old behaviour.
+
+Details:
+- A claim name also matches the end of a full claim-type URI (`…/claims/emailaddress`); a multi-valued claim counts only when it holds a single address.
+- The claims of the ADFS access token count only when it is signed with the same keys, issued by the discovery document's `access_token_issuer`, unexpired and issued to this application (`appid`); otherwise the ID token stands alone and the reason is logged. The `allatclaims` scope is not needed.
+- Optional extra scopes (`*_ADFS_SCOPES`) and Web API identifier (`*_ADFS_RESOURCE`, sent as `resource`).
+- Audit log: a successful or refused ADFS sign-in names the deciding claim and token, the claims passed over with the reason (`missing`, `empty`, `domain_account`, `not_an_email`, `several_addresses`) and the access token's state; without a usable claim also the claims looked for and the claim names of both tokens, never their values. The text of an ADFS refusal (`error_description`, with the MSIS code) is recorded too. For Entra an unverified `email` claim shows as `unverified`.
+- Without a usable e-mail claim there is a new refusal reason and message: `no_email_claim`, "The sign-in service did not send a usable e-mail address, so the account cannot be identified." (previously "invalid credentials").
+- `HDID_ADFS_DEBUG=true`: every ADFS sign-in logs the authorization request, the token response with the decoded header and claims of both tokens, and the decision as `ADFS debug:` messages at warning level; the raw tokens and the refresh token are left out. While it is on the "Login providers" tile is yellow; the tile also shows the ADFS claims looked for.
+- Platform: nginx 1.31.7 mainline (previously 1.31.6), the Trivy scanner is 0.76.0.
+- The documents carry version 1.5.1.
+
 ## [1.5.0] – 2026-10-10
 
 ### Magyar

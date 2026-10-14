@@ -66,6 +66,10 @@ enum OidcProvider: string
             clientSecret: (string) ($cfg['client_secret'] ?? ''),
             mobileClientId: isset($cfg['mobile_client_id']) ? (string) $cfg['mobile_client_id'] : null,
             tenant: $this === self::Entra ? $tenant : null,
+            scopes: $this === self::Adfs ? OidcProviderConfig::scopesWith($cfg['scopes'] ?? null) : OidcProviderConfig::BASE_SCOPES,
+            emailClaims: OidcProviderConfig::listOf((string) ($cfg['email_claims'] ?? '')) ?: OidcProviderConfig::ADFS_DEFAULT_EMAIL_CLAIMS,
+            resource: $this === self::Adfs && trim((string) ($cfg['resource'] ?? '')) !== '' ? trim((string) $cfg['resource']) : null,
+            debug: $this === self::Adfs && ($cfg['debug'] ?? false) === true,
         );
     }
 }

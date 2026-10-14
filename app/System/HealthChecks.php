@@ -154,7 +154,7 @@ class HealthChecks
             'package_overrides' => __('Informational: these clients carry a temporary manual package. Nothing to fix, but review the list now and then and end an override EMD has caught up with.'),
             'shared_numbers' => __('A number on file for more than one client recognises nobody in the phone menu, so those callers are not asked for their PIN. Open Shared phone numbers, decide whose number it is and remove it from the others; a number EMD lists for several people has to be corrected in the directory.'),
             'proxy' => __('Red: HDID_HTTP_PROXY is not a usable address; write it as http://host:port, with a password as http://user:password@host:port (special characters percent-encoded, @ as %40). Proxies with Windows (NTLM) sign-in are not supported. Internal servers reached without the proxy (master data, ADFS, Exchange, SMS gateway) go into HDID_NO_PROXY, comma-separated. After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM and php artisan queue:restart.'),
-            'oidc' => __('A provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*). Either fill in the configuration or switch the provider off, otherwise the login button leads to an error.'),
+            'oidc' => __('Red: a provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*). Either fill in the configuration or switch the provider off, otherwise the login button leads to an error. Yellow: HDID_ADFS_DEBUG is on, so every ADFS sign-in writes its decoded tokens to the application log; meant for setting up the ADFS claims only, set it to false afterwards. The ADFS claims compared with the account e-mail address come from USER_/CLIENT_ADFS_EMAIL_CLAIM; why a sign-in was refused is in the audit log (login.rejected). After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM.'),
             'storage' => __('Red: the public disk is not writable, fix the permissions of storage/app/public. Yellow: run "php artisan storage:link" on the server, otherwise uploaded logos and images do not show.'),
             'retention' => __('The daily "hdid:prune" task has not run for days. It runs through the scheduler, so check that tile first; run "php artisan hdid:prune" by hand to catch up.'),
             default => null,
@@ -499,18 +499,35 @@ class HealthChecks
         $parts = [];
         $broken = false;
 
+        $debug = false;
+
         foreach (PrincipalType::cases() as $principal) {
             foreach (OidcProvider::cases() as $provider) {
+                $config = $provider->configFor($principal);
                 $enabled = $this->settings->bool($provider->enabledSetting($principal));
-                $configured = $provider->configFor($principal)->isConfigured();
+                $configured = $config->isConfigured();
                 $broken = $broken || ($enabled && ! $configured);
-                $parts[] = __($principal->value).'/'.$provider->value.': '.($enabled ? ($configured ? __('on') : __('on, NOT configured')) : __('off'));
+                $debug = $debug || $config->logsTokens();
+                $state = $enabled ? ($configured ? __('on') : __('on, NOT configured')) : __('off');
+
+                // Which claim binds an ADFS sign-in is deployment configuration: show it where it acts.
+                if ($provider === OidcProvider::Adfs && $enabled && $configured) {
+                    $state .= ' ('.__('e-mail claim: :claims', ['claims' => implode(', ', $config->emailClaims)]).')';
+                }
+
+                $parts[] = __($principal->value).'/'.$provider->value.': '.$state;
             }
         }
 
         $detail = implode(' · ', $parts);
 
-        return $broken ? Check::fail('oidc', $label, $detail) : Check::ok('oidc', $label, $detail);
+        if ($broken) {
+            return Check::fail('oidc', $label, $detail);
+        }
+
+        return $debug
+            ? Check::warn('oidc', $label, __('HDID_ADFS_DEBUG is on: the decoded content of every ADFS token, personal data included, goes to the application log.').' · '.$detail)
+            : Check::ok('oidc', $label, $detail);
     }
 
     public function storage(): Check

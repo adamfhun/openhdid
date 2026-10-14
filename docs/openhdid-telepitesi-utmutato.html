@@ -92,8 +92,8 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.5.0 · 2026. október 10.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.5.0 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.5.1 · 2026. október 14.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.5.1 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv, felhasználói kézikönyv</span></div>
 </div>
@@ -316,6 +316,10 @@ Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, vala
 <tr><td><code>EMD_SYNC_CRON</code></td><td><code>0 */3 * * *</code></td><td>Teljes ügyféltörzs-átvétel 3 óránként; üresen csak kézzel. A 15 percenkénti tokenfrissítés ettől független. A régi <code>SYNC_*</code> nevek álnévként működnek; kitöltött új név elsőbbséget kap.</td></tr>
 <tr><td><code>CALLCENTER_*</code></td><td>Örökölt, rögzített telefonközponti kulcs és aláírás. Új partnerhez a felületen kezelt API-kulcs ajánlott; a <code>CALLCENTER_SIGNATURE_TTL</code> (300) az aláírt kérés időbélyegének megengedett eltérése.</td></tr>
 <tr><td><code>USER_*</code>, <code>CLIENT_*</code> (<code>ADFS</code>, <code>ENTRA</code>)</td><td>Négy alkalmazás-regisztráció az egyszeri bejelentkezéshez; az Entra-bérlő csak GUID lehet.</td></tr>
+<tr><td><code>USER_ADFS_EMAIL_CLAIM</code>, <code>CLIENT_ADFS_EMAIL_CLAIM</code></td><td>Az ADFS-tokenek igényei (claimek), amelyeket a rendszer sorrendben a fiók e-mail-címével összevet, vesszővel; üresen <code>emailaddress,email,upn,preferred_username,unique_name</code>.</td></tr>
+<tr><td><code>USER_ADFS_SCOPES</code>, <code>CLIENT_ADFS_SCOPES</code></td><td>Az <code>openid profile email</code> mellé kért további hatókörök (például <code>allatclaims</code>); nem kötelező, üresen nincs.</td></tr>
+<tr><td><code>USER_ADFS_RESOURCE</code>, <code>CLIENT_ADFS_RESOURCE</code></td><td>A Web API azonosítója <code>resource</code> paraméterként (ennek a kiadási szabályai kerülnek az access tokenbe); nem kötelező.</td></tr>
+<tr><td><code>HDID_ADFS_DEBUG</code></td><td><code>true</code> esetén minden ADFS-belépés a kérést, a tokenválaszt és a tokenek visszafejtett tartalmát (személyes adatokkal) a naplóba írja (<code>docker compose logs web</code>); a nyers token és a frissítő token nem kerül bele. Alapértéke <code>false</code>; amíg be van kapcsolva, a „Belépési szolgáltatók” csempe sárga.</td></tr>
 </tbody></table></div>
 
 <h2 id="s6"><span class="num">6</span>Hálózat, kiszolgálónév és HTTPS</h2>
@@ -487,6 +491,14 @@ docker compose logs -f --tail=100 worker            # élő követés</code></pr
     <li>a regisztráció legyen egybérlős;</li>
     <li>az <code>email</code> igény csak ellenőrzött állapotban számít, különben a felhasználónév (UPN) dönt.</li>
 </ul>
+<p><strong>ADFS, a fiókot kötő igény:</strong></p>
+<ul>
+    <li>a rendszer a <code>USER_ADFS_EMAIL_CLAIM</code> (ügyfeleknél <code>CLIENT_ADFS_EMAIL_CLAIM</code>) igényeit sorrendben nézi, az első e-mail-alakú érték dönt; üresen <code>emailaddress</code>, <code>email</code>, <code>upn</code>, <code>preferred_username</code>, <code>unique_name</code>;</li>
+    <li>a név a teljes igénytípus-URI végére is illeszkedik (<code>…/claims/emailaddress</code>);</li>
+    <li>minden igénynél előbb az ID token, utána az access token számít: a Web API kiadási szabályainak igényei <code>allatclaims</code> nélkül csak az access tokenbe kerülnek; az access token akkor számít, ha ugyanazzal a kulccsal aláírt, ettől az ADFS-től származik, nem járt le és ennek az alkalmazásnak szól (<code>appid</code>);</li>
+    <li>a Web API azonosítója a <code>USER_ADFS_RESOURCE</code>, további hatókör a <code>USER_ADFS_SCOPES</code> (egyik sem kötelező);</li>
+    <li>hogy egy belépés melyik igénnyel sikerült, vagy miért nem, az auditnapló mutatja (az igények nevével, értékük nélkül); a beállítás idejére a <code>HDID_ADFS_DEBUG=true</code> a tokenek tartalmát a naplóba írja. Módosítás után <code>docker compose up -d</code>.</li>
+</ul>
 <h3>Telefonközpont és automata menü</h3>
 <p><strong>Kulcs.</strong> A panelen <em>Rendszer › API-kulcsok</em>, „Call center / IVR” hatókörrel; vagy parancssorból: <code>docker compose exec web php artisan hdid:api-key:create "Telefonközpont" callcenter</code>. A kulcs egyszer jelenik meg.</p>
 <p><strong>Küldés.</strong> A kulcs az <code>X-Api-Key</code> fejlécben küldendő. Az <code>api_key</code> lekérdezési paraméter csak örökölt partnernek használható, mert webszerver-naplóba kerülhet; az access log itt nem rögzíti.</p>
@@ -583,7 +595,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.5.0 · 2026. október 10.</div>
+<div class="foot">OpenHDID telepítési útmutató 1.5.1 · 2026. október 14.</div>
 </div>
 
 </body>

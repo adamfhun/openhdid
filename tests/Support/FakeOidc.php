@@ -14,6 +14,9 @@ class FakeOidc
 
     public const DISCOVERY = self::ISSUER.'/.well-known/openid-configuration';
 
+    /** ADFS signs access tokens as its federation service, not as the OIDC issuer. */
+    public const ACCESS_TOKEN_ISSUER = 'http://idp.test/adfs/services/trust';
+
     private static ?string $privateKey = null;
 
     private static ?array $jwk = null;
@@ -23,6 +26,15 @@ class FakeOidc
 
     /** @var array<string, mixed> Claims the fake token endpoint will sign. */
     public static array $claims = [];
+
+    /**
+     * @var array<string, mixed>|null Claims of a signed access token; null
+     *                                answers with an opaque one.
+     */
+    public static ?array $accessClaims = null;
+
+    /** @var array<string, mixed> Further fields of the token response. */
+    public static array $tokenResponse = [];
 
     /**
      * @param  array<string, mixed>  $claims
@@ -35,16 +47,26 @@ class FakeOidc
         Http::fake([
             $discoveryUrl => Http::response([
                 'issuer' => $issuer,
+                'access_token_issuer' => self::ACCESS_TOKEN_ISSUER,
                 'authorization_endpoint' => 'https://idp.test/authorize',
                 'token_endpoint' => 'https://idp.test/token',
                 'jwks_uri' => 'https://idp.test/jwks',
             ]),
             'https://idp.test/jwks' => Http::response(['keys' => [self::$jwk]]),
-            'https://idp.test/token' => fn ($request) => Http::response([
+            'https://idp.test/token' => fn ($request) => Http::response(self::$tokenResponse + [
                 'id_token' => self::idToken(self::$claims + ['nonce' => self::$nonce], $issuer),
-                'access_token' => 'x',
+                'access_token' => self::$accessClaims === null ? 'x' : self::idToken(self::$accessClaims, self::ACCESS_TOKEN_ISSUER),
             ]),
         ]);
+    }
+
+    /**
+     * Back to an opaque access token and a bare token response.
+     */
+    public static function reset(): void
+    {
+        self::$accessClaims = null;
+        self::$tokenResponse = [];
     }
 
     /**

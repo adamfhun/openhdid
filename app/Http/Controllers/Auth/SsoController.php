@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Auth;
 use App\Auth\AccountLogin;
 use App\Auth\LoginRejectedException;
 use App\Auth\LoginRejection;
+use App\Auth\Oidc\EmailClaimMatch;
 use App\Auth\Oidc\OidcClient;
 use App\Auth\Oidc\OidcException;
 use App\Auth\Oidc\OidcProvider;
@@ -62,11 +63,16 @@ class SsoController extends Controller
             || $pending['provider'] !== $provider->value
             || ! hash_equals((string) $pending['state'], (string) $request->query('state'))
             || ! is_string($request->query('code'))) {
-            // A forged or stale callback, or a sign-in cancelled at the provider.
+            // A forged or stale callback, or a sign-in cancelled or refused at
+            // the provider (ADFS names the cause in error_description, MSIS…).
+            $providerError = [
+                'provider_error' => is_string($request->query('error')) ? mb_substr($request->query('error'), 0, 100) : null,
+                'provider_error_description' => is_string($request->query('error_description')) ? mb_substr($request->query('error_description'), 0, 500) : null,
+            ];
+            $this->oidc->debug($provider->configFor($principal), 'callback without a usable code', $providerError + ['pending_request' => is_array($pending)]);
             $this->login->recordRejection($principal, 'sso.'.$provider->value, LoginRejection::InvalidCredentials, [
                 'detail' => is_array($pending) ? 'state_or_code' : 'no_pending_request',
-                'provider_error' => is_string($request->query('error')) ? mb_substr($request->query('error'), 0, 100) : null,
-            ]);
+            ] + $providerError);
 
             return $this->failed($principal, LoginRejection::InvalidCredentials);
         }
@@ -74,18 +80,19 @@ class SsoController extends Controller
         try {
             $this->access->assertEnabled($principal, $provider, 'sso.'.$provider->value);
             $config = $provider->configFor($principal);
-            $claims = $this->oidc->exchangeCode($config, $request->query('code'), $this->callbackUrl($principal, $provider), $pending['verifier'], $pending['nonce']);
-            $email = $this->oidc->email($claims, $config);
+            $tokens = $this->oidc->exchangeCode($config, $request->query('code'), $this->callbackUrl($principal, $provider), $pending['verifier'], $pending['nonce']);
+            $match = EmailClaimMatch::resolve($tokens, $config);
+            $this->oidc->debug($config, 'e-mail claim', ['email' => $match->email] + $match->auditContext() + $match->diagnosis());
 
-            if ($email === null) {
-                $this->login->recordRejection($principal, 'sso.'.$provider->value, LoginRejection::InvalidCredentials, ['detail' => 'no_email_claim']);
+            if ($match->email === null) {
+                $this->login->recordRejection($principal, 'sso.'.$provider->value, LoginRejection::NoEmailClaim, $match->diagnosis());
 
-                return $this->failed($principal, LoginRejection::InvalidCredentials);
+                return $this->failed($principal, LoginRejection::NoEmailClaim);
             }
 
-            $account = $this->login->resolveByEmail($principal, $email, 'sso.'.$provider->value);
+            $account = $this->login->resolveByEmail($principal, $match->email, 'sso.'.$provider->value, $match->auditContext());
             $this->access->assertEnabled($principal, $provider, 'sso.'.$provider->value, $account);
-            $this->login->loginToSession($account, 'sso.'.$provider->value, allowRemember: true);
+            $this->login->loginToSession($account, 'sso.'.$provider->value, allowRemember: true, context: $match->auditContext());
         } catch (LoginRejectedException $e) {
             return $this->failed($principal, $e->reason);
         } catch (OidcUnavailableException $e) {

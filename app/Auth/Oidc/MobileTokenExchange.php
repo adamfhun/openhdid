@@ -67,13 +67,13 @@ class MobileTokenExchange
             $this->reject('token_replayed', ['email' => $this->oidc->email($claims, $config)]);
         }
 
-        $email = $this->oidc->email($claims, $config);
-        if ($email === null) {
-            $this->reject('no_email_claim');
+        $match = EmailClaimMatch::resolve(new OidcTokens($claims), $config);
+        if ($match->email === null) {
+            $this->reject('no_email_claim', $match->diagnosis());
         }
 
         /** @var Client $account */
-        $account = $this->login->resolveByEmail($principal, $email, self::METHOD);
+        $account = $this->login->resolveByEmail($principal, $match->email, self::METHOD, $match->auditContext());
         $this->access->assertEnabled($principal, OidcProvider::Entra, self::METHOD, $account);
 
         return ['token' => $this->login->issueToken($account, self::METHOD, $deviceName), 'account' => $account];

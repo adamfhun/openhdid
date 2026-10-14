@@ -14,5 +14,6 @@ export const loginErrorMessages = {
     not_entitled: 'Your package does not include access to the client portal.',
     invalid_credentials: 'The login link or code is not valid or has expired.',
     provider_unavailable: 'The sign-in service is not available right now. Please try again later.',
+    no_email_claim: 'The sign-in service did not send a usable e-mail address, so the account cannot be identified. Please report this to the operator of the system.',
     session_expired: 'Your session has expired. Please sign in again.',
 };

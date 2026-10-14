@@ -33,6 +33,9 @@ $emd = function (string $name, mixed $default = null) use (&$emdLegacy): mixed {
     return $value ?? $default;
 };
 
+// Writes every ADFS token's decoded content to the application log (both account types).
+$adfsDebug = filter_var(env('HDID_ADFS_DEBUG', false), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? false;
+
 $sync = [
     // Cron expression for the scheduled EMD sync; empty = never.
     'cron' => $emd('CRON') ?: null,
@@ -130,6 +133,13 @@ return [
                 'issuer' => env('USER_ADFS_ISSUER'),
                 'client_id' => env('USER_ADFS_CLIENT_ID'),
                 'client_secret' => env('USER_ADFS_CLIENT_SECRET'),
+                // Claims compared with the account's e-mail address, in order (comma-separated); empty: the default list.
+                'email_claims' => env('USER_ADFS_EMAIL_CLAIM'),
+                // Scopes requested on top of "openid profile email", space- or comma-separated.
+                'scopes' => env('USER_ADFS_SCOPES'),
+                // Web API identifier sent as the "resource" parameter; empty: none sent.
+                'resource' => env('USER_ADFS_RESOURCE'),
+                'debug' => $adfsDebug,
             ],
             'entra' => [
                 'tenant' => env('USER_ENTRA_TENANT'),
@@ -142,6 +152,13 @@ return [
                 'issuer' => env('CLIENT_ADFS_ISSUER'),
                 'client_id' => env('CLIENT_ADFS_CLIENT_ID'),
                 'client_secret' => env('CLIENT_ADFS_CLIENT_SECRET'),
+                // Claims compared with the account's e-mail address, in order (comma-separated); empty: the default list.
+                'email_claims' => env('CLIENT_ADFS_EMAIL_CLAIM'),
+                // Scopes requested on top of "openid profile email", space- or comma-separated.
+                'scopes' => env('CLIENT_ADFS_SCOPES'),
+                // Web API identifier sent as the "resource" parameter; empty: none sent.
+                'resource' => env('CLIENT_ADFS_RESOURCE'),
+                'debug' => $adfsDebug,
             ],
             'entra' => [
                 'tenant' => env('CLIENT_ENTRA_TENANT'),

@@ -35,13 +35,15 @@ class AccountLogin
     ) {}
 
     /**
+     * @param  array<string, mixed>  $context  what a refusal's audit entry records besides the address
+     *
      * @throws LoginRejectedException
      */
-    public function resolveByEmail(PrincipalType $type, string $email, string $method): Principal
+    public function resolveByEmail(PrincipalType $type, string $email, string $method, array $context = []): Principal
     {
         $email = mb_strtolower(trim($email));
 
-        return $this->assertEligible($this->findByEmail($type, $email), $type, $method, ['email' => $email]);
+        return $this->assertEligible($this->findByEmail($type, $email), $type, $method, ['email' => $email] + $context);
     }
 
     /**

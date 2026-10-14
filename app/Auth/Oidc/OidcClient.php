@@ -9,6 +9,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -39,46 +40,59 @@ class OidcClient
         $verifier = Str::random(64);
         $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
 
-        $url = $this->discovery($config)['authorization_endpoint'].'?'.http_build_query([
+        $endpoint = $this->discovery($config)['authorization_endpoint'];
+        $url = $endpoint.'?'.http_build_query(array_filter([
             'client_id' => $config->clientId,
             'response_type' => 'code',
             'redirect_uri' => $redirectUri,
             'scope' => $config->scopes,
+            'resource' => $config->resource,
             'state' => $state,
             'nonce' => $nonce,
             'code_challenge' => $challenge,
             'code_challenge_method' => 'S256',
+        ], fn (?string $value): bool => $value !== null));
+
+        $this->debug($config, 'authorization request', [
+            'authorization_endpoint' => $endpoint,
+            'client_id' => $config->clientId,
+            'redirect_uri' => $redirectUri,
+            'scope' => $config->scopes,
+            'resource' => $config->resource,
+            'email_claims' => $config->emailClaims,
         ]);
 
         return compact('url', 'state', 'nonce', 'verifier');
     }
 
     /**
-     * Exchange the authorization code and return the validated ID-token claims.
-     *
-     * @return array<string, mixed>
+     * Exchange the authorization code and return the validated claims: the
+     * ID token's, and for ADFS the access token's when it validates too.
      */
-    public function exchangeCode(OidcProviderConfig $config, string $code, string $redirectUri, string $verifier, string $nonce): array
+    public function exchangeCode(OidcProviderConfig $config, string $code, string $redirectUri, string $verifier, string $nonce): OidcTokens
     {
-        $tokenEndpoint = $this->discovery($config)['token_endpoint'];
+        $discovery = $this->discovery($config);
         $response = $this->reach(fn (): Response => $this->http
             ->asForm()
             ->timeout(15)
-            ->post($tokenEndpoint, [
+            ->post($discovery['token_endpoint'], array_filter([
                 'grant_type' => 'authorization_code',
                 'client_id' => $config->clientId,
                 'client_secret' => $config->clientSecret,
                 'code' => $code,
                 'redirect_uri' => $redirectUri,
                 'code_verifier' => $verifier,
-            ]));
+                'resource' => $config->resource,
+            ], fn (?string $value): bool => $value !== null)));
+
+        $this->debugTokenResponse($config, $discovery['token_endpoint'], $response);
 
         if ($response->serverError()) {
             throw new OidcUnavailableException('Token endpoint answered HTTP '.$response->status().'.');
         }
 
         if ($response->failed() || ! is_string($response->json('id_token'))) {
-            throw new OidcException('Token exchange failed: '.($response->json('error_description') ?? $response->status()));
+            throw new OidcException('Token exchange failed: '.($response->json('error_description') ?? $response->json('error') ?? $response->status()));
         }
 
         $claims = $this->validateIdToken($config, $response->json('id_token'), $config->clientId);
@@ -87,7 +101,54 @@ class OidcClient
             throw new OidcException('ID token nonce mismatch.');
         }
 
-        return $claims;
+        if ($config->provider !== OidcProvider::Adfs) {
+            return new OidcTokens($claims);
+        }
+
+        return $this->withAccessToken($config, $discovery, $claims, $response->json('access_token'));
+    }
+
+    /**
+     * ADFS puts the claims of the application group's issuance rules into the
+     * access token; the ID token gets them only for clients allowed the
+     * "allatclaims" scope. The access token came in the same TLS response as
+     * the nonce-bound ID token, and its claims count only when it is signed
+     * by the same keys, issued by this ADFS, unexpired and issued to this
+     * client; otherwise the reason is reported and the ID token stands alone.
+     *
+     * @param  array{jwks_uri: string, issuer: string, access_token_issuer?: string}  $discovery
+     * @param  array<string, mixed>  $idClaims
+     */
+    private function withAccessToken(OidcProviderConfig $config, array $discovery, array $idClaims, mixed $accessToken): OidcTokens
+    {
+        if (! is_string($accessToken) || $accessToken === '') {
+            return new OidcTokens($idClaims, accessStatus: OidcTokens::ACCESS_ABSENT);
+        }
+
+        if (substr_count($accessToken, '.') !== 2) {
+            return new OidcTokens($idClaims, accessStatus: OidcTokens::ACCESS_NOT_A_JWT);
+        }
+
+        // The ID token already proved the sign-in: whatever goes wrong with
+        // the access token only leaves its claims out.
+        try {
+            $claims = $this->decodeSigned($discovery['jwks_uri'], $accessToken);
+        } catch (OidcException $e) {
+            return new OidcTokens($idClaims, accessStatus: 'ignored: '.$e->getMessage());
+        }
+
+        $issuers = array_filter([$discovery['access_token_issuer'] ?? null, $discovery['issuer']], 'is_string');
+        $client = $claims['appid'] ?? $claims['client_id'] ?? $claims['azp'] ?? null;
+
+        $problem = match (true) {
+            ! in_array((string) ($claims['iss'] ?? ''), $issuers, true) => 'issuer mismatch',
+            $client !== $config->clientId => 'issued to another client',
+            default => null,
+        };
+
+        return $problem === null
+            ? new OidcTokens($idClaims, $claims, OidcTokens::ACCESS_READ)
+            : new OidcTokens($idClaims, accessStatus: 'ignored: '.$problem);
     }
 
     /**
@@ -103,23 +164,12 @@ class OidcClient
 
         $discovery = $this->discovery($config);
 
-        // The key set is fetched outside the guarded decode so a JWKS outage
-        // stays an OidcUnavailableException instead of an invalid token; an
-        // unusable document still fails inside it, like a stale key.
-        $jwks = $this->jwks($discovery['jwks_uri']);
-        JWT::$leeway = self::CLOCK_SKEW_SECONDS;
-
         try {
-            $claims = (array) JWT::decode($idToken, JWK::parseKeySet($jwks, 'RS256'));
-        } catch (Throwable $e) {
-            // A rotated key may not be in the cached set yet: refresh once.
-            $jwks = $this->jwks($discovery['jwks_uri'], refresh: true);
-
-            try {
-                $claims = (array) JWT::decode($idToken, JWK::parseKeySet($jwks, 'RS256'));
-            } catch (Throwable $e) {
-                throw new OidcException('ID token invalid: '.$e->getMessage(), previous: $e);
-            }
+            $claims = $this->decodeSigned($discovery['jwks_uri'], $idToken);
+        } catch (OidcUnavailableException $e) {
+            throw $e;
+        } catch (OidcException $e) {
+            throw new OidcException('ID token invalid: '.$e->getMessage(), previous: $e);
         }
 
         $audiences = (array) ($claims['aud'] ?? []);
@@ -152,32 +202,101 @@ class OidcClient
     }
 
     /**
-     * The address the account is bound by. Entra's `email` claim mirrors an
-     * editable directory attribute, so it counts only when the tenant marks
-     * it verified (`xms_edov`); otherwise the UPN-based claims decide, whose
-     * domain the issuing tenant had to prove.
+     * The address a token binds to, for callers holding only ID-token claims
+     * (the mobile token exchange); see EmailClaimMatch for the rules.
      *
      * @param  array<string, mixed>  $claims
      */
-    public function email(array $claims, ?OidcProviderConfig $config = null): ?string
+    public function email(array $claims, OidcProviderConfig $config): ?string
     {
-        $order = ['email', 'upn', 'preferred_username', 'unique_name'];
+        return EmailClaimMatch::resolve(new OidcTokens($claims), $config)->email;
+    }
 
-        if ($config?->provider === OidcProvider::Entra) {
-            $verified = in_array($claims['xms_edov'] ?? null, [true, 1, '1', 'true'], true)
-                || in_array($claims['email_verified'] ?? null, [true, 1, '1', 'true'], true);
-            $order = $verified ? ['email', 'preferred_username', 'upn', 'unique_name'] : ['preferred_username', 'upn', 'unique_name'];
+    /**
+     * Write a step of an ADFS sign-in to the application log when the
+     * operator switched HDID_ADFS_DEBUG on. Warning level, so it shows at
+     * the production log level as well.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    public function debug(OidcProviderConfig $config, string $step, array $context): void
+    {
+        if (! $config->logsTokens()) {
+            return;
         }
 
-        foreach ($order as $claim) {
-            $value = $claims[$claim] ?? null;
+        Log::warning('ADFS debug: '.$step, ['principal' => $config->principal->value] + $context);
+    }
 
-            if (is_string($value) && filter_var($value, FILTER_VALIDATE_EMAIL)) {
-                return mb_strtolower($value);
+    /**
+     * Every field of the token response with the tokens decoded (header and
+     * claims, unverified, so a token that is about to be refused shows too).
+     * The raw tokens are credentials and stay out: the signature carries no
+     * information, and the refresh token is only reported as present.
+     */
+    private function debugTokenResponse(OidcProviderConfig $config, string $endpoint, Response $response): void
+    {
+        if (! $config->logsTokens()) {
+            return;
+        }
+
+        $body = $response->json();
+        $fields = is_array($body) ? $body : ['body' => mb_substr($response->body(), 0, 2000)];
+
+        foreach (['id_token', 'access_token'] as $name) {
+            if (is_string($fields[$name] ?? null)) {
+                $fields[$name] = self::decodeUnverified($fields[$name]);
             }
         }
 
-        return null;
+        if (array_key_exists('refresh_token', $fields)) {
+            $fields['refresh_token'] = '(present, not logged)';
+        }
+
+        $this->debug($config, 'token response', ['token_endpoint' => $endpoint, 'http_status' => $response->status()] + $fields);
+    }
+
+    /**
+     * @return array{header: mixed, claims: mixed}|string
+     */
+    private static function decodeUnverified(string $token): array|string
+    {
+        $parts = explode('.', $token);
+
+        if (count($parts) !== 3) {
+            return '(not a JWT, '.strlen($token).' characters)';
+        }
+
+        $decode = fn (string $part): mixed => json_decode((string) base64_decode(strtr($part, '-_', '+/'), true), true);
+
+        return ['header' => $decode($parts[0]), 'claims' => $decode($parts[1])];
+    }
+
+    /**
+     * Verify a JWT against the provider's key set and return its claims.
+     * The key set is fetched outside the guarded decode so a JWKS outage
+     * stays an OidcUnavailableException instead of an invalid token; an
+     * unusable document still fails inside it, like a stale key.
+     *
+     * @return array<string, mixed>
+     */
+    private function decodeSigned(string $jwksUri, string $token): array
+    {
+        $jwks = $this->jwks($jwksUri);
+        JWT::$leeway = self::CLOCK_SKEW_SECONDS;
+
+        try {
+            return (array) JWT::decode($token, JWK::parseKeySet($jwks, 'RS256'));
+        } catch (Throwable) {
+            // A rotated key may not be in the cached set yet: refresh once.
+            $jwks = $this->jwks($jwksUri, refresh: true);
+
+            try {
+                return (array) JWT::decode($token, JWK::parseKeySet($jwks, 'RS256'));
+            } catch (Throwable $e) {
+                throw new OidcException($e->getMessage(), previous: $e);
+            }
+        }
     }
 
     /**

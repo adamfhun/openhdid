@@ -15,6 +15,7 @@ enum LoginRejection: string
     case NotEntitled = 'not_entitled';
     case InvalidCredentials = 'invalid_credentials';
     case ProviderUnavailable = 'provider_unavailable';
+    case NoEmailClaim = 'no_email_claim';
 
     public function message(): string
     {
@@ -29,6 +30,7 @@ enum LoginRejection: string
             self::NotEntitled => 'Your package does not include access to the client portal.',
             self::InvalidCredentials => 'The credentials are not valid.',
             self::ProviderUnavailable => 'The sign-in service is not available right now. Please try again later.',
+            self::NoEmailClaim => 'The sign-in service did not send a usable e-mail address, so the account cannot be identified. Please report this to the operator of the system.',
         };
     }
 

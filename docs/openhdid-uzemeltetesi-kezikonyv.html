@@ -92,8 +92,8 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">A konténeres OpenHDID napi üzemeltetése: ellenőrzés, szolgáltatások kezelése, naplók és felügyelet, ütemezett feladatok, a leggyakoribb helyzetek, mentés és visszaállítás, frissítés, skálázás és biztonsági karbantartás.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.5.0 · 2026. október 10.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.5.0 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.5.1 · 2026. október 14.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.5.1 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>telepítési útmutató, felhasználói kézikönyv</span></div>
 </div>
@@ -261,6 +261,16 @@ docker info | grep -i proxy</code></pre>
 <p>A felület minden elutasításra ugyanezt a semleges üzenetet adja. A valódi ok az auditnaplóban van (<code>login.rejected</code> esemény); a panel nélkül a konténerből kérdezhető le:</p>
 <pre><code>docker compose exec web php artisan tinker --execute 'App\Models\AuditLog::query()-&gt;where("event", "login.rejected")-&gt;latest()-&gt;take(5)-&gt;get()-&gt;each(fn ($e) =&gt; print($e-&gt;created_at." ".json_encode($e-&gt;context).PHP_EOL));'</code></pre>
 <p>A <code>reason</code> mező értékei: <code>invalid_credentials</code> (rossz e-mail vagy jelszó; a <code>hdid:make-admin</code> újrafuttatása ugyanarra az e-mailre a jelszót felülírja), <code>account_locked</code> (fokozódó zárolás, várni kell), <code>no_permission</code> (nincs panel-jogosultság), <code>method_disabled</code> (a jelszavas belépés kikapcsolva a beállításokban), <code>no_external_record</code> és <code>external_record_mismatch</code> (hiányzó vagy eltérő ügyféltörzs-tétel), <code>account_closed</code>. Ha egy sor sem keletkezett, a kérés el sem jutott a belépési szabályig: IP-korlát (percenként 5 próba) vagy lejárt munkamenet (419).</p>
+<h3>Az ADFS-belépés nem találja a fiókot</h3>
+<p>Az ADFS-belépés oka a felületen is megjelenik; a „nem küldött használható e-mail-címet” üzenet a <code>no_email_claim</code> ok: a <code>USER_ADFS_EMAIL_CLAIM</code> / <code>CLIENT_ADFS_EMAIL_CLAIM</code> igényeinek (claimjeinek) egyike sem adott e-mail-címet (üresen <code>emailaddress</code>, <code>email</code>, <code>upn</code>, <code>preferred_username</code>, <code>unique_name</code>). A fenti paranccsal kiolvasott bejegyzés értékek nélkül mutatja:</p>
+<ul>
+    <li><code>claims_checked</code> és <code>claims_passed_over</code>: a keresett igények és mindegyik oka (<code>missing</code>, <code>empty</code>, <code>domain_account</code>, <code>not_an_email</code>, <code>several_addresses</code>);</li>
+    <li><code>id_token_claims</code>, <code>access_token_claims</code>: a tokenekben ténylegesen érkezett igények neve;</li>
+    <li><code>access_token</code>: <code>read</code>, ha az access token igényei is számítottak; <code>ignored: …</code> az okkal (például <code>issued to another client</code>), <code>not_a_jwt</code> vagy <code>absent</code>;</li>
+    <li>sikeres vagy <code>no_account</code> belépésnél <code>email_claim</code> és <code>email_token</code>: melyik igény és melyik token adta az összevetett címet;</li>
+    <li>ha az ADFS maga utasította vissza a kérést: <code>provider_error</code> és <code>provider_error_description</code> (MSIS-kóddal), például a <code>USER_ADFS_SCOPES</code> nem engedélyezett hatóköre miatt.</li>
+</ul>
+<p>A beállítás idejére a <code>.env</code> <code>HDID_ADFS_DEBUG=true</code> értéke (utána <code>docker compose up -d</code>) minden ADFS-belépésnél a naplóba írja (<code>docker compose logs web | grep 'ADFS debug'</code>) az engedélykérést, a tokenválaszt a két token visszafejtett igényeivel és a döntést; a nyers token és a frissítő token nem kerül bele. A tokenek személyes adatot tartalmaznak: utána állítsa vissza <code>false</code>-ra. Amíg be van kapcsolva, a rendszerállapot „Belépési szolgáltatók” csempéje sárga.</p>
 <h3>Tanúsítványhiba vagy lejárat</h3>
 <p>A <code>web</code> indításkor ellenőrzi a tanúsítványt. A <code>docker compose exec web openhdid tls-check</code> kiírja:</p>
 <ul>
@@ -370,8 +380,8 @@ Kérés: POST ".config("hdid.sync.login_url")."
 </ul>
 <ol class="steps">
     <li><strong>Az image ellenőrzése</strong> (választható, ajánlott):
-<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.5.0 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.5.0 \
+<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.5.1 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.5.1 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre>
 Az aláírás ellenőrzéséhez cosign 3 vagy újabb kell: az image-ek a Sigstore-csomag formátumban vannak aláírva, ezt a cosign 2 nem keresi, és „no signatures found” hibát ad.</li>
@@ -494,7 +504,7 @@ Az aláírás ellenőrzéséhez cosign 3 vagy újabb kell: az image-ek a Sigstor
 <tr><td>SemVer</td><td>Semantic Versioning – szemantikus verziózás (fő.al.javító).</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID üzemeltetési kézikönyv 1.5.0 · 2026. október 10.</div>
+<div class="foot">OpenHDID üzemeltetési kézikönyv 1.5.1 · 2026. október 14.</div>
 </div>
 
 </body>
