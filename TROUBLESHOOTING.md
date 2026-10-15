@@ -263,7 +263,7 @@ fiókot kötő igényt (`email_claim`, `email_token`), a kihagyott igényeket az
 access token állapotát (`access_token`); `no_email_claim` okkal a keresett igényeket és a két tokenben talált
 igények nevét is (`claims_checked`, `id_token_claims`, `access_token_claims`), értékek nélkül. A keresett igényeket
 a `USER_ADFS_EMAIL_CLAIM` / `CLIENT_ADFS_EMAIL_CLAIM` adja meg (üresen `emailaddress,email,upn,preferred_username,unique_name`).
-A tokenek teljes tartalmához ideiglenesen `HDID_ADFS_DEBUG=true` a `.env`-ben, `docker compose up -d`, egy belépés,
+A tokenek teljes tartalmához (fejléc és tartalom az érkezett alakban és visszafejtve, aláírás nélkül) ideiglenesen `HDID_ADFS_DEBUG=true` a `.env`-ben, `docker compose up -d`, egy belépés,
 majd `docker compose logs web | grep 'ADFS debug'`; utána vissza `false`-ra (a tokenek személyes adatot tartalmaznak).
 
 For an ADFS sign-in the `login.rejected` and `login.succeeded` entries (command in the next section) name the claim
@@ -271,7 +271,7 @@ that bound the account (`email_claim`, `email_token`), the claims passed over wi
 and the access token's state (`access_token`); with the reason `no_email_claim` also the claims looked for and the
 claim names found in both tokens (`claims_checked`, `id_token_claims`, `access_token_claims`), never their values.
 `USER_ADFS_EMAIL_CLAIM` / `CLIENT_ADFS_EMAIL_CLAIM` name the claims looked for (empty:
-`emailaddress,email,upn,preferred_username,unique_name`). For the full token content set `HDID_ADFS_DEBUG=true`
+`emailaddress,email,upn,preferred_username,unique_name`). For the full token content (header and payload as received and decoded, without the signature) set `HDID_ADFS_DEBUG=true`
 in `.env` for a while, `docker compose up -d`, sign in once, then `docker compose logs web | grep 'ADFS debug'`;
 set it back to `false` afterwards (the tokens hold personal data).
 

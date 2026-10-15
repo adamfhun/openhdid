@@ -229,10 +229,11 @@ class OidcClient
     }
 
     /**
-     * Every field of the token response with the tokens decoded (header and
-     * claims, unverified, so a token that is about to be refused shows too).
-     * The raw tokens are credentials and stay out: the signature carries no
-     * information, and the refresh token is only reported as present.
+     * Every field of the token response, each JWT as received and decoded
+     * (header and claims, unverified, so a token that is about to be refused
+     * shows too). The signatures stay out, so the log never holds a token
+     * that could be presented again, and the refresh token is only reported
+     * as present.
      */
     private function debugTokenResponse(OidcProviderConfig $config, string $endpoint, Response $response): void
     {
@@ -245,7 +246,7 @@ class OidcClient
 
         foreach (['id_token', 'access_token'] as $name) {
             if (is_string($fields[$name] ?? null)) {
-                $fields[$name] = self::decodeUnverified($fields[$name]);
+                $fields[$name] = self::unsignedToken($fields[$name]);
             }
         }
 
@@ -257,9 +258,12 @@ class OidcClient
     }
 
     /**
-     * @return array{header: mixed, claims: mixed}|string
+     * A JWT for the debug log: the header and payload segments exactly as
+     * received, the signature only by its length, and both segments decoded.
+     *
+     * @return array{received: string, signature: string, header: mixed, claims: mixed}|string
      */
-    private static function decodeUnverified(string $token): array|string
+    private static function unsignedToken(string $token): array|string
     {
         $parts = explode('.', $token);
 
@@ -269,7 +273,12 @@ class OidcClient
 
         $decode = fn (string $part): mixed => json_decode((string) base64_decode(strtr($part, '-_', '+/'), true), true);
 
-        return ['header' => $decode($parts[0]), 'claims' => $decode($parts[1])];
+        return [
+            'received' => $parts[0].'.'.$parts[1],
+            'signature' => '('.strlen($parts[2]).' characters, not logged)',
+            'header' => $decode($parts[0]),
+            'claims' => $decode($parts[1]),
+        ];
     }
 
     /**

@@ -4,6 +4,32 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.5.2] – 2026-10-15
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- BEL-00.1: az ADFS-hibakeresés naplója a tokeneket az érkezett alakban is mutatja, aláírás nélkül.
+
+**Frissítés előtt:** migráció és új telepítési kulcs nincs.
+
+Részletek:
+- `HDID_ADFS_DEBUG=true` mellett az `ADFS debug: token response` sor mindkét tokennél a fejléc- és tartalomrészt az érkezett alakban (`received`, például jwt.io-ba másolható) és visszafejtve (`header`, `claims`) adja. Az aláírásnak csak a hossza látszik (`signature`), a frissítő tokennek csak a megléte, így a naplóban nincs újra felhasználható token.
+- A web konténer PHP-FPM-je a 64 KiB-nál rövidebb naplósorokat egyben adja ki (eddig 8 KiB felett tördelte, és a `grep 'ADFS debug'` csak a sor elejét mutatta).
+- Platform: a frontend buildje Node 24.22.0 LTS-sel (korábban 24.21.0).
+- A dokumentumok verziója 1.5.2.
+
+### English
+Rule changes in one sentence (with the specification's IDs):
+- BEL-00.1: the ADFS debug log also shows the tokens as received, without their signatures.
+
+**Before upgrading:** no migration and no new setting.
+
+Details:
+- With `HDID_ADFS_DEBUG=true` the `ADFS debug: token response` line gives the header and payload of both tokens as received (`received`, ready to paste into jwt.io, for example) and decoded (`header`, `claims`). Only the signature's length shows (`signature`) and only the presence of the refresh token, so the log never holds a token that could be presented again.
+- The web container's PHP-FPM keeps log lines shorter than 64 KiB in one piece (it used to split them above 8 KiB, and `grep 'ADFS debug'` showed only the start of the line).
+- Platform: the frontend is built with Node 24.22.0 LTS (previously 24.21.0).
+- The documents carry version 1.5.2.
+
 ## [1.5.1] – 2026-10-14
 
 ### Magyar

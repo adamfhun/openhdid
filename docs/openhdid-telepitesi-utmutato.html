@@ -92,8 +92,8 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">Az OpenHDID konténeres telepítése: követelmények, telepítés lépésről lépésre, a beállítások működése a kész csomagban, hálózat és HTTPS, adatbázis, ütemezett feladatok, naplók, a külső rendszerek bekötése és az átvételi ellenőrzés.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.5.1 · 2026. október 14.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.5.1 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.5.2 · 2026. október 15.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.5.2 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>üzemeltetési kézikönyv, felhasználói kézikönyv</span></div>
 </div>
@@ -319,7 +319,7 @@ Csak figyelmeztetés jár a naplóba író levélküldésért és SMS-ért, vala
 <tr><td><code>USER_ADFS_EMAIL_CLAIM</code>, <code>CLIENT_ADFS_EMAIL_CLAIM</code></td><td>Az ADFS-tokenek igényei (claimek), amelyeket a rendszer sorrendben a fiók e-mail-címével összevet, vesszővel; üresen <code>emailaddress,email,upn,preferred_username,unique_name</code>.</td></tr>
 <tr><td><code>USER_ADFS_SCOPES</code>, <code>CLIENT_ADFS_SCOPES</code></td><td>Az <code>openid profile email</code> mellé kért további hatókörök (például <code>allatclaims</code>); nem kötelező, üresen nincs.</td></tr>
 <tr><td><code>USER_ADFS_RESOURCE</code>, <code>CLIENT_ADFS_RESOURCE</code></td><td>A Web API azonosítója <code>resource</code> paraméterként (ennek a kiadási szabályai kerülnek az access tokenbe); nem kötelező.</td></tr>
-<tr><td><code>HDID_ADFS_DEBUG</code></td><td><code>true</code> esetén minden ADFS-belépés a kérést, a tokenválaszt és a tokenek visszafejtett tartalmát (személyes adatokkal) a naplóba írja (<code>docker compose logs web</code>); a nyers token és a frissítő token nem kerül bele. Alapértéke <code>false</code>; amíg be van kapcsolva, a „Belépési szolgáltatók” csempe sárga.</td></tr>
+<tr><td><code>HDID_ADFS_DEBUG</code></td><td><code>true</code> esetén minden ADFS-belépés a kérést, a tokenválaszt, a két token fejlécét és tartalmát az érkezett alakban és visszafejtve (személyes adatokkal) a naplóba írja (<code>docker compose logs web</code>); az aláírásnak csak a hossza látszik, a frissítő token nem kerül bele. Alapértéke <code>false</code>; amíg be van kapcsolva, a „Belépési szolgáltatók” csempe sárga.</td></tr>
 </tbody></table></div>
 
 <h2 id="s6"><span class="num">6</span>Hálózat, kiszolgálónév és HTTPS</h2>
@@ -595,7 +595,7 @@ docker compose ps</code></pre>
 <tr><td>TLS</td><td>Transport Layer Security – titkosított, hitelesített hálózati kapcsolat.</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID telepítési útmutató 1.5.1 · 2026. október 14.</div>
+<div class="foot">OpenHDID telepítési útmutató 1.5.2 · 2026. október 15.</div>
 </div>
 
 </body>

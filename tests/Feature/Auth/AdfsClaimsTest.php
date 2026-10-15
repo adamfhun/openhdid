@@ -168,7 +168,7 @@ it('requests the configured extra scopes and resource, and nothing extra without
         ->and($query)->not->toHaveKey('resource');
 });
 
-it('writes the decoded ADFS tokens to the log only while debugging is on, never the raw tokens', function (): void {
+it('writes the ADFS tokens as received and decoded to the log only while debugging is on, never their signatures', function (): void {
     staffAgent();
     FakeOidc::$accessClaims = ['aud' => 'urn:hdid', 'appid' => 'user-app', 'emailaddress' => 'agent@corp.hu'];
     FakeOidc::$tokenResponse = ['refresh_token' => 'refresh-secret', 'token_type' => 'bearer', 'expires_in' => 3600];
@@ -189,8 +189,17 @@ it('writes the decoded ADFS tokens to the log only while debugging is on, never 
     });
     expect($logged)->toHaveKeys(['ADFS debug: authorization request', 'ADFS debug: token response', 'ADFS debug: e-mail claim']);
 
+    $issued = Http::recorded(fn (Request $request): bool => $request->url() === 'https://idp.test/token')->last()[1]->json();
+    [$idHeader, $idPayload, $idSignature] = explode('.', $issued['id_token']);
+    [$accessHeader, $accessPayload, $accessSignature] = explode('.', $issued['access_token']);
+
     $response = $logged['ADFS debug: token response'];
-    expect($response['id_token']['claims'])->toMatchArray(['upn' => 'agent@corp.local', 'aud' => 'user-app'])
+    expect($response['id_token']['received'])->toBe("{$idHeader}.{$idPayload}")
+        ->and($response['id_token']['signature'])->toBe('('.strlen($idSignature).' characters, not logged)')
+        ->and($response['access_token']['received'])->toBe("{$accessHeader}.{$accessPayload}")
+        ->and(json_encode($logged))->not->toContain($idSignature)
+        ->and(json_encode($logged))->not->toContain($accessSignature)
+        ->and($response['id_token']['claims'])->toMatchArray(['upn' => 'agent@corp.local', 'aud' => 'user-app'])
         ->and($response['id_token']['header'])->toMatchArray(['alg' => 'RS256'])
         ->and($response['access_token']['claims'])->toMatchArray(['emailaddress' => 'agent@corp.hu', 'appid' => 'user-app'])
         ->and($response)->toMatchArray(['refresh_token' => '(present, not logged)', 'token_type' => 'bearer', 'http_status' => 200])

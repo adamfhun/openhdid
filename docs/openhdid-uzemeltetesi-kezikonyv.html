@@ -92,8 +92,8 @@ a { color: var(--accent); }
 <h1>OpenHDID – Ügyfélszolgálati hívóazonosítás</h1>
 <p class="lead">A konténeres OpenHDID napi üzemeltetése: ellenőrzés, szolgáltatások kezelése, naplók és felügyelet, ütemezett feladatok, a leggyakoribb helyzetek, mentés és visszaállítás, frissítés, skálázás és biztonsági karbantartás.</p>
 <div class="meta">
-    <div><span class="k">Verzió</span><span>1.5.1 · 2026. október 14.</span></div>
-    <div><span class="k">Kiadás</span><span>OpenHDID 1.5.1 · ghcr.io/adamfhun/openhdid</span></div>
+    <div><span class="k">Verzió</span><span>1.5.2 · 2026. október 15.</span></div>
+    <div><span class="k">Kiadás</span><span>OpenHDID 1.5.2 · ghcr.io/adamfhun/openhdid</span></div>
     <div><span class="k">Célközönség</span><span>rendszerüzemeltető, rendszergazda</span></div>
     <div><span class="k">Kapcsolódó</span><span>telepítési útmutató, felhasználói kézikönyv</span></div>
 </div>
@@ -270,7 +270,7 @@ docker info | grep -i proxy</code></pre>
     <li>sikeres vagy <code>no_account</code> belépésnél <code>email_claim</code> és <code>email_token</code>: melyik igény és melyik token adta az összevetett címet;</li>
     <li>ha az ADFS maga utasította vissza a kérést: <code>provider_error</code> és <code>provider_error_description</code> (MSIS-kóddal), például a <code>USER_ADFS_SCOPES</code> nem engedélyezett hatóköre miatt.</li>
 </ul>
-<p>A beállítás idejére a <code>.env</code> <code>HDID_ADFS_DEBUG=true</code> értéke (utána <code>docker compose up -d</code>) minden ADFS-belépésnél a naplóba írja (<code>docker compose logs web | grep 'ADFS debug'</code>) az engedélykérést, a tokenválaszt a két token visszafejtett igényeivel és a döntést; a nyers token és a frissítő token nem kerül bele. A tokenek személyes adatot tartalmaznak: utána állítsa vissza <code>false</code>-ra. Amíg be van kapcsolva, a rendszerállapot „Belépési szolgáltatók” csempéje sárga.</p>
+<p>A beállítás idejére a <code>.env</code> <code>HDID_ADFS_DEBUG=true</code> értéke (utána <code>docker compose up -d</code>) minden ADFS-belépésnél a naplóba írja (<code>docker compose logs web | grep 'ADFS debug'</code>) az engedélykérést, a tokenválaszt a két token fejlécével és tartalmával az érkezett alakban (<code>received</code>) és visszafejtve (<code>header</code>, <code>claims</code>), valamint a döntést; az aláírásnak csak a hossza látszik, a frissítő token nem kerül bele, így a naplóban nincs újra felhasználható token. A tokenek személyes adatot tartalmaznak: utána állítsa vissza <code>false</code>-ra. Amíg be van kapcsolva, a rendszerállapot „Belépési szolgáltatók” csempéje sárga.</p>
 <h3>Tanúsítványhiba vagy lejárat</h3>
 <p>A <code>web</code> indításkor ellenőrzi a tanúsítványt. A <code>docker compose exec web openhdid tls-check</code> kiírja:</p>
 <ul>
@@ -380,8 +380,8 @@ Kérés: POST ".config("hdid.sync.login_url")."
 </ul>
 <ol class="steps">
     <li><strong>Az image ellenőrzése</strong> (választható, ajánlott):
-<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.5.1 --owner adamfhun
-cosign verify ghcr.io/adamfhun/openhdid:1.5.1 \
+<pre><code>gh attestation verify oci://ghcr.io/adamfhun/openhdid:1.5.2 --owner adamfhun
+cosign verify ghcr.io/adamfhun/openhdid:1.5.2 \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com</code></pre>
 Az aláírás ellenőrzéséhez cosign 3 vagy újabb kell: az image-ek a Sigstore-csomag formátumban vannak aláírva, ezt a cosign 2 nem keresi, és „no signatures found” hibát ad.</li>
@@ -504,7 +504,7 @@ Az aláírás ellenőrzéséhez cosign 3 vagy újabb kell: az image-ek a Sigstor
 <tr><td>SemVer</td><td>Semantic Versioning – szemantikus verziózás (fő.al.javító).</td></tr>
 </tbody></table></div>
 
-<div class="foot">OpenHDID üzemeltetési kézikönyv 1.5.1 · 2026. október 14.</div>
+<div class="foot">OpenHDID üzemeltetési kézikönyv 1.5.2 · 2026. október 15.</div>
 </div>
 
 </body>
