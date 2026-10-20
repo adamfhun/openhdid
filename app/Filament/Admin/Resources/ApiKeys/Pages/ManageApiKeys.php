@@ -6,10 +6,12 @@ use App\Enums\ApiKeyScope;
 use App\Filament\Admin\Resources\ApiKeys\ApiKeyResource;
 use App\Models\ApiKey;
 use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ManageRecords;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\HtmlString;
 
 class ManageApiKeys extends ManageRecords
@@ -19,6 +21,7 @@ class ManageApiKeys extends ManageRecords
     protected function getHeaderActions(): array
     {
         return [
+            $this->documentationLinks(),
             Action::make('create')
                 ->label(__('New API key'))
                 ->icon('heroicon-o-plus')
@@ -26,7 +29,7 @@ class ManageApiKeys extends ManageRecords
                     TextInput::make('name')->label(__('Name'))->required()->maxLength(100)->placeholder(__('e.g. IVR production')),
                     Select::make('scope')->label(__('Scope'))->required()
                         ->options(collect(ApiKeyScope::cases())->mapWithKeys(fn (ApiKeyScope $s) => [$s->value => $s->label()])->all())
-                        ->helperText(__('A mobile app backend key comes with its signing secret: every request made with it has to be signed.')),
+                        ->helperText(__('A mobile app backend key comes with its signing secret: every request made with it has to be signed.').' '.__('The interface document of each scope opens from the "API documentation" button above.')),
                 ])
                 ->action(function (array $data): void {
                     ['plain' => $plain, 'secret' => $secret] = ApiKey::generate($data['name'], ApiKeyScope::from($data['scope']), auth()->user());
@@ -45,5 +48,29 @@ class ManageApiKeys extends ManageRecords
                         ->send();
                 }),
         ];
+    }
+
+    /**
+     * The interface documents of the partners, each in a new tab, for whoever
+     * may read them (the same gate as the documents themselves).
+     */
+    private function documentationLinks(): ActionGroup
+    {
+        $links = array_map(fn (ApiKeyScope $scope): Action => Action::make('docs_'.$scope->value)
+            ->label(__(':scope interface', ['scope' => $scope->label()]))
+            ->icon('heroicon-o-arrow-top-right-on-square')
+            ->url(route($scope->docsRoute()), shouldOpenInNewTab: true), ApiKeyScope::cases());
+
+        $links[] = Action::make('docs_all')
+            ->label(__('Complete API (client portal, sign-in, all partners)'))
+            ->icon('heroicon-o-arrow-top-right-on-square')
+            ->url(route('scramble.docs.ui'), shouldOpenInNewTab: true);
+
+        return ActionGroup::make($links)
+            ->label(__('API documentation'))
+            ->icon('heroicon-o-book-open')
+            ->color('gray')
+            ->button()
+            ->visible(fn (): bool => Gate::allows('viewApiDocs'));
     }
 }

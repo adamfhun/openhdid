@@ -24,6 +24,20 @@ class SsoAccess
     }
 
     /**
+     * Some provider of this account kind can be used: a password is then optional.
+     */
+    public function anyAvailable(PrincipalType $principal): bool
+    {
+        foreach (OidcProvider::cases() as $provider) {
+            if ($this->isAvailable($principal, $provider)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Refuses a provider that is switched off or lacks its configuration. Once
      * the account is known (the check after the identity provider answered),
      * the audit entry names it.

@@ -2,15 +2,20 @@
 
 namespace App\Filament\Admin\Resources\Users;
 
+use App\Auth\Mfa\StaffMfa;
+use App\Auth\Oidc\SsoAccess;
 use App\Auth\RoleAssignment;
 use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
+use App\Enums\MfaMethod;
+use App\Enums\PrincipalType;
 use App\Filament\Admin\Clusters\Accounts;
 use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\Users\Pages\CreateUser;
 use App\Filament\Admin\Resources\Users\Pages\EditUser;
 use App\Filament\Admin\Resources\Users\Pages\ListUsers;
 use App\Models\User;
+use App\Support\HuDate;
 use BackedEnum;
 use Closure;
 use Filament\Actions\Action;
@@ -22,6 +27,7 @@ use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
@@ -66,11 +72,15 @@ class UserResource extends BaseResource
             Section::make(__('Account'))->columns(2)->schema([
                 TextInput::make('name')->label(__('Name'))->required()->maxLength(255),
                 TextInput::make('email')->label(__('E-mail'))->email()->required()->unique(ignoreRecord: true)->maxLength(255)
-                    ->helperText(__('Must match the e-mail claim of the SSO provider and the EMD record.')),
+                    ->helperText(fn (?User $record) => $record?->externalRecord !== null && ! $record->externalRecord->isLocal()
+                        ? __('Must match the e-mail claim of the SSO provider and the EMD record.')
+                        : __('Must match the e-mail claim of the SSO provider and the EMD record. If EMD already holds a staff record with this e-mail, saving links the account at once.')),
                 TextInput::make('password')->label(__('Password'))->password()->revealable()->minLength(12)->maxLength(255)
                     ->dehydrated(fn ($state) => filled($state))
-                    ->required(fn (string $operation) => $operation === 'create')
-                    ->helperText(__('Only needed for password login; leave empty for SSO-only accounts.')),
+                    ->required(fn (string $operation) => static::passwordRequired($operation))
+                    ->helperText(fn (string $operation) => static::passwordRequired($operation)
+                        ? __('Required: no staff SSO provider is switched on and configured, so a password is the only way to sign in.')
+                        : __('Only needed for password login; leave empty for SSO-only accounts.')),
                 Select::make('roles')->label(__('Roles'))->relationship('roles', 'name')->multiple()->preload()->required()
                     ->disableOptionWhen(fn (string $label) => ! app(RoleAssignment::class)->canGrant(auth()->user(), $label))
                     ->helperText(fn () => app(RoleAssignment::class)->isSuperAdmin(auth()->user()) ? null : __('The SuperAdmin role can only be granted by a SuperAdmin.'))
@@ -104,13 +114,40 @@ class UserResource extends BaseResource
         ]);
     }
 
+    /**
+     * The factors a staff member set up (or why none can be used), for the list.
+     */
+    public static function mfaState(User $record): string
+    {
+        $mfa = app(StaffMfa::class);
+
+        if ($mfa->isLocked($record)) {
+            return __('locked until :time', ['time' => $record->mfa_locked_until->format(HuDate::DATETIME)]);
+        }
+
+        $methods = $mfa->enrolledMethods($record);
+
+        return $methods === [] ? __('none') : implode(', ', array_map(fn (MfaMethod $method): string => $method->label(), $methods));
+    }
+
+    /**
+     * A new account needs a password only while staff cannot sign in any other way.
+     */
+    public static function passwordRequired(string $operation): bool
+    {
+        return $operation === 'create' && ! app(SsoAccess::class)->anyAvailable(PrincipalType::User);
+    }
+
     public static function table(Table $table): Table
     {
         return $table
             ->modifyQueryUsing(fn (Builder $query) => $query->with(['roles', 'externalRecord']))
+            // One search over everything the list shows; the words are split below.
+            ->splitSearchTerms(false)
             ->columns([
-                TextColumn::make('name')->label(__('Name'))->searchable()->sortable(),
-                TextColumn::make('email')->label(__('E-mail'))->searchable()->sortable(),
+                TextColumn::make('name')->label(__('Name'))->sortable()
+                    ->searchable(query: fn (Builder $query, string $search) => static::searchAccounts($query, $search)),
+                TextColumn::make('email')->label(__('E-mail'))->sortable(),
                 TextColumn::make('roles.name')->badge()->label(__('Roles')),
                 TextColumn::make('externalRecord.external_id')->label(__('External id'))->placeholder('-')->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('job_title')->label(__('Job title'))->placeholder('-')->toggleable()->state(fn (User $record) => $record->externalRecord?->jobTitle()),
@@ -118,6 +155,13 @@ class UserResource extends BaseResource
                 IconColumn::make('externalRecord.id')->label(__('Linked to EMD'))->boolean()
                     ->tooltip(fn (User $record) => $record->externalRecord?->isMissing() ? __('Missing from the last EMD sync') : null)
                     ->color(fn (User $record) => $record->externalRecord === null ? 'danger' : ($record->externalRecord->isMissing() ? 'warning' : 'success')),
+                TextColumn::make('mfa')->label(__('Second factor'))->badge()->toggleable()
+                    ->state(fn (User $record): string => static::mfaState($record))
+                    ->color(fn (User $record): string => match (true) {
+                        app(StaffMfa::class)->isLocked($record) => 'danger',
+                        app(StaffMfa::class)->enrolledMethods($record) !== [] => 'success',
+                        default => app(StaffMfa::class)->isEnabled() ? 'warning' : 'gray',
+                    }),
                 TextColumn::make('closed_at')->label(__('Closed'))->since()->placeholder(__('open'))->badge()->color('danger'),
                 TextColumn::make('last_login_at')->label(__('Last login'))->since()->placeholder('-'),
             ])
@@ -141,10 +185,47 @@ class UserResource extends BaseResource
                         ->authorize(fn (User $record) => static::canEdit($record))
                         ->visible(fn (User $record) => $record->isClosed())
                         ->action(fn (User $record) => $record->reopen()),
+                    Action::make('resetMfa')->label(__('Reset second factor'))->icon('heroicon-o-shield-exclamation')->color('danger')
+                        ->authorize(fn (User $record) => static::canEdit($record))
+                        ->disabled(fn (User $record) => ! app(StaffMfa::class)->hasAnyFactor($record) && ! app(StaffMfa::class)->isLocked($record))
+                        ->tooltip(fn (User $record) => app(StaffMfa::class)->hasAnyFactor($record) || app(StaffMfa::class)->isLocked($record) ? null : __('This staff member has no second factor.'))
+                        ->requiresConfirmation()
+                        ->modalHeading(fn (User $record) => __('Reset the second factor of :name?', ['name' => $record->name]))
+                        ->modalDescription(__('All second factors of the account are removed, the staff member is signed out everywhere, and sets up a new factor at the next sign-in (an app needs a code from their e-mail too). Use it when the device or number was lost. Recorded in the audit log.'))
+                        ->action(function (User $record): void {
+                            abort_unless(static::canEdit($record), 403);
+                            app(StaffMfa::class)->reset($record, auth()->user());
+                            Notification::make()->title(__('Second factor reset'))->success()->send();
+                        }),
                     DeleteAction::make(),
                     RestoreAction::make(),
                 ])->icon('heroicon-m-ellipsis-vertical')->color('gray')->tooltip(__('More')),
             ]);
+    }
+
+    /**
+     * Every word of the search must appear in one of the fields the list
+     * shows: name, e-mail, role, and the EMD record's external id, company,
+     * job title, department or login name.
+     *
+     * @param  Builder<User>  $query
+     */
+    public static function searchAccounts(Builder $query, string $search): void
+    {
+        foreach (preg_split('/\s+/', trim($search), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $word) {
+            $like = '%'.str_replace(['%', '_'], ['\%', '\_'], $word).'%';
+
+            $query->where(fn (Builder $q) => $q
+                ->where('name', 'like', $like)
+                ->orWhere('email', 'like', $like)
+                ->orWhereHas('roles', fn (Builder $roles) => $roles->where('name', 'like', $like))
+                ->orWhereHas('externalRecord', fn (Builder $record) => $record
+                    ->where('external_id', 'like', $like)
+                    ->orWhere('company', 'like', $like)
+                    ->orWhere('title', 'like', $like)
+                    ->orWhere('department', 'like', $like)
+                    ->orWhere('login_name', 'like', $like)));
+        }
     }
 
     public static function getPages(): array

@@ -2,13 +2,14 @@
 
 namespace App\Models;
 
+use App\Enums\AnswerCheckResult;
 use App\Enums\StepVerdict;
 use App\Models\Concerns\HasTimeOrderedUuidKey;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-#[Fillable(['id_session_id', 'question_id', 'question_version_id', 'verdict', 'shown_at', 'decided_at'])]
+#[Fillable(['id_session_id', 'question_id', 'question_version_id', 'verdict', 'check_attempts', 'check_result', 'check_distance', 'shown_at', 'decided_at'])]
 class IdSessionStep extends Model
 {
     use HasTimeOrderedUuidKey;
@@ -17,6 +18,9 @@ class IdSessionStep extends Model
     {
         return [
             'verdict' => StepVerdict::class,
+            'check_attempts' => 'integer',
+            'check_result' => AnswerCheckResult::class,
+            'check_distance' => 'integer',
             'shown_at' => 'datetime',
             'decided_at' => 'datetime',
         ];

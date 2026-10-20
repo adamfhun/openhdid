@@ -6,6 +6,7 @@ use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
 use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Concerns\GuardsUnsavedChanges;
+use App\Filament\Concerns\LinksToDirectory;
 use App\Models\Client;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
@@ -19,6 +20,7 @@ use Filament\Resources\Pages\EditRecord;
 class EditClient extends EditRecord
 {
     use GuardsUnsavedChanges;
+    use LinksToDirectory;
 
     protected static string $resource = ClientResource::class;
 
@@ -140,5 +142,10 @@ class EditClient extends EditRecord
     protected function getRedirectUrl(): string
     {
         return ClientResource::afterSaveUrl($this->getRecord());
+    }
+
+    protected function getSavedNotification(): ?Notification
+    {
+        return $this->withDirectoryLink(parent::getSavedNotification());
     }
 }

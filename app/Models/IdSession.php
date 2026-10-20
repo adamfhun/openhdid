@@ -20,7 +20,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * One identification attempt (Q-A, PIN or mobile code) on one channel.
  * Q-A rule values are snapshotted from settings at start.
  */
-#[Fillable(['client_id', 'agent_user_id', 'call_id', 'channel', 'method', 'status', 'required_accepted', 'max_questions', 'max_rejected', 'started_at', 'expires_at'])]
+#[Fillable(['client_id', 'agent_user_id', 'call_id', 'channel', 'method', 'status', 'required_accepted', 'max_questions', 'max_rejected', 'blind_check', 'typo_tolerance', 'started_at', 'expires_at'])]
 class IdSession extends Model
 {
     use Auditable;
@@ -40,6 +40,8 @@ class IdSession extends Model
             'required_accepted' => 'integer',
             'max_questions' => 'integer',
             'max_rejected' => 'integer',
+            'blind_check' => 'boolean',
+            'typo_tolerance' => 'integer',
             'accepted_count' => 'integer',
             'rejected_count' => 'integer',
             'undecided_count' => 'integer',

@@ -5,6 +5,7 @@ namespace App\Identification;
 use App\Audit\Auditor;
 use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
+use App\Enums\AnswerCheckResult;
 use App\Enums\IdChannel;
 use App\Enums\IdMethod;
 use App\Enums\IdSessionStatus;
@@ -16,6 +17,7 @@ use App\Models\IdSessionStep;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use Closure;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -34,11 +36,16 @@ use Illuminate\Support\Facades\DB;
  */
 class QaSessionEngine
 {
+    /** Typed answers per question in a blind check: a close miss gets one retry. */
+    public const BLIND_ATTEMPTS = 2;
+
     public function __construct(
         private readonly ClientAnswers $answers,
         private readonly Settings $settings,
         private readonly Auditor $auditor,
         private readonly ClientTiers $tiers,
+        private readonly AnswerMatcher $matcher,
+        private readonly AgentAttemptLimiter $limiter,
     ) {}
 
     public function start(Client $client, User $agent, ?Call $call = null, IdChannel $channel = IdChannel::Manual): IdSession
@@ -76,11 +83,13 @@ class QaSessionEngine
                 'required_accepted' => $this->settings->int(SettingKey::QaMinAcceptedToPass),
                 'max_questions' => $this->settings->int(SettingKey::QaMaxQuestionsPerSession),
                 'max_rejected' => $this->settings->int(SettingKey::QaMaxRejectedToFail),
+                'blind_check' => $this->settings->bool(SettingKey::QaBlindCheck),
+                'typo_tolerance' => $this->settings->int(SettingKey::QaTypoTolerance),
                 'started_at' => now(),
                 'expires_at' => now()->addMinutes($this->settings->int(SettingKey::QaSessionTtlMinutes)),
             ]);
 
-            $this->auditor->record('id_session.started', $session, ['client_id' => $client->id, 'call_id' => $call?->id], $agent);
+            $this->auditor->record('id_session.started', $session, ['client_id' => $client->id, 'call_id' => $call?->id] + ($session->blind_check ? ['blind_check' => true] : []), $agent);
 
             return $session;
         });
@@ -132,15 +141,18 @@ class QaSessionEngine
     }
 
     /**
-     * The stored answer for a step, revealed to the agent only while pending.
+     * The stored answer for a step: while pending, or in a blind check only
+     * once the typed answer matched it.
      */
     public function revealAnswer(IdSessionStep $step): ?string
     {
-        if (! $step->isPending() || $step->session->status !== IdSessionStatus::Open) {
+        $session = $step->session;
+
+        if ($session->blind_check ? $step->check_result !== AnswerCheckResult::Matched : (! $step->isPending() || $session->status !== IdSessionStatus::Open)) {
             return null;
         }
 
-        return $this->answers->usable($step->session->client)->firstWhere('question_id', $step->question_id)?->answer;
+        return $this->answers->usable($session->client)->firstWhere('question_id', $step->question_id)?->answer;
     }
 
     public function decide(IdSessionStep $step, StepVerdict $verdict, ?User $agent = null): IdSession
@@ -149,7 +161,93 @@ class QaSessionEngine
             throw new IdentificationException(__('A verdict is required.'));
         }
 
-        $result = DB::transaction(function () use ($step, $verdict, $agent): IdSession|IdentificationException {
+        return $this->underSessionLock($step, $agent, function (IdSession $session) use ($step, $verdict): IdSession|IdentificationException {
+            // In a blind check the comparison decides; by hand only "cannot decide".
+            if ($session->blind_check && $verdict !== StepVerdict::Undecided) {
+                return new IdentificationException(__('In the blind check the system compares the answer you type; only "Cannot decide" can be chosen by hand.'));
+            }
+
+            return $this->applyVerdict($session, $step, $verdict);
+        });
+    }
+
+    /**
+     * Blind check: compares the answer the agent typed with the stored one.
+     * A match accepts the question, a clear miss rejects it, a close miss
+     * gets one retry and then counts as "cannot decide". The typed text is
+     * never stored or logged; misses count toward the agent's hourly limit.
+     * Returns the step as it stands after the check.
+     */
+    public function check(IdSessionStep $step, string $given, User $agent): IdSessionStep
+    {
+        $given = trim($given);
+
+        if ($given === '' || mb_strlen($given) > 255) {
+            throw new IdentificationException(__('Type the answer the caller gave (at most 255 characters).'));
+        }
+
+        $this->limiter->assertAllowed($agent);
+
+        $checked = $this->underSessionLock($step, $agent, function (IdSession $session) use ($step, $given): IdSessionStep|IdentificationException {
+            if (! $session->blind_check) {
+                return new IdentificationException(__('This session does not use the blind check; judge the answer with the buttons.'));
+            }
+
+            $locked = IdSessionStep::query()->lockForUpdate()->whereKey($step->id)->where('id_session_id', $session->id)->first();
+            if ($locked === null || ! $locked->isPending()) {
+                return new IdentificationException(__('This question has already been decided.'));
+            }
+
+            $locked->setRelation('session', $session);
+            $stored = $this->answers->usable($session->client)->firstWhere('question_id', $locked->question_id)?->answer;
+
+            // The client changed or removed the answer meanwhile: nothing to compare with.
+            if ($stored === null) {
+                $this->applyVerdict($session, $locked, StepVerdict::Undecided);
+
+                return $locked->refresh();
+            }
+
+            ['result' => $result, 'distance' => $distance] = $this->matcher->compare($stored, $given, (int) $session->typo_tolerance);
+            $attempt = $locked->check_attempts + 1;
+            $locked->forceFill(['check_attempts' => $attempt, 'check_result' => $result, 'check_distance' => min($distance, 255)])->save();
+
+            $this->auditor->record('id_session.answer_checked', $session, ['step_id' => $locked->id, 'result' => $result->value, 'distance' => $distance, 'attempt' => $attempt]);
+
+            $verdict = match (true) {
+                $result === AnswerCheckResult::Matched => StepVerdict::Accepted,
+                $result === AnswerCheckResult::Mismatch => StepVerdict::Rejected,
+                $attempt >= self::BLIND_ATTEMPTS => StepVerdict::Undecided,
+                default => null,
+            };
+
+            if ($verdict !== null) {
+                $this->applyVerdict($session, $locked, $verdict);
+            }
+
+            return $locked->refresh();
+        });
+
+        if ($checked->check_result !== null && $checked->check_result !== AnswerCheckResult::Matched) {
+            $this->limiter->hit($agent);
+        }
+
+        return $checked;
+    }
+
+    /**
+     * Runs a step decision with the client and the session locked, after the
+     * session guards; an IdentificationException the work returns is thrown
+     * once the transaction has kept what the guards wrote (expiry, closure).
+     *
+     * @template T
+     *
+     * @param  Closure(IdSession): (T|IdentificationException)  $work
+     * @return T
+     */
+    private function underSessionLock(IdSessionStep $step, ?User $agent, Closure $work): mixed
+    {
+        $result = DB::transaction(function () use ($step, $agent, $work): mixed {
             // Lock the client first, like account closure, then the session.
             // Neither a stale model nor a concurrent closure may revive a decision.
             $client = Client::query()->lockForUpdate()->findOrFail($step->session->client_id);
@@ -171,42 +269,7 @@ class QaSessionEngine
                 return new IdentificationException(__('The client\'s account is closed or no longer entitled; it cannot be identified.'));
             }
 
-            $decided = IdSessionStep::query()
-                ->whereKey($step->id)
-                ->where('verdict', StepVerdict::Pending)
-                ->update(['verdict' => $verdict, 'decided_at' => now()]);
-
-            if ($decided !== 1) {
-                throw new IdentificationException(__('This question has already been decided.'));
-            }
-
-            $step->forceFill(['verdict' => $verdict, 'decided_at' => now()])->syncOriginal();
-
-            $column = match ($verdict) {
-                StepVerdict::Accepted => 'accepted_count',
-                StepVerdict::Rejected => 'rejected_count',
-                StepVerdict::Undecided => 'undecided_count',
-            };
-            $session->increment($column);
-            $session->refresh();
-
-            $this->auditor->record('id_session.answer_judged', $session, ['step_id' => $step->id, 'verdict' => $verdict->value]);
-
-            if ($session->accepted_count >= $session->required_accepted) {
-                return $this->finish($session, IdSessionStatus::Passed, 'enough_accepted');
-            }
-
-            if ($session->rejected_count >= $session->max_rejected) {
-                return $this->finish($session, IdSessionStatus::Failed, 'too_many_rejected');
-            }
-
-            if ($session->askedCount() >= $session->max_questions) {
-                $this->resolveExhausted($session, 'question_limit');
-            } elseif (! $this->canStillPass($session)) {
-                $this->resolveExhausted($session, 'unreachable');
-            }
-
-            return $session->refresh();
+            return $work($session);
         });
 
         // Persist expiry or loss of entitlement before reporting the rejection.
@@ -215,6 +278,50 @@ class QaSessionEngine
         }
 
         return $result;
+    }
+
+    /**
+     * Records a verdict on a pending step and resolves the session; inside
+     * the session lock.
+     */
+    private function applyVerdict(IdSession $session, IdSessionStep $step, StepVerdict $verdict): IdSession
+    {
+        $decided = IdSessionStep::query()
+            ->whereKey($step->id)
+            ->where('verdict', StepVerdict::Pending)
+            ->update(['verdict' => $verdict, 'decided_at' => now()]);
+
+        if ($decided !== 1) {
+            throw new IdentificationException(__('This question has already been decided.'));
+        }
+
+        $step->forceFill(['verdict' => $verdict, 'decided_at' => now()])->syncOriginal();
+
+        $column = match ($verdict) {
+            StepVerdict::Accepted => 'accepted_count',
+            StepVerdict::Rejected => 'rejected_count',
+            StepVerdict::Undecided => 'undecided_count',
+        };
+        $session->increment($column);
+        $session->refresh();
+
+        $this->auditor->record('id_session.answer_judged', $session, ['step_id' => $step->id, 'verdict' => $verdict->value]);
+
+        if ($session->accepted_count >= $session->required_accepted) {
+            return $this->finish($session, IdSessionStatus::Passed, 'enough_accepted');
+        }
+
+        if ($session->rejected_count >= $session->max_rejected) {
+            return $this->finish($session, IdSessionStatus::Failed, 'too_many_rejected');
+        }
+
+        if ($session->askedCount() >= $session->max_questions) {
+            $this->resolveExhausted($session, 'question_limit');
+        } elseif (! $this->canStillPass($session)) {
+            $this->resolveExhausted($session, 'unreachable');
+        }
+
+        return $session->refresh();
     }
 
     public function cancel(IdSession $session, string $reason = 'cancelled_by_agent', ?User $agent = null): IdSession

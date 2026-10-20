@@ -15,7 +15,7 @@ use App\Http\Controllers\TierSwitchController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('locale/{locale}', LocaleController::class)->name('locale.switch');
-Route::post('tier/{tier}', TierSwitchController::class)->middleware('auth:web')->name('tier.switch');
+Route::post('tier/{tier}', TierSwitchController::class)->middleware(['auth:web', 'staff.mfa'])->name('tier.switch');
 Route::redirect('/helpdesk', '/admin');
 
 Route::prefix('auth')->middleware('throttle:30,1,sso')->group(function (): void {

@@ -4,6 +4,7 @@ namespace App\Support;
 
 use libphonenumber\NumberParseException;
 use libphonenumber\PhoneNumberFormat;
+use libphonenumber\PhoneNumberType;
 use libphonenumber\PhoneNumberUtil;
 
 /**
@@ -47,6 +48,21 @@ class PhoneNormalizer
         }
 
         return $this->util->format($number, PhoneNumberFormat::E164);
+    }
+
+    /**
+     * Whether a normalised number can receive text messages: a mobile number,
+     * or one the numbering plan does not tell apart from a landline.
+     */
+    public function isMobile(string $e164): bool
+    {
+        try {
+            $type = $this->util->getNumberType($this->util->parse($e164, $this->defaultRegion));
+        } catch (NumberParseException) {
+            return false;
+        }
+
+        return in_array($type, [PhoneNumberType::MOBILE, PhoneNumberType::FIXED_LINE_OR_MOBILE], true);
     }
 
     /**

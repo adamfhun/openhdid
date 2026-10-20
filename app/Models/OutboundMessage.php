@@ -55,7 +55,7 @@ class OutboundMessage extends Model
 
     public function carriesSecret(): bool
     {
-        return $this->template_key?->carriesSecret() ?? false;
+        return $this->template_key?->carriesSecret() ?? (bool) ($this->meta['secret'] ?? false);
     }
 
     public function isRedacted(): bool

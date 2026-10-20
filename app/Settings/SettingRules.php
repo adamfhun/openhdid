@@ -2,9 +2,12 @@
 
 namespace App\Settings;
 
+use App\Auth\Mfa\StaffMfa;
 use App\Auth\Oidc\OidcProvider;
 use App\Clients\PackageListImpact;
+use App\Enums\MfaMethod;
 use App\Enums\PrincipalType;
+use App\Identification\AnswerMatcher;
 use App\Identification\PinService;
 use App\Sync\RequestPayload;
 
@@ -37,6 +40,7 @@ class SettingRules
             SettingKey::QaMinAcceptedToPass => ['integer', 'min:1', 'max:20'],
             SettingKey::QaMaxRejectedToFail => ['integer', 'min:1', 'max:20'],
             SettingKey::QaSessionTtlMinutes => ['integer', 'min:1', 'max:1440'],
+            SettingKey::QaTypoTolerance => ['integer', 'min:0', 'max:'.AnswerMatcher::MAX_TOLERANCE],
             SettingKey::PinMinLength, SettingKey::PinMaxLength => ['integer', 'min:'.PinService::MIN_ALLOWED_LENGTH, 'max:'.PinService::MAX_ALLOWED_LENGTH],
             SettingKey::PinMaxFailedAttempts => ['integer', 'min:1', 'max:20'],
             SettingKey::PinLockoutMinutes => ['integer', 'min:1', 'max:1440'],
@@ -94,7 +98,7 @@ class SettingRules
             $errors[SettingKey::QaMaxRejectedToFail->value] = __('Rejections needed to fail cannot exceed the questions per session.');
         }
 
-        return [...$errors, ...static::domainErrors($values), ...static::ssoErrors($values)];
+        return [...$errors, ...static::domainErrors($values), ...static::ssoErrors($values), ...static::mfaErrors($values)];
     }
 
     /**
@@ -114,7 +118,7 @@ class SettingRules
             [SettingKey::SyncExportPayload, $export, RequestPayload::EXPORT_PLACEHOLDERS, __('EMD export payload must be a JSON object.')],
             [SettingKey::SyncIdListPayload, $idList, RequestPayload::ID_LIST_PLACEHOLDERS, __('The ID list request payload must be a JSON object.')],
         ] as [$key, $payload, $allowed, $notObject]) {
-            if (is_string($payload) && $payload !== '' && json_validate($payload)) {
+            if (is_string($payload) && $payload !== '' && RequestPayload::isValidJson($payload)) {
                 $error = RequestPayload::isJsonObject($payload) ? RequestPayload::unknownPlaceholderMessage($payload, $allowed) : $notObject;
                 if ($error !== null) {
                     $errors[$key->value] = $error;
@@ -173,6 +177,35 @@ class SettingRules
         $domain = preg_replace('/^[@"\'„“”‘’]+|["\'„“”‘’.]+$/u', '', $domain) ?? $domain;
 
         return mb_strtolower($domain);
+    }
+
+    /**
+     * Staff MFA needs at least one known method, and SMS only while a real
+     * SMS gateway is connected (StaffMfa::smsAvailable): otherwise switching
+     * it on could leave staff without a usable second factor.
+     *
+     * @param  array<string, mixed>  $values  keyed by SettingKey value
+     * @return array<string, string>
+     */
+    public static function mfaErrors(array $values): array
+    {
+        $methods = (array) ($values[SettingKey::UserLoginMfaMethods->value] ?? SettingKey::UserLoginMfaMethods->default());
+        $unknown = array_filter($methods, fn (mixed $method): bool => MfaMethod::tryFrom((string) $method) === null);
+        $key = SettingKey::UserLoginMfaMethods->value;
+
+        if ($unknown !== []) {
+            return [$key => __('Unknown second factor: :list.', ['list' => implode(', ', array_map('strval', $unknown))])];
+        }
+
+        if (in_array(MfaMethod::Sms->value, $methods, true) && ! StaffMfa::smsAvailable()) {
+            return [$key => __('SMS codes need a connected SMS gateway (SMS_DRIVER=ozeki); with the log driver they are only offered outside production.')];
+        }
+
+        if ($methods === [] && filter_var($values[SettingKey::UserLoginMfaEnabled->value] ?? false, FILTER_VALIDATE_BOOL)) {
+            return [$key => __('Choose at least one second factor before switching two-factor sign-in on.')];
+        }
+
+        return [];
     }
 
     /**

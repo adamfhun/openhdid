@@ -10,6 +10,7 @@ use App\Sync\ConnectionFailure;
 use App\Sync\Contracts\SourceReader;
 use App\Sync\IdList;
 use App\Sync\IdListException;
+use App\Sync\RefusedResponse;
 use App\Sync\RequestPayload;
 use App\Sync\SourceFormatException;
 use Illuminate\Http\Client\ConnectionException;
@@ -80,6 +81,11 @@ class ApiSpreadsheetReader implements SourceReader
             }
 
             $this->details['export'] = ['status' => $response->status()];
+            if ($response->status() >= 400) {
+                RefusedResponse::log('export', $response->status(), $this->url, is_file($path) ? (string) file_get_contents($path, false, null, 0, RefusedResponse::MAX_BYTES + 1) : '');
+
+                throw new SourceFormatException(__('EMD export failed (HTTP :status); a complete file was expected. The response of EMD is in the application log.', ['status' => $response->status()]));
+            }
             if ($response->status() !== 200) {
                 throw new SourceFormatException(__('EMD export failed (HTTP :status); a complete file was expected.', ['status' => $response->status()]));
             }
@@ -99,10 +105,12 @@ class ApiSpreadsheetReader implements SourceReader
     }
 
     /**
-     * Refreshes the ID list and returns the selected IDs still on it,
-     * comma-separated; an empty list is never sent.
+     * Refreshes the ID list and returns the selected IDs still on it; an
+     * empty list is never sent.
+     *
+     * @return list<string>
      */
-    private function selectedIds(string $token): string
+    private function selectedIds(string $token): array
     {
         try {
             $result = $this->idList->refresh($token);
@@ -119,7 +127,7 @@ class ApiSpreadsheetReader implements SourceReader
             throw new SourceFormatException(__('No selected ID is on the EMD ID list; the export is not sent with an empty ID list.'));
         }
 
-        return implode(',', $ids);
+        return $ids;
     }
 
     private function assertFile(string $path, string $contentType): void

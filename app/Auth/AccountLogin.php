@@ -18,7 +18,8 @@ use Illuminate\Database\Eloquent\Model;
 /**
  * The one rule every login path goes through: an identity may only log in
  * when a local account exists, is open, is linked to a present external
- * record that carries the same e-mail, (for staff) carries a panel
+ * record that carries the same e-mail (for clients unless
+ * CLIENT_LOGIN_REQUIRE_EMD is off), (for staff) carries a panel
  * permission, and (for clients) has a package that grants portal access.
  */
 class AccountLogin
@@ -80,7 +81,7 @@ class AccountLogin
                 'principal' => $type->value,
                 'method' => $method,
                 'reason' => $rejection->value,
-            ] + ($heldBack ? ['premium_only' => true] : []));
+            ] + ($heldBack ? ['premium_only' => true] : []) + self::emdContext($principal));
 
             throw new LoginRejectedException($rejection);
         }
@@ -170,7 +171,46 @@ class AccountLogin
     public function recordSuccess(Principal $principal, string $method, array $context = []): void
     {
         $principal->forceFill(['last_login_at' => now()])->saveQuietly();
-        $this->auditor->record('login.succeeded', $principal, $context + ['method' => $method], $principal);
+        $this->auditor->record('login.succeeded', $principal, $context + ['method' => $method] + self::emdContext($principal), $principal);
+    }
+
+    /**
+     * Whether client logins ask for a present EMD record with the same
+     * e-mail (CLIENT_LOGIN_REQUIRE_EMD, on unless switched off).
+     */
+    public static function clientsNeedEmd(): bool
+    {
+        return (bool) config('hdid.client_login.require_emd', true);
+    }
+
+    /**
+     * Audit detail of a client login while the EMD record is not asked for.
+     *
+     * @return array<string, bool>
+     */
+    private static function emdContext(?Principal $principal): array
+    {
+        return $principal instanceof Client && ! self::clientsNeedEmd() ? ['emd_required' => false] : [];
+    }
+
+    /**
+     * The EMD part of the rule: a present record with the same e-mail. Not
+     * asked of clients while CLIENT_LOGIN_REQUIRE_EMD is off.
+     */
+    private function directoryRejection(Principal $principal): ?LoginRejection
+    {
+        if ($principal instanceof Client && ! self::clientsNeedEmd()) {
+            return null;
+        }
+
+        $record = $principal->externalRecord;
+
+        return match (true) {
+            $record === null => LoginRejection::NoExternalRecord,
+            $record->isMissing() => LoginRejection::ExternalRecordMissing,
+            mb_strtolower(trim((string) $record->email)) !== mb_strtolower(trim($principal->getEmail())) => LoginRejection::ExternalRecordMismatch,
+            default => null,
+        };
     }
 
     private function rejectionFor(?Principal $principal): ?LoginRejection
@@ -183,18 +223,8 @@ class AccountLogin
             return LoginRejection::AccountClosed;
         }
 
-        $record = $principal->externalRecord;
-
-        if ($record === null) {
-            return LoginRejection::NoExternalRecord;
-        }
-
-        if ($record->isMissing()) {
-            return LoginRejection::ExternalRecordMissing;
-        }
-
-        if (mb_strtolower(trim((string) $record->email)) !== mb_strtolower(trim($principal->getEmail()))) {
-            return LoginRejection::ExternalRecordMismatch;
+        if (($directory = $this->directoryRejection($principal)) !== null) {
+            return $directory;
         }
 
         if ($principal instanceof User && ! $principal->hasAnyPermission([Permission::AdminAccess->value, Permission::HelpdeskAccess->value])) {

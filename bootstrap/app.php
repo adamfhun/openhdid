@@ -5,6 +5,7 @@ use App\Http\Middleware\AuthenticateApiKey;
 use App\Http\Middleware\EnforceAuthSessions;
 use App\Http\Middleware\EnsureClientEntitled;
 use App\Http\Middleware\EnsurePrincipal;
+use App\Http\Middleware\EnsureStaffMfa;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\ValidateCsrfTokenUnlessBearer;
 use App\Localization\SetLocale;
@@ -42,6 +43,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->replaceInGroup('web', PreventRequestForgery::class, ValidateCsrfTokenUnlessBearer::class);
         $middleware->alias([
             'principal' => EnsurePrincipal::class,
+            'staff.mfa' => EnsureStaffMfa::class,
             'entitled' => EnsureClientEntitled::class,
             'api-key' => AuthenticateApiKey::class,
         ]);

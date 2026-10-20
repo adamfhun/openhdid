@@ -71,6 +71,22 @@ return [
     // so an empty SHOW_SC line copied from .env.example keeps the link.
     'show_source_url' => ! in_array(env('SHOW_SC', true), [false, 0, '0', 'false', 'off', 'no'], true),
 
+    // Client logins need a present EMD record carrying the account's e-mail. False lets clients
+    // sign in without one (closure, packages and the per-request checks stay); staff are not affected.
+    'client_login' => [
+        'require_emd' => filter_var(env('CLIENT_LOGIN_REQUIRE_EMD', true), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true,
+    ],
+
+    // Staff MFA: "amr" values of a verified SSO ID token that prove the provider already asked for a
+    // second factor (Entra "mfa", ADFS "multipleauthn"); HDID_MFA_PROVIDER_AMR adds more, comma-separated.
+    'mfa' => [
+        'provider_amr' => array_values(array_unique(array_filter([
+            'mfa',
+            'http://schemas.microsoft.com/claims/multipleauthn',
+            ...array_map('trim', explode(',', (string) env('HDID_MFA_PROVIDER_AMR', ''))),
+        ]))),
+    ],
+
     'phone' => [
         'default_region' => env('HDID_PHONE_REGION', 'HU'),
     ],

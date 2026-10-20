@@ -203,6 +203,18 @@ docker compose exec web php artisan tinker --execute 'foreach (["login_url","ref
 "; } }'
 ```
 
+Ha az ügyféltörzs HTTP 4xx/5xx hibával válaszol, a válasz törzse a naplóban „EMD export refused” vagy „EMD ID
+list query refused” sorként olvasható. HTTP 400 egynél több kijelölt ID-nál: az export kéréstörzsében
+`"ids": [{{ ids }}]` kell `"ids": "{{ ids }}"` helyett.
+
+When the master data API answers HTTP 4xx/5xx, its response body is in the log as an "EMD export refused" or
+"EMD ID list query refused" line. HTTP 400 with more than one selected ID: write `"ids": [{{ ids }}]` instead of
+`"ids": "{{ ids }}"` in the export payload.
+
+```sh
+docker compose logs worker | grep 'EMD .* refused'
+```
+
 ## 9. Ügyféltörzs-belépés / Master data (EMD) login
 
 Ugyanaz a belépés, mint az alkalmazásé: hogyan érkezett meg a felhasználónév és a jelszó (hossz, `=` a végén,
@@ -266,6 +278,12 @@ a `USER_ADFS_EMAIL_CLAIM` / `CLIENT_ADFS_EMAIL_CLAIM` adja meg (üresen `emailad
 A tokenek teljes tartalmához (fejléc és tartalom az érkezett alakban és visszafejtve, aláírás nélkül) ideiglenesen `HDID_ADFS_DEBUG=true` a `.env`-ben, `docker compose up -d`, egy belépés,
 majd `docker compose logs web | grep 'ADFS debug'`; utána vissza `false`-ra (a tokenek személyes adatot tartalmaznak).
 
+Ha a döntő igény a `upn` (`USER_ADFS_EMAIL_CLAIM=email` mellett `no_email_claim`), és az `access_token_claims`
+csak `apptype`, `appid`, `authmethod`, `ver`, `scp`, `sub` és időbélyegek: az access token az ADFS userinfo-végpontjának
+szól (`aud`: `urn:microsoft:userinfo`), a Web API kiadási szabályai nem futnak. Kell egy Web API az ADFS-alkalmazáscsoportban
+(`E-Mail-Addresses` → `E-Mail Address` szabály, a HDID kliense `openid profile email` hatókörrel engedélyezve), és az
+azonosítója a `USER_ADFS_RESOURCE` / `CLIENT_ADFS_RESOURCE`. Lépésenként: OpenHDID telepítési útmutató, „ADFS beállítása lépésenként”.
+
 For an ADFS sign-in the `login.rejected` and `login.succeeded` entries (command in the next section) name the claim
 that bound the account (`email_claim`, `email_token`), the claims passed over with the reason (`claims_passed_over`)
 and the access token's state (`access_token`); with the reason `no_email_claim` also the claims looked for and the
@@ -275,18 +293,42 @@ claim names found in both tokens (`claims_checked`, `id_token_claims`, `access_t
 in `.env` for a while, `docker compose up -d`, sign in once, then `docker compose logs web | grep 'ADFS debug'`;
 set it back to `false` afterwards (the tokens hold personal data).
 
+If the deciding claim is `upn` (`no_email_claim` with `USER_ADFS_EMAIL_CLAIM=email`) and `access_token_claims` holds only
+`apptype`, `appid`, `authmethod`, `ver`, `scp`, `sub` and timestamps, the access token is meant for the ADFS userinfo
+endpoint (`aud`: `urn:microsoft:userinfo`) and the Web API's issuance rules do not run. Add a Web API to the ADFS
+application group (rule `E-Mail-Addresses` → `E-Mail Address`, the HDID client permitted with `openid profile email`) and
+set its identifier as `USER_ADFS_RESOURCE` / `CLIENT_ADFS_RESOURCE`. Step by step: OpenHDID installation guide (Hungarian),
+"ADFS beállítása lépésenként".
+
 ## 12. Belépés elutasítva / Sign-in refused
 
 A felület szándékosan semleges; a valódi ok az auditnaplóban (`reason`: `invalid_credentials`,
 `account_locked`, `no_permission`, `method_disabled`, `no_external_record`, …). Elfelejtett első rendszergazdai
-jelszónál a `make-admin` újrafuttatása új jelszót állít.
+jelszónál a `make-admin` újrafuttatása új jelszót állít (bekapcsolt kétlépcsős belépésnél `--force`-szal; a futás
+naplózott, és a többi főrendszergazda e-mailt kap). Az összes parancs: `php artisan list hdid`, egy parancs
+súgója: `php artisan help hdid:make-admin`.
 
 The interface is neutral on purpose; the real reason is in the audit log (`reason`). For a forgotten first
-administrator password, re-running `make-admin` sets a new one.
+administrator password, re-running `make-admin` sets a new one (with two-factor sign-in on, add `--force`; the run
+is audited and e-mailed to the other super-admins). All commands: `php artisan list hdid`; the help of one:
+`php artisan help hdid:make-admin`.
 
 ```sh
 docker compose exec web php artisan tinker --execute 'App\Models\AuditLog::query()->where("event", "login.rejected")->latest()->take(5)->get()->each(fn ($e) => print($e->created_at." ".json_encode($e->context, JSON_UNESCAPED_UNICODE).PHP_EOL));'
 docker compose exec web php artisan hdid:make-admin admin@example.org
+```
+
+Kétlépcsős belépésnél a hibás kódok az `mfa.failed`, a zárolás az `account.mfa_locked` eseményben látszik.
+Elveszett második faktor: a Felhasználók listán „Kétlépcsős belépés nullázása”, vagy a lenti első parancs; ha senki
+nem tud belépni (például csak SMS engedélyezett, és az átjáró nem működik), a második kikapcsolja.
+
+With two-factor sign-in, wrong codes show as `mfa.failed`, the lock as `account.mfa_locked`. A lost second
+factor: "Reset second factor" on the Users list, or the first command below; when nobody can sign in (for
+example only SMS is allowed and the gateway is down), the second switches two-factor sign-in off.
+
+```sh
+docker compose exec web php artisan hdid:mfa-reset admin@example.org
+docker compose exec web php artisan hdid:mfa-reset --off
 ```
 
 ## 13. Levél és SMS / Mail and SMS

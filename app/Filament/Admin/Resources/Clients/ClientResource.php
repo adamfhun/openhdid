@@ -485,7 +485,9 @@ class ClientResource extends BaseResource
                 TextInput::make('name')->label(__('Name'))->required()->maxLength(255)
                     ->disabled(fn (?Client $record) => $record?->isSynced() ?? false)->dehydrated(fn (?Client $record) => ! ($record?->isSynced() ?? false)),
                 TextInput::make('email')->label(__('E-mail'))->email()->required()->unique(ignoreRecord: true)->maxLength(255)
-                    ->disabled(fn (?Client $record) => $record?->isSynced() ?? false)->dehydrated(fn (?Client $record) => ! ($record?->isSynced() ?? false)),
+                    ->disabled(fn (?Client $record) => $record?->isSynced() ?? false)->dehydrated(fn (?Client $record) => ! ($record?->isSynced() ?? false))
+                    ->helperText(fn (?Client $record) => $record?->isSynced() ? null
+                        : __('If EMD already holds a client record with this e-mail, saving links the account at once, and the name, packages and phone numbers come from EMD.')),
                 Select::make('implicit_package')->label(__('Implicit package'))->searchable()->native(false)
                     ->options(fn (?Client $record) => static::packageOptions($record?->implicit_package))
                     ->disabled(fn (?Client $record) => $record?->isSynced() ?? false)->dehydrated(fn (?Client $record) => ! ($record?->isSynced() ?? false))

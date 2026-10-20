@@ -16,6 +16,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\ResponseSequence;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Spatie\SimpleExcel\SimpleExcelWriter;
 
@@ -156,6 +157,42 @@ it('sends the selected listed IDs in the export and reports both status codes on
         ->and($gone->fresh()->removed_at)->not->toBeNull()
         ->and($gone->fresh()->selected)->toBeTrue()
         ->and(SyncIdListItem::query()->where('external_id', '99')->sole()->selected)->toBeFalse();
+});
+
+it('sends the selected IDs as a JSON list when the placeholder stands between brackets', function (): void {
+    app(Settings::class)->set(SettingKey::SyncExportPayload, '{"query":{"ids":[{{ ids }}],"names":"{{ ids }}"}}');
+    SyncIdListItem::factory()->selected()->create(['external_id' => '12', 'name' => 'Zebra Kft.']);
+    SyncIdListItem::factory()->selected()->create(['external_id' => '3', 'name' => 'Ág Bt.']);
+    SyncIdListItem::factory()->selected()->create(['external_id' => 'A-7', 'name' => 'Betűs Kft.']);
+    fakeEmd(organizations([[12, 'Zebra Kft.'], [3, 'Ág Bt.'], ['A-7', 'Betűs Kft.']]));
+
+    $this->artisan('hdid:emd-sync')->assertSuccessful();
+
+    Http::assertSent(fn (Request $request) => $request->url() === 'https://directory.test/export'
+        && $request->body() === '{"query":{"ids":[3,12,"A-7"],"names":"3,12,A-7"}}'
+        && $request['query']['ids'] === [3, 12, 'A-7']);
+    expect(SyncRun::query()->sole()->stats['requests']['id_list'])->toMatchArray(['sent' => 3, 'ids' => '3,12,A-7']);
+});
+
+it('writes the response body of a refused export and ID list query to the application log', function (): void {
+    Log::spy();
+    SyncIdListItem::factory()->selected()->create(['external_id' => '12']);
+    Http::fake([
+        'https://directory.test/login' => Http::response(['access_token' => 'access', 'refresh_token' => 'refresh']),
+        'https://directory.test/organizations' => Http::sequence()->push(organizations([[12, 'Zebra Kft.']]))->push(str_repeat('x', 5000), 422),
+        'https://directory.test/export*' => Http::response('{"errors":{"ids":["The value \'3,12\' is not valid."]}}', 400, ['Content-Type' => 'application/json']),
+    ]);
+    config()->set('hdid.sync.api_url', 'https://directory.test/export?key=secret');
+
+    expect(fn () => app(SyncExternalRecords::class)->run(app(ReaderFactory::class)->forApi()))
+        ->toThrow(SourceFormatException::class, 'The response of EMD is in the application log.');
+
+    Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context): bool => $message === 'EMD export refused (HTTP 400); the response body follows.'
+        && $context === ['status' => 400, 'url' => 'https://directory.test/export', 'body' => '{"errors":{"ids":["The value \'3,12\' is not valid."]}}', 'truncated' => false])->once();
+
+    expect(fn () => app(IdList::class)->refresh('access'))->toThrow(IdListException::class);
+    Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context): bool => $message === 'EMD ID list query refused (HTTP 422); the response body follows.'
+        && strlen($context['body']) === 4000 && $context['truncated'] === true)->once();
 });
 
 it('stops before the export when no selected ID is on the list, without closing accounts', function (): void {

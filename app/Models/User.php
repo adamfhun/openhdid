@@ -11,6 +11,7 @@ use App\Enums\PrincipalType;
 use App\Models\Concerns\HasAccountLifecycle;
 use App\Models\Concerns\HasUuidKey;
 use Database\Factories\UserFactory;
+use Filament\Auth\MultiFactor\App\Contracts\HasAppAuthentication;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -27,19 +28,20 @@ use Spatie\Permission\Traits\HasRoles;
  * Staff account: helpdesk agents, supervisors and admins.
  */
 #[Fillable(['name', 'email', 'password', 'external_record_id', 'handles_tiers', 'active_tier'])]
-#[Hidden(['password', 'remember_token'])]
-class User extends Authenticatable implements FilamentUser, Principal
+#[Hidden(['password', 'remember_token', 'mfa_app_secret'])]
+class User extends Authenticatable implements FilamentUser, HasAppAuthentication, Principal
 {
     use Auditable;
     use HasAccountLifecycle;
 
     /**
      * Login bookkeeping changes on every login; the lockout writes its own
-     * audit entries (login.rejected, account.locked, account.unlocked).
+     * audit entries (login.rejected, account.locked, account.unlocked), and
+     * so does the second factor (mfa.*, with the number masked).
      *
      * @var list<string>
      */
-    protected array $auditExclude = ['last_login_at', 'session_epoch', 'failed_login_attempts', 'locked_until'];
+    protected array $auditExclude = ['last_login_at', 'session_epoch', 'failed_login_attempts', 'locked_until', 'mfa_app_secret', 'mfa_email_enabled_at', 'mfa_sms_number', 'failed_mfa_attempts', 'mfa_locked_until'];
 
     use HasApiTokens;
 
@@ -64,7 +66,30 @@ class User extends Authenticatable implements FilamentUser, Principal
             'session_epoch' => 'integer',
             'failed_login_attempts' => 'integer',
             'locked_until' => 'datetime',
+            'mfa_app_secret' => 'encrypted',
+            'mfa_email_enabled_at' => 'datetime',
+            'failed_mfa_attempts' => 'integer',
+            'mfa_locked_until' => 'datetime',
         ];
+    }
+
+    /**
+     * Filament's authenticator-app helpers (secret, QR code, code check) read
+     * the secret through this contract; StaffMfa decides when it is used.
+     */
+    public function getAppAuthenticationSecret(): ?string
+    {
+        return $this->mfa_app_secret;
+    }
+
+    public function saveAppAuthenticationSecret(#[\SensitiveParameter] ?string $secret): void
+    {
+        $this->forceFill(['mfa_app_secret' => $secret])->save();
+    }
+
+    public function getAppAuthenticationHolderName(): string
+    {
+        return $this->email;
     }
 
     public function principalType(): PrincipalType

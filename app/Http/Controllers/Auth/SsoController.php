@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Auth;
 use App\Auth\AccountLogin;
 use App\Auth\LoginRejectedException;
 use App\Auth\LoginRejection;
+use App\Auth\Mfa\StaffMfa;
 use App\Auth\Oidc\EmailClaimMatch;
 use App\Auth\Oidc\OidcClient;
 use App\Auth\Oidc\OidcException;
@@ -28,6 +29,7 @@ class SsoController extends Controller
         private readonly OidcClient $oidc,
         private readonly AccountLogin $login,
         private readonly SsoAccess $access,
+        private readonly StaffMfa $mfa,
     ) {}
 
     public function redirect(Request $request, PrincipalType $principal, OidcProvider $provider): RedirectResponse
@@ -93,6 +95,11 @@ class SsoController extends Controller
             $account = $this->login->resolveByEmail($principal, $match->email, 'sso.'.$provider->value, $match->auditContext());
             $this->access->assertEnabled($principal, $provider, 'sso.'.$provider->value, $account);
             $this->login->loginToSession($account, 'sso.'.$provider->value, allowRemember: true, context: $match->auditContext());
+
+            // The provider's own MFA, proven by the verified token (amr), counts as the second factor.
+            if ($account instanceof User) {
+                $this->mfa->satisfyByProvider($account, $tokens, $provider);
+            }
         } catch (LoginRejectedException $e) {
             return $this->failed($principal, $e->reason);
         } catch (OidcUnavailableException $e) {

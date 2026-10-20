@@ -100,7 +100,7 @@ Nem privilegizált felhasználóként (uid 82) fut, csak olvasható gyökér-fá
 Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz. A `v` a telepített verzió (a `.env` `OPENHDID_VERSION` értéke):
 
 ```sh
-v=1.5.2
+v=1.6.0
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -126,7 +126,7 @@ A méretezést, a Kubernetes-megfeleltetést és a skálázás előtti mérést 
 
 ## Dokumentáció
 
-A [`docs/`](docs) mappában, magyarul, HTML- és PDF-formában; a PDF-ek minden kiadáshoz csatolva is elérhetők:
+A [`docs/`](docs) mappában, magyarul, PDF-formában; minden kiadáshoz csatolva is elérhetők:
 
 - `openhdid-telepitesi-utmutato`: telepítési útmutató (feltételek, beállítási referencia, HTTPS, adatbázis, első lépések, külső rendszerek, átvételi próbák)
 - `openhdid-uzemeltetesi-kezikonyv`: üzemeltetési kézikönyv (naplók, ütemező, rendszerállapot, mentés és visszaállítás, frissítés, skálázás, biztonság)

@@ -52,13 +52,18 @@ class Messenger
     /**
      * A one-off message that is not tied to a template (test sends).
      */
-    public function sendRaw(Channel $channel, string $recipient, ?string $subject, string $body, ?Client $client = null): OutboundMessage
+    /**
+     * A message without a template (test sends, staff sign-in codes). One
+     * that carries a secret is wiped once it is out, like a code template.
+     */
+    public function sendRaw(Channel $channel, string $recipient, ?string $subject, string $body, ?Client $client = null, bool $carriesSecret = false): OutboundMessage
     {
         $message = OutboundMessage::query()->create([
             'channel' => $channel,
             'recipient' => $recipient,
             'subject' => $subject,
             'body' => $body,
+            'meta' => $carriesSecret ? ['secret' => true] : null,
             'client_id' => $client?->id,
             'status' => OutboundMessageStatus::Queued,
         ]);

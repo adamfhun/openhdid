@@ -84,6 +84,9 @@ enum SettingKey: string
     case UserLoginSessionMaxHours = 'user_login.session_max_hours';
     case UserLoginLockoutMaxAttempts = 'user_login.lockout.max_failed_attempts';
     case UserLoginLockoutMinutes = 'user_login.lockout.minutes';
+    case UserLoginMfaEnabled = 'user_login.mfa.enabled';
+    case UserLoginMfaMethods = 'user_login.mfa.methods';
+    case UserLoginMfaTrustProvider = 'user_login.mfa.trust_provider_mfa';
 
     // SSO providers (secrets and endpoints live in config/hdid.php)
     case UserSsoAdfsEnabled = 'sso.user.adfs.enabled';
@@ -98,6 +101,8 @@ enum SettingKey: string
     case QaMinAcceptedToPass = 'identification.qa.min_accepted_to_pass';
     case QaMaxRejectedToFail = 'identification.qa.max_rejected_to_fail';
     case QaSessionTtlMinutes = 'identification.qa.session_ttl_minutes';
+    case QaBlindCheck = 'identification.qa.blind_check';
+    case QaTypoTolerance = 'identification.qa.typo_tolerance';
 
     // Identification: PIN
     case PinMinLength = 'identification.pin.min_length';
@@ -154,6 +159,8 @@ enum SettingKey: string
             self::ClientLoginMagicLinkPreviewInPanel,
             self::ClientLoginOtpSmsEnabled,
             self::UserLoginPasswordEnabled,
+            self::UserLoginMfaEnabled,
+            self::UserLoginMfaTrustProvider,
             self::PortalNewsOnOverview,
             self::PortalPhoneVerificationEnabled,
             self::PortalSharedNumberNotice,
@@ -166,6 +173,7 @@ enum SettingKey: string
             self::ClientLoginRememberEnabled,
             self::ClientLoginOtpSmsEmailFallbackEnabled,
             self::PinAgentVerificationEnabled,
+            self::QaBlindCheck,
             self::PinClientChangesEnabled,
             self::PinUniqueRequired,
             self::ClientsListRelevantOnly,
@@ -193,6 +201,7 @@ enum SettingKey: string
             self::QaMinAcceptedToPass,
             self::QaMaxRejectedToFail,
             self::QaSessionTtlMinutes,
+            self::QaTypoTolerance,
             self::PinMinLength,
             self::PinMaxLength,
             self::PinMaxFailedAttempts,
@@ -235,6 +244,7 @@ enum SettingKey: string
             self::PackagesStandard,
             self::CallsQueueTiers,
             self::ClientsDirectoryFields,
+            self::UserLoginMfaMethods,
             self::SyncColumnMapping => SettingType::Json,
 
             default => SettingType::Text,
@@ -288,6 +298,9 @@ enum SettingKey: string
             self::UserLoginSessionMaxHours => 12,
             self::ClientLoginLockoutMaxAttempts, self::UserLoginLockoutMaxAttempts => 5,
             self::ClientLoginLockoutMinutes, self::UserLoginLockoutMinutes => 120,
+            self::UserLoginMfaEnabled => false,
+            self::UserLoginMfaMethods => ['app', 'email'],
+            self::UserLoginMfaTrustProvider => true,
             self::SsoMobileTokenMaxAgeMinutes => 15,
 
             self::UserLoginPasswordEnabled => true,
@@ -302,6 +315,8 @@ enum SettingKey: string
             self::QaMinAcceptedToPass => 2,
             self::QaMaxRejectedToFail => 2,
             self::QaSessionTtlMinutes => 30,
+            self::QaBlindCheck => false,
+            self::QaTypoTolerance => 1,
 
             self::PinMinLength => 6,
             self::PinMaxLength => 10,

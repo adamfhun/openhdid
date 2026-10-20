@@ -4,6 +4,8 @@
     $session = $this->getSession();
     $step = $this->method === 'qa' ? $this->getCurrentStep() : null;
     $answer = $step ? $this->getRevealedAnswer() : null;
+    $blind = (bool) $session?->blind_check;
+    $lastCheck = $this->method === 'qa' ? $this->getLastCheck() : null;
     $history = $this->getHistory();
     $passed = $this->getCurrentPassed();
     $outcome = $passed ?? $this->getLatestOutcome();
@@ -28,7 +30,7 @@
             if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable) return;
             if (document.querySelector('.fi-modal-open, [role=dialog][aria-modal=true]')) return;
             if (! document.querySelector('[data-hdid-judge]')) return;
-            const map = { '1': 'accepted', '2': 'rejected', '3': 'undecided' };
+            const map = document.querySelector('[data-hdid-blind]') ? { '3': 'undecided' } : { '1': 'accepted', '2': 'rejected', '3': 'undecided' };
             if (! map[$event.key]) return;
             $event.preventDefault();
             if (judging) return;
@@ -154,12 +156,9 @@
                 <x-filament::section :heading="__('Question & answer')">
                     @if ($session === null || ! $session->isOpen())
                         @if ($session !== null)
-                            <div class="mb-4 flex items-center gap-3">
+                            <div class="mb-4 flex flex-wrap items-center gap-3">
                                 <x-filament::badge :color="$statusColor($session->status)" size="lg">{{ __($session->status->value) }}</x-filament::badge>
-                                <span class="text-sm {{ $muted }}">
-                                    {{ __(':a accepted, :r rejected, :u undecided', ['a' => $session->accepted_count, 'r' => $session->rejected_count, 'u' => $session->undecided_count]) }}
-                                    · {{ __($session->outcome_reason) }}
-                                </span>
+                                <span class="text-sm {{ $muted }}">{{ __(':a accepted, :r rejected, :u undecided', ['a' => $session->accepted_count, 'r' => $session->rejected_count, 'u' => $session->undecided_count]) }}</span>
                             </div>
                         @endif
 
@@ -167,30 +166,98 @@
                             {{ $session === null ? __('Start Q-A session') : __('Start a new Q-A session') }}
                         </x-filament::button>
                     @elseif ($step)
-                        <div class="space-y-4" data-hdid-judge>
-                            <div class="text-sm {{ $muted }}">
-                                {{ __('Question :n of :max', ['n' => $session->askedCount() + 1, 'max' => $session->max_questions]) }}
-                                · {{ __(':a accepted, need :req', ['a' => $session->accepted_count, 'req' => $session->required_accepted]) }}
-                                · {{ __(':r rejected, max :max', ['r' => $session->rejected_count, 'max' => $session->max_rejected]) }}
+                        @php
+                            // Read afresh: the current question may have been created after the session was loaded.
+                            $steps = $session->steps()->orderBy('shown_at')->orderBy('id')->get();
+                            $near = $blind && $lastCheck && $lastCheck['step']->is($step);
+                            $previous = $blind && $lastCheck && ! $near ? $lastCheck : null;
+                        @endphp
+                        <div class="space-y-5" data-hdid-judge @if ($blind) data-hdid-blind @endif>
+                            {{-- Progress: one dot per question, the goal in words. --}}
+                            <div class="flex items-center justify-between gap-3 text-sm {{ $muted }}">
+                                <div class="flex items-center gap-1.5" aria-hidden="true">
+                                    @foreach ($steps as $done)
+                                        <span @class([
+                                            'h-2.5 w-2.5 rounded-full',
+                                            'bg-success-500' => $done->verdict === \App\Enums\StepVerdict::Accepted,
+                                            'bg-danger-500' => $done->verdict === \App\Enums\StepVerdict::Rejected,
+                                            'bg-gray-400' => $done->verdict === \App\Enums\StepVerdict::Undecided,
+                                            'bg-primary-600 ring-2 ring-primary-600/30' => $done->isPending(),
+                                        ])></span>
+                                    @endforeach
+                                    @for ($i = $steps->count(); $i < $session->max_questions; $i++)
+                                        <span class="h-2.5 w-2.5 rounded-full border border-gray-300 dark:border-white/20"></span>
+                                    @endfor
+                                </div>
+                                <span>{{ __(':n. question', ['n' => $session->askedCount() + 1]) }} · {{ __(':a of :req accepted', ['a' => $session->accepted_count, 'req' => $session->required_accepted]) }}</span>
                             </div>
-                            <div class="rounded-lg bg-gray-50 p-4 dark:bg-white/5">
-                                <div class="text-xs uppercase tracking-wide {{ $muted }}">{{ __('Ask the caller') }}</div>
-                                <div class="mt-1 text-lg font-semibold">{{ $step->questionVersion?->text ?? $step->question->text }}</div>
+
+                            @if ($previous)
+                                @php $result = $previous['step']->check_result; @endphp
+                                <div @class([
+                                    'flex items-center gap-2 rounded-lg px-3 py-2 text-sm',
+                                    'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400' => $result === \App\Enums\AnswerCheckResult::Matched,
+                                    'bg-danger-50 text-danger-700 dark:bg-danger-500/10 dark:text-danger-400' => $result === \App\Enums\AnswerCheckResult::Mismatch,
+                                    'bg-gray-50 text-gray-700 dark:bg-white/5 dark:text-gray-300' => $result === \App\Enums\AnswerCheckResult::Near,
+                                ]) data-hdid-last-check>
+                                    @if ($result === \App\Enums\AnswerCheckResult::Matched)
+                                        <x-filament::icon icon="heroicon-m-check-circle" class="h-5 w-5 shrink-0" />
+                                        <span>{{ trans_choice('{0} The previous answer matched: :answer|{1} The previous answer matched with 1 typo: :answer|[2,*] The previous answer matched with :n typos: :answer', (int) $previous['step']->check_distance, ['n' => (int) $previous['step']->check_distance, 'answer' => $previous['answer'] ?? '–']) }}</span>
+                                    @elseif ($result === \App\Enums\AnswerCheckResult::Mismatch)
+                                        <x-filament::icon icon="heroicon-m-x-circle" class="h-5 w-5 shrink-0" />
+                                        <span>{{ __('The previous answer did not match.') }}</span>
+                                    @else
+                                        <x-filament::icon icon="heroicon-m-minus-circle" class="h-5 w-5 shrink-0" />
+                                        <span>{{ __('The previous question stayed undecided.') }}</span>
+                                    @endif
+                                </div>
+                            @endif
+
+                            <div>
+                                <div class="text-xl font-semibold leading-snug">{{ $step->questionVersion?->text ?? $step->question->text }}</div>
                                 @if ($step->questionVersion?->hint)
-                                    <div class="text-sm {{ $muted }}">{{ $step->questionVersion->hint }}</div>
+                                    <div class="mt-1 text-sm {{ $muted }}">{{ $step->questionVersion->hint }}</div>
                                 @endif
                             </div>
-                            <div class="hdid-answer-card p-4">
-                                <div class="text-xs uppercase tracking-wide {{ $muted }}">{{ __('Stored answer') }}</div>
-                                <div class="mt-1 text-lg font-mono">{{ $answer }}</div>
-                            </div>
-                            <div class="flex flex-wrap gap-3">
-                                <x-filament::button wire:click="judge('accepted')" wire:loading.attr="disabled" wire:target="judge" color="success" icon="heroicon-o-check" :badge="1" badge-color="gray">{{ __('Accept') }}</x-filament::button>
-                                <x-filament::button wire:click="judge('rejected')" wire:loading.attr="disabled" wire:target="judge" color="danger" icon="heroicon-o-x-mark" :badge="2" badge-color="gray">{{ __('Reject') }}</x-filament::button>
-                                <x-filament::button wire:click="judge('undecided')" wire:loading.attr="disabled" wire:target="judge" color="gray" icon="heroicon-o-question-mark-circle" :badge="3" badge-color="gray">{{ __('Cannot decide') }}</x-filament::button>
-                                <x-filament::button wire:click="cancelQa" color="gray" outlined class="ml-auto">{{ __('Cancel session') }}</x-filament::button>
-                            </div>
-                            <p class="text-xs {{ $faint }}">{{ __('Keyboard: 1 accept, 2 reject, 3 cannot decide.') }}</p>
+
+                            @if ($blind)
+                                <form wire:submit="checkAnswer" class="flex gap-3">
+                                    <x-filament::input.wrapper class="flex-1">
+                                        <x-filament::input type="text" wire:model="givenAnswer" autocomplete="off" maxlength="255" :placeholder="__('What did the caller say?')" x-init="$nextTick(() => $el.focus())" />
+                                    </x-filament::input.wrapper>
+                                    <x-filament::button type="submit" wire:loading.attr="disabled" wire:target="checkAnswer">{{ __('Check') }}</x-filament::button>
+                                </form>
+
+                                @if ($near)
+                                    <div class="flex items-center gap-2 rounded-lg bg-warning-50 px-3 py-2 text-sm text-warning-700 dark:bg-warning-500/10 dark:text-warning-400">
+                                        <x-filament::icon icon="heroicon-m-arrow-path" class="h-5 w-5 shrink-0" />
+                                        <span>{{ __('Almost: ask the caller to say it again. One more try.') }}</span>
+                                    </div>
+                                @endif
+
+                                <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm" x-data="{ rules: false }">
+                                    <x-filament::link tag="button" wire:click="judge('undecided')" color="gray" size="sm" icon="heroicon-m-question-mark-circle">{{ __('Cannot decide') }}</x-filament::link>
+                                    <x-filament::link tag="button" x-on:click="rules = ! rules" color="gray" size="sm" icon="heroicon-m-information-circle">{{ __('What counts as a match?') }}</x-filament::link>
+                                    <x-filament::link tag="button" wire:click="cancelQa" color="gray" size="sm" class="ml-auto">{{ __('Cancel session') }}</x-filament::link>
+                                    <ul x-show="rules" x-cloak class="w-full list-disc space-y-1 rounded-lg bg-gray-50 py-2 pl-8 pr-3 text-xs {{ $muted }} dark:bg-white/5">
+                                        <li>{{ __('Case, accents, punctuation and spaces do not count.') }}</li>
+                                        <li>{{ trans_choice('{0} No typo is allowed.|{1} One typo is allowed: a letter different, missing, extra, or swapped with its neighbour.|[2,*] :n typos are allowed: a letter different, missing, extra, or swapped with its neighbour.', (int) $session->typo_tolerance, ['n' => (int) $session->typo_tolerance]) }}</li>
+                                        <li>{{ __('Digits, and answers shorter than :short characters, must match exactly.', ['short' => \App\Identification\AnswerMatcher::EXACT_BELOW]) }}</li>
+                                        <li>{{ __('A close answer gets one more try; the stored answer shows only after a match.') }}</li>
+                                    </ul>
+                                </div>
+                            @else
+                                <div class="rounded-lg bg-gray-50 px-4 py-3 dark:bg-white/5">
+                                    <span class="text-sm {{ $muted }}">{{ __('Stored answer') }}:</span>
+                                    <span class="ml-1 font-mono text-lg">{{ $answer }}</span>
+                                </div>
+                                <div class="flex flex-wrap items-center gap-3">
+                                    <x-filament::button wire:click="judge('accepted')" wire:loading.attr="disabled" wire:target="judge" color="success" icon="heroicon-o-check" :badge="1" badge-color="gray">{{ __('Accept') }}</x-filament::button>
+                                    <x-filament::button wire:click="judge('rejected')" wire:loading.attr="disabled" wire:target="judge" color="danger" icon="heroicon-o-x-mark" :badge="2" badge-color="gray">{{ __('Reject') }}</x-filament::button>
+                                    <x-filament::button wire:click="judge('undecided')" wire:loading.attr="disabled" wire:target="judge" color="gray" icon="heroicon-o-question-mark-circle" :badge="3" badge-color="gray">{{ __('Cannot decide') }}</x-filament::button>
+                                    <x-filament::link tag="button" wire:click="cancelQa" color="gray" size="sm" class="ml-auto">{{ __('Cancel session') }}</x-filament::link>
+                                </div>
+                            @endif
                         </div>
                     @endif
                 </x-filament::section>

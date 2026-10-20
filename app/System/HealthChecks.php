@@ -2,10 +2,13 @@
 
 namespace App\System;
 
+use App\Auth\AccountLogin;
+use App\Auth\Mfa\StaffMfa;
 use App\Auth\Oidc\OidcProvider;
 use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
 use App\Enums\ApiKeyScope;
+use App\Enums\MfaMethod;
 use App\Enums\OutboundMessageStatus;
 use App\Enums\PrincipalType;
 use App\Enums\SyncRunStatus;
@@ -15,12 +18,14 @@ use App\Models\Client;
 use App\Models\ExternalRecord;
 use App\Models\OutboundMessage;
 use App\Models\SyncRun;
+use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Support\HuDate;
 use App\Support\OutboundProxy;
 use App\Sync\ApiTokens;
 use App\Sync\SyncExternalRecords;
+use Filament\Facades\Filament;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Support\Carbon;
@@ -71,6 +76,52 @@ class HealthChecks
         return Check::warn('login_link_preview', $label, __('On: the panel shows every client login link it sends, so staff could sign in as the client. Switch it off before go-live.'));
     }
 
+    public function staffMfa(): Check
+    {
+        $label = __('Two-factor sign-in');
+        $mfa = app(StaffMfa::class);
+
+        if (! $mfa->isEnabled()) {
+            return Check::ok('mfa', $label, __('Off: staff sign in without a second factor.'));
+        }
+
+        $methods = $mfa->allowedMethods();
+
+        if ($methods === []) {
+            return Check::fail('mfa', $label, __('On, but no second factor can be used: staff cannot finish signing in.'));
+        }
+
+        $staff = User::query()->open()->with('externalRecord')->get()->filter(fn (User $user): bool => $user->canAccessPanel(Filament::getPanel('admin')));
+        $without = $staff->filter(fn (User $user): bool => $mfa->enrolledMethods($user) === [])->count();
+        $locked = $staff->filter(fn (User $user): bool => $mfa->isLocked($user))->count();
+        $smsMissing = in_array(MfaMethod::Sms->value, array_map('strval', app(Settings::class)->array(SettingKey::UserLoginMfaMethods)), true) && ! StaffMfa::smsAvailable();
+
+        $message = __('On: :methods. Staff without a second factor yet: :without; locked: :locked.', [
+            'methods' => implode(', ', array_map(fn (MfaMethod $method): string => $method->label(), $methods)),
+            'without' => $without,
+            'locked' => $locked,
+        ]).($smsMissing ? ' '.__('SMS is selected but no SMS gateway is connected, so it is not offered.') : '');
+
+        // With the provider's MFA accepted, company sign-on users may never need a factor of their own.
+        $trustsProvider = app(Settings::class)->bool(SettingKey::UserLoginMfaTrustProvider);
+        if ($trustsProvider && $without > 0) {
+            $message .= ' '.__('Staff who sign in through ADFS or Entra with the provider\'s MFA need no factor of their own.');
+        }
+
+        return ($without > 0 && ! $trustsProvider) || $locked > 0 || $smsMissing ? Check::warn('mfa', $label, $message) : Check::ok('mfa', $label, $message);
+    }
+
+    public function clientLoginEmd(): Check
+    {
+        $label = __('Client login and EMD');
+
+        if (AccountLogin::clientsNeedEmd()) {
+            return Check::ok('client_login_emd', $label, __('Clients sign in only with a present EMD record carrying their e-mail.'));
+        }
+
+        return Check::warn('client_login_emd', $label, __('CLIENT_LOGIN_REQUIRE_EMD is off: clients sign in without an EMD record, so a client missing from EMD or with a changed e-mail can still sign in until the account is closed.'));
+    }
+
     public function outboundProxy(): Check
     {
         $label = __('Outbound proxy');
@@ -111,6 +162,8 @@ class HealthChecks
             'oidc' => [__('Single sign-on'), $this->oidc(...)],
             'proxy' => [__('Outbound proxy'), $this->outboundProxy(...)],
             'login_link_preview' => [__('Login link preview'), $this->loginLinkPreview(...)],
+            'client_login_emd' => [__('Client login and EMD'), $this->clientLoginEmd(...)],
+            'mfa' => [__('Two-factor sign-in'), $this->staffMfa(...)],
             'premium_only' => [__('Premium clients only'), $this->premiumOnly(...)],
             'storage' => [__('Storage'), $this->storage(...)],
             'retention' => [__('Data retention'), $this->retention(...)],
@@ -138,6 +191,8 @@ class HealthChecks
         return match ($key) {
             'premium_only' => __('Yellow: Settings › Packages › "Premium only" is on, so only premium clients are served; standard clients cannot sign in, the phone menu does not recognise them and no staff view shows them. Their data is kept and the sync keeps importing them. Switch it off to serve them again; the number shown is how many open standard clients are held back.'),
             'login_link_preview' => __('Yellow: Settings › Client login › "Magic link preview in panel" is on, so every sent client login link is shown to the staff member who sends it. Meant for test environments only; switch it off for production.'),
+            'mfa' => __('Yellow: some staff have no second factor yet (they set one up at their next sign-in, an app with an e-mail code too) or are locked after wrong codes (Users list, "Unlock login"). Red: two-factor sign-in is on but none of the chosen methods can be used, so nobody can finish signing in; choose another method under Settings › User login, or switch it off with "php artisan hdid:mfa-reset --off" (in the container: docker compose exec web php artisan hdid:mfa-reset --off). A staff member who lost the factor: "Reset second factor" on the Users list, or hdid:mfa-reset <e-mail>.'),
+            'client_login_emd' => __('Yellow: CLIENT_LOGIN_REQUIRE_EMD=false in the .env file (or the environment of the web container), so client logins do not ask for an EMD record. Closed accounts and clients without an entitling package are still refused. To require the record again, remove the line or set it to true, then reload the configuration (php artisan config:cache, or restart the containers).'),
             'sync_auth' => config('hdid.sync.token_keep_alive')
                 ? __('EMD API tokens are refreshed every 15 minutes when EMD_SYNC_TOKEN_KEEP_ALIVE is enabled. Check the login/refresh URLs, credentials, scheduler and hdid:emd-sync-token. The EMD sync run checks the export separately.')
                 : __('EMD_SYNC_TOKEN_KEEP_ALIVE is disabled. EMD sync reuses tokens refreshed less than 15 minutes ago, otherwise refreshes them on demand and logs in again when the refresh fails. Check the login/refresh URLs and credentials, or run hdid:emd-sync-token manually.'),

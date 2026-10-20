@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Auth\AuthSessions;
+use App\Auth\Mfa\StaffMfa;
 use App\Auth\Permission;
 use App\Enums\ApiKeyScope;
 use App\Http\Controllers\HealthController;
@@ -77,6 +78,9 @@ class AppServiceProvider extends ServiceProvider
 
         Event::listen(Authenticated::class, RememberClientLocale::class);
         Event::listen(Login::class, fn (Login $event) => $this->app->make(AuthSessions::class)->stamp($event));
+        // Every staff login (form, SSO, remember-me cookie) starts without the second factor.
+        Event::listen(Login::class, fn (Login $event) => $event->guard === 'web' && request()->hasSession()
+            ? $this->app->make(StaffMfa::class)->forget() : null);
 
         // Real health for monitoring (the framework's /up only proves PHP boots).
         RouteFacade::middleware(['api', 'throttle:30,1,health'])->get('/health', HealthController::class)->name('health');
@@ -104,7 +108,9 @@ class AppServiceProvider extends ServiceProvider
             Limit::perMinute(120)->by('api-key:'.AuthenticateApiKey::identityOf($request)),
         ]);
 
-        Gate::define('viewApiDocs', fn (?User $user): bool => $user?->can(Permission::AdminAccess->value) ?? false);
+        // The interface documents need the second factor too, like the panel they are linked from.
+        Gate::define('viewApiDocs', fn (?User $user): bool => ($user?->can(Permission::AdminAccess->value) ?? false)
+            && $this->app->make(StaffMfa::class)->isSatisfied($user));
 
         $this->registerApiDocs();
 

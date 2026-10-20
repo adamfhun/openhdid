@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Auth\Mfa\StaffMfa;
 use App\Branding\Branding;
 use App\Filament\Admin\NavigationGroup;
 use App\Filament\Admin\Pages\Dashboard;
@@ -15,8 +16,12 @@ use App\Filament\Admin\Widgets\OverviewStatsWidget;
 use App\Filament\BrandedPanel;
 use App\Filament\Concerns\GuardsUnsavedChanges;
 use App\Filament\Pages\Auth\Login;
+use App\Filament\Pages\Auth\MfaChallenge;
+use App\Filament\Pages\Auth\MfaSetup;
 use App\Http\Middleware\EnforceAuthSessions;
+use App\Http\Middleware\EnsureStaffMfa;
 use App\Localization\SetLocale;
+use App\Models\User;
 use Filament\Actions\Action;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
@@ -34,6 +39,7 @@ use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Route;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 
 /**
@@ -71,7 +77,9 @@ class AdminPanelProvider extends PanelProvider
                     ->collapsed($group->isCollapsed()),
                 NavigationGroup::cases(),
             ))
-            ->renderHook(PanelsRenderHook::USER_MENU_BEFORE, fn (): View => view('filament.admin.tier-switch'))
+            // The call view switch would be refused before the second factor: not offered there.
+            ->renderHook(PanelsRenderHook::USER_MENU_BEFORE, fn (): string => auth()->user() instanceof User && ! app(StaffMfa::class)->isSatisfied(auth()->user())
+                ? '' : view('filament.admin.tier-switch')->render())
             ->renderHook(PanelsRenderHook::TOPBAR_BEFORE, fn (): View => view('filament.admin.premium-only-bar'))
             // Pages with a Save button ask before their unsaved changes are left behind.
             ->renderHook(PanelsRenderHook::HEAD_END, fn (): View => view('filament.admin.unsaved-guard-script'))
@@ -81,6 +89,9 @@ class AdminPanelProvider extends PanelProvider
             ->renderHook(PanelsRenderHook::BODY_END, fn (): View => view('filament.admin.shortcuts', ['searchUrl' => SearchClients::getUrl()]))
             ->renderHook(PanelsRenderHook::FOOTER, fn (): View => view('filament.admin.source-link', ['url' => app(Branding::class)->sourceUrl()]))
             ->userMenuItems([
+                Action::make('mfa')->label(fn (): string => __('Second factors'))->icon('heroicon-o-shield-check')
+                    ->url(fn (): string => route('filament.admin.mfa.setup'))
+                    ->visible(fn (): bool => app(StaffMfa::class)->isEnabled()),
                 Action::make('locale_hu')->label('Magyar')->icon('heroicon-o-language')->url(fn () => route('locale.switch', 'hu'))->visible(fn () => app()->getLocale() !== 'hu'),
                 Action::make('locale_en')->label('English')->icon('heroicon-o-language')->url(fn () => route('locale.switch', 'en'))->visible(fn () => app()->getLocale() !== 'en'),
             ])
@@ -115,6 +126,12 @@ class AdminPanelProvider extends PanelProvider
             ])
             ->authMiddleware([
                 Authenticate::class,
-            ]);
+                // The second factor on every panel request, Livewire updates included.
+                EnsureStaffMfa::class,
+            ], isPersistent: true)
+            ->authenticatedRoutes(function (): void {
+                Route::get('mfa', MfaChallenge::class)->name('mfa.challenge');
+                Route::get('mfa/setup', MfaSetup::class)->name('mfa.setup');
+            });
     }
 }

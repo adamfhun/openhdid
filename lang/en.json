@@ -875,5 +875,10 @@
     "Mobile token max age minutes": "Mobile ID token maximum age (minutes)",
     "Otp sms max per number per minute": "SMS codes per phone number per minute",
     "Otp sms max per number per hour": "SMS codes per phone number per hour",
-    "Otp sms email fallback enabled": "E-mail link as fallback for the SMS code"
+    "Otp sms email fallback enabled": "E-mail link as fallback for the SMS code",
+    "Mfa enabled": "Two-factor sign-in (MFA)",
+    "Mfa methods": "Allowed second factors",
+    "Mfa trust provider mfa": "Accept the provider's MFA",
+    "Qa blind check": "Q-A blind check",
+    "Qa typo tolerance": "Q-A allowed typos"
 }

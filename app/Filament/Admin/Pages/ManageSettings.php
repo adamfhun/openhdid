@@ -2,13 +2,16 @@
 
 namespace App\Filament\Admin\Pages;
 
+use App\Auth\Mfa\StaffMfa;
 use App\Auth\Permission;
 use App\Clients\ClientLinks;
 use App\Clients\PackageListImpact;
 use App\Enums\ClientTier;
+use App\Enums\MfaMethod;
 use App\Filament\Actions\ExportTableAction;
 use App\Filament\Admin\Clusters\System;
 use App\Filament\Concerns\GuardsUnsavedChanges;
+use App\Identification\AnswerMatcher;
 use App\Identification\MobileOtpService;
 use App\Identification\PinService;
 use App\Models\Call;
@@ -23,6 +26,7 @@ use App\Sync\RequestPayload;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkAction;
+use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\ColorPicker;
 use Filament\Forms\Components\Field;
 use Filament\Forms\Components\FileUpload;
@@ -811,7 +815,7 @@ class ManageSettings extends Page implements HasTable
                 ->disabled(fn (): bool => ! $this->canManageSync())
                 ->dehydrated(fn (): bool => $this->canManageSync())
                 ->helperText($key === SettingKey::SyncExportPayload
-                    ? __('Complete JSON request body. Inside a text value, {{ now }} is replaced with the time of sending in UTC (e.g. 2026-09-28T12:03:15.000Z), and {{ ids }} with the selected IDs of the ID list below, comma-separated (e.g. 3,12,40). Placeholders stay inside quotes, e.g. "ids": "{{ ids }}". Only staff who manage EMD sync can edit it.')
+                    ? __('Complete JSON request body. Inside a text value, {{ now }} is replaced with the time of sending in UTC (e.g. 2026-09-28T12:03:15.000Z), and {{ ids }} with the selected IDs of the ID list below, comma-separated (e.g. "ids": "{{ ids }}" gives "3,12,40"). For a JSON list, write {{ ids }} without quotes between brackets: "ids": [{{ ids }}] gives [3,12,40] (all-digit IDs as numbers, others as text). Only staff who manage EMD sync can edit it.')
                     : __('JSON request body of the ID list query (EMD_SYNC_ID_LIST_URL), sent with the export\'s token; {{ now }} works here too. Only staff who manage EMD sync can edit it.'));
         }
 
@@ -839,7 +843,10 @@ class ManageSettings extends Page implements HasTable
                     SettingKey::VerifyPhoneOnIdentifiedCall => __('A client identified on a call (by PIN, code, question and answer or manually) proves the number the call came from: their unverified copy of that number becomes verified. Off: numbers are verified by SMS code or by the helpdesk only.'),
                     SettingKey::ClientLoginMagicLinkPreviewInPanel => __('On: after "Send a login link" the panel notification also shows the link itself, so a tester can sign in without the mailbox. Anyone who can send links can then sign in as the client: keep it off in production; the system status page warns while it is on. Debug mode shows the link regardless.'),
                     SettingKey::ClientLoginOtpSmsEmailFallbackEnabled => __('On: when the SMS code did not arrive after the second send, the login page offers to e-mail a login link once. Works only while "Magic link enabled" is also on: with the e-mail link login off, this switch has no effect and the page says to contact support, as when the switch is off.'),
+                    SettingKey::UserLoginMfaEnabled => __('On: every staff sign-in (password, ADFS, Entra, remember-me cookie) asks for a second factor before anything in the panel opens, once per new session. Staff without a factor set one up at their next step; switching on applies to sessions already open too.'),
+                    SettingKey::UserLoginMfaTrustProvider => __('On: a company sign-on whose verified token proves that ADFS or Entra already asked for a second factor (amr claim) needs no other; the audit log records it. Off: HDID always asks for its own second factor.'),
                     SettingKey::UserLoginRememberEnabled, SettingKey::ClientLoginRememberEnabled => __('On: a sign-in through single sign-on (and, for staff, the "Remember me" box of the password form) keeps the browser signed in for the days set below, beyond the session limit. Off: no remember-me cookie. The e-mail link and the SMS code never remember.'),
+                    SettingKey::QaBlindCheck => __('On: during question-and-answer identification the stored answer is hidden. The agent types what the caller says and the system compares it (case, accents, punctuation and spaces do not count, digits must be the same, a few typos are allowed as set below); the answer is shown only when it matches. A match accepts the question, a clearly different answer rejects it, a close one gets one retry and then counts as "cannot decide". The agent cannot accept or reject by hand, so the caller cannot be led to the answer. Off: the agent sees the stored answer and decides. A switch applies to sessions started afterwards.'),
                     SettingKey::PortalSharedNumberNotice => __('On: the portal tells the client when one of their numbers is also on file for another client, so the phone menu cannot recognise them from it (the other client is never named). Off: the portal says nothing about it.'),
                     default => null,
                 }),
@@ -863,7 +870,8 @@ class ManageSettings extends Page implements HasTable
                     SettingKey::PinMinLength, SettingKey::PinMaxLength => __('Allowed PIN length when setting or replacing a PIN (:min–:max digits). Existing PINs remain valid. The phone menu checks the PIN only for callers recognised by a registered number, so a PIN needs a phone number.', ['min' => PinService::MIN_ALLOWED_LENGTH, 'max' => PinService::MAX_ALLOWED_LENGTH]),
                     SettingKey::IvrCodeLength => __('Length of new IVR codes requested by the mobile app backend (8–12 digits), independent of the portal one-time identification code.'),
                     SettingKey::MobileOtpLength => __('Digits of the one-time identification code; shown in pairs, the second digit of a pair is never zero.'),
-                    SettingKey::AgentAttemptsPerHour => __('Failed code and PIN checks one agent may run in an hour; successful checks do not count.'),
+                    SettingKey::AgentAttemptsPerHour => __('Failed code and PIN checks one agent may run in an hour; successful checks do not count.').' '.__('Answers of the blind question-and-answer check that do not match count as well.'),
+                    SettingKey::QaTypoTolerance => __('Blind check only: how many typos (a letter swapped, missing or extra, or two neighbours swapped) still match, 0–:max. Answers shorter than :short characters must match exactly, and digits always.', ['max' => AnswerMatcher::MAX_TOLERANCE, 'short' => AnswerMatcher::EXACT_BELOW]),
                     SettingKey::SyncMinRowsRatioPercent => __('A run is refused when it reads fewer rows than this share of the previous successful run (0 = off). Protects against a truncated export closing accounts.'),
                     SettingKey::SyncExpectedIntervalHours => __('How often EMD sync is expected to run; the status page fails when no successful run happened in twice this time.'),
                     SettingKey::RetentionGeneralYears => __('Audit log, identification sessions, calls, outbound messages and EMD sync runs older than this are deleted for good.'),
@@ -892,6 +900,11 @@ class ManageSettings extends Page implements HasTable
                 SettingKey::SyncColumnMapping => KeyValue::make($name)->label($label)->keyLabel(__('Field'))->valueLabel(__('Source column'))->columnSpanFull()
                     ->editableKeys(false)->addable(false)->deletable(false)->reorderable(false)
                     ->helperText(__('Use exact source headings. For phones, list all phone column headings separated by commas, e.g. Mobile phone, Office phone. Each cell may also contain several comma-separated numbers. All numbers are normalized and deduplicated. Empty mappings use the field name.')),
+                SettingKey::UserLoginMfaMethods => CheckboxList::make($name)->label($label)
+                    ->options(collect(MfaMethod::cases())->mapWithKeys(fn (MfaMethod $method): array => [$method->value => $method->label()])->all())
+                    ->disableOptionWhen(fn (string $value): bool => $value === MfaMethod::Sms->value && ! StaffMfa::smsAvailable())
+                    ->helperText(fn (): string => __('The second factors staff may choose from: an authenticator app (RFC 6238 codes with a QR code, e.g. Google Authenticator), an SMS code to a mobile number of their EMD record, an e-mail code to their account address.')
+                        .(StaffMfa::smsAvailable() ? '' : ' '.__('SMS is not available: no SMS gateway is connected (SMS_DRIVER=log).'))),
                 SettingKey::ClientsDirectoryFields => KeyValue::make($name)->label($label)->keyLabel(__('EMD column'))->valueLabel(__('Label shown'))->columnSpanFull()
                     ->reorderable()
                     ->helperText(__('Columns of EMD that are not mapped to a fixed field arrive as "other columns" of the EMD record. List here the ones the helpdesk should see on the client page and list and be able to export; the key is the column header as EMD sends it, the value is the label shown.')),

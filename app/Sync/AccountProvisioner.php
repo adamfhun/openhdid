@@ -5,6 +5,7 @@ namespace App\Sync;
 use App\Audit\Auditor;
 use App\Auth\Contracts\Principal;
 use App\Clients\PackageOverrides;
+use App\Enums\DirectoryLinkOutcome;
 use App\Enums\PhoneNumberSource;
 use App\Enums\PhoneVerificationSource;
 use App\Enums\PrincipalType;
@@ -14,6 +15,7 @@ use App\Models\ExternalRecord;
 use App\Models\User;
 use App\Support\PhoneNormalizer;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -83,6 +85,55 @@ class AccountProvisioner
         $this->auditor->record('account.closed', $principal, ['reason' => self::CLOSE_REASON_KIND_CHANGED, 'kind' => $record->kind->value]);
 
         return 1;
+    }
+
+    /**
+     * Links an account an admin has just created or saved to its EMD record
+     * at once, on the path a run takes, instead of leaving it to the next
+     * run. Only a present record of the account's kind with the same e-mail
+     * and no account of that kind qualifies. Null when the account is linked
+     * to a directory record already.
+     */
+    public function linkNow(Client|User $account): ?DirectoryLinkOutcome
+    {
+        if ($account->externalRecord !== null && ! $account->externalRecord->isLocal()) {
+            return null;
+        }
+
+        $kind = $account instanceof Client ? PrincipalType::Client : PrincipalType::User;
+        $records = ExternalRecord::query()->fromDirectory()->where('email', mb_strtolower(trim($account->email)))->get()
+            ->filter(fn (ExternalRecord $record): bool => self::sameEmail($record->email, $account->email));
+        $ofKind = $records->filter(fn (ExternalRecord $record): bool => $record->kind === $kind);
+        $present = $ofKind->reject(fn (ExternalRecord $record): bool => $record->isMissing());
+        $free = $present->filter(fn (ExternalRecord $record): bool => ($kind === PrincipalType::Client ? $record->client : $record->user) === null);
+
+        $outcome = match (true) {
+            $free->count() > 1 => DirectoryLinkOutcome::Ambiguous,
+            $free->count() === 1 => DirectoryLinkOutcome::Linked,
+            $present->isNotEmpty() => DirectoryLinkOutcome::Taken,
+            $ofKind->isNotEmpty() => DirectoryLinkOutcome::Missing,
+            $records->isNotEmpty() => DirectoryLinkOutcome::OtherKind,
+            default => DirectoryLinkOutcome::NoRecord,
+        };
+
+        if ($outcome->isLinked()) {
+            $record = $free->sole();
+
+            DB::transaction(function () use ($account, $record): void {
+                // The run finds the account by the record's e-mail; a case difference
+                // would hide it on a case-sensitive database.
+                if ($account->email !== $record->email) {
+                    $account->forceFill(['email' => $record->email])->save();
+                }
+
+                $this->syncAccount($record);
+                $this->auditor->record('account.linked', $account, ['external_id' => $record->external_id, 'on' => 'admin_save']);
+            });
+
+            $account->refresh();
+        }
+
+        return $outcome;
     }
 
     /**

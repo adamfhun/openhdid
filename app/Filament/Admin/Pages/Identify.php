@@ -68,6 +68,13 @@ class Identify extends Page
 
     public string $pin = '';
 
+    /** Blind check: what the caller answered, typed by the agent; never stored. */
+    public string $givenAnswer = '';
+
+    /** Blind check: the step last compared, to show its outcome. */
+    #[Locked]
+    public ?string $checkedStepId = null;
+
     public static function canAccess(): bool
     {
         return auth()->user()?->can(Permission::IdentificationRun->value) ?? false;
@@ -251,6 +258,26 @@ class Identify extends Page
     }
 
     /**
+     * Blind check: the step last compared in this session, with the stored
+     * answer only when the typed one matched it.
+     *
+     * @return array{step: IdSessionStep, answer: ?string}|null
+     */
+    public function getLastCheck(): ?array
+    {
+        $session = $this->getSession();
+        $step = $this->checkedStepId === null || $session === null ? null : $session->steps->firstWhere('id', $this->checkedStepId);
+
+        if ($step === null || $step->check_result === null) {
+            return null;
+        }
+
+        $step->setRelation('session', $session);
+
+        return ['step' => $step, 'answer' => app(QaSessionEngine::class)->revealAnswer($step)];
+    }
+
+    /**
      * Numbers of this client that another client also carries: the phone
      * menu cannot recognise the caller from them, which is why a PIN check
      * there never happened.
@@ -358,6 +385,7 @@ class Identify extends Page
         try {
             $session = app(QaSessionEngine::class)->start($this->getClient(), $this->agent(), $this->getHeldCall());
             $this->sessionId = $session->id;
+            $this->checkedStepId = null;
         } catch (IdentificationException $e) {
             Notification::make()->title($e->getMessage())->danger()->send();
         }
@@ -380,6 +408,41 @@ class Identify extends Page
         }
 
         $this->notifyOutcome($session);
+    }
+
+    /**
+     * Blind check: the system compares the typed answer; the outcome shows
+     * under the question, the stored answer only on a match.
+     */
+    public function checkAnswer(): void
+    {
+        $step = $this->getCurrentStep();
+        $given = $this->givenAnswer;
+        $this->givenAnswer = '';
+
+        if ($step === null) {
+            return;
+        }
+
+        try {
+            $checked = app(QaSessionEngine::class)->check($step, $given, $this->agent());
+        } catch (IdentificationException $e) {
+            Notification::make()->title($e->getMessage())->danger()->send();
+
+            return;
+        }
+
+        $this->checkedStepId = $checked->id;
+
+        // A close answer stays on the same question; the page says so under the field.
+        if ($checked->isPending()) {
+            return;
+        }
+
+        $session = $this->getSession();
+        if ($session !== null) {
+            $this->notifyOutcome($session);
+        }
     }
 
     public function cancelQa(): void

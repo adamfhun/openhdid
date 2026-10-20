@@ -94,7 +94,7 @@ The image contains only what runs the application: Alpine Linux, PHP-FPM with th
 Every image is signed and carries a build provenance and an SBOM attestation. Set `v` to the version you install (the `OPENHDID_VERSION` of your `.env`):
 
 ```sh
-v=1.5.2
+v=1.6.0
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -116,7 +116,7 @@ The operations manual explains the sizing, the Kubernetes mapping and how to mea
 
 ## Documentation
 
-In [`docs/`](docs), in Hungarian, as HTML and PDF (the PDFs are also attached to every release):
+In [`docs/`](docs), in Hungarian, as PDF (also attached to every release):
 
 - `openhdid-telepitesi-utmutato` – installation guide: requirements, configuration reference, HTTPS, database, first steps, external systems, acceptance tests
 - `openhdid-uzemeltetesi-kezikonyv` – operations manual: logs, scheduler, health checks, backup and restore, upgrades, scaling, security

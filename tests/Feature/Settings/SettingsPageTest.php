@@ -212,11 +212,27 @@ it('explains a placeholder written outside quotes and names the parser error oth
     $field = ManageSettings::fieldName(SettingKey::SyncExportPayload);
 
     Livewire::test(ManageSettings::class)->fillForm([$field => '{"filter": {"ids": {{ ids }}}}'])->call('save')
-        ->assertHasFormErrors([$field])->assertSee('A placeholder stands outside quotes');
+        ->assertHasFormErrors([$field])->assertSee('so write it between brackets');
+    Livewire::test(ManageSettings::class)->fillForm([$field => '{"from": {{ now }}, "ids": [{{ ids }}]}'])->call('save')
+        ->assertHasFormErrors([$field])->assertSee('The {{ now }} placeholder stands outside quotes');
     expect(app(Settings::class)->string(SettingKey::SyncExportPayload))->toBeNull();
 
     Livewire::test(ManageSettings::class)->fillForm([$field => '{"filter": {"ids": "{{ ids }}"},}'])->call('save')
         ->assertHasFormErrors([$field])->assertSee('Line 1, column 33')->assertSee('a comma before the closing');
+    // The list placeholder outside quotes keeps the position of a later fault.
+    Livewire::test(ManageSettings::class)->fillForm([$field => '{"ids": [{{ ids }}],}'])->call('save')
+        ->assertHasFormErrors([$field])->assertSee('Line 1, column 21')->assertSee('a comma before the closing');
+});
+
+it('saves the ids placeholder between brackets outside quotes', function (): void {
+    $field = ManageSettings::fieldName(SettingKey::SyncExportPayload);
+    $payload = '{"filter": {"ids": [{{ ids }}], "fixed": [1, {{ ids }}], "text": "{{ ids }}", "from": "{{ now }}"}}';
+
+    Livewire::test(ManageSettings::class)->fillForm([$field => $payload])->call('save')->assertHasNoFormErrors();
+    expect(app(Settings::class)->string(SettingKey::SyncExportPayload))->toBe($payload);
+
+    Livewire::test(ManageSettings::class)->fillForm([$field => '[{{ ids }}]'])->call('save')
+        ->assertHasFormErrors([$field])->assertSee(__('EMD export payload must be a JSON object.'));
 });
 
 it('accepts the now placeholder in the export payload and rejects unknown placeholders', function (): void {

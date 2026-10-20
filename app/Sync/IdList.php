@@ -316,8 +316,11 @@ class IdList
 
         if (! $response->successful()) {
             $status ??= $httpStatus;
+            RefusedResponse::log('ID list query', $httpStatus, $url, $response->body());
 
-            throw new IdListException(__('The EMD ID list query failed (status :status, HTTP :http).', ['status' => $status, 'http' => $httpStatus]), $status, $httpStatus);
+            throw new IdListException($httpStatus >= 400
+                ? __('The EMD ID list query failed (status :status, HTTP :http). The response of EMD is in the application log.', ['status' => $status, 'http' => $httpStatus])
+                : __('The EMD ID list query failed (status :status, HTTP :http).', ['status' => $status, 'http' => $httpStatus]), $status, $httpStatus);
         }
         if ($status === null) {
             throw new IdListException(__('The EMD ID list response has no numeric status code at ":path" (HTTP :http).', ['path' => $statusPath, 'http' => $httpStatus]), null, $httpStatus);

@@ -21,6 +21,17 @@ enum ApiKeyScope: string
         return $this === self::MobileBackend;
     }
 
+    /**
+     * Route of the partner's interface document (OpenAPI, Scramble).
+     */
+    public function docsRoute(): string
+    {
+        return match ($this) {
+            self::CallCenter => 'scramble.ivr.ui',
+            self::MobileBackend => 'scramble.mobile.ui',
+        };
+    }
+
     public function label(): string
     {
         return match ($this) {
