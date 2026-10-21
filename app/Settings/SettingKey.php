@@ -150,6 +150,8 @@ enum SettingKey: string
     // Data retention (years); the prune task runs daily
     case RetentionGeneralYears = 'retention.general_years';
     case RetentionShortLivedYears = 'retention.short_lived_years';
+    // Days the audit log stays in the database; older days move to archive files
+    case RetentionAuditHotDays = 'retention.audit_hot_days';
     case CallsStaleAfterHours = 'calls.stale_after_hours';
 
     public function type(): SettingType
@@ -218,6 +220,7 @@ enum SettingKey: string
             self::CallsRetentionHours,
             self::CallsStaleAfterHours,
             self::PortalMaxPhoneNumbersPerClient,
+            self::RetentionAuditHotDays,
             self::CallsDashboardPollSeconds => SettingType::Integer,
 
             self::BrandingPrimaryColor,
@@ -371,6 +374,7 @@ enum SettingKey: string
 
             self::RetentionGeneralYears => 5,
             self::RetentionShortLivedYears => 2,
+            self::RetentionAuditHotDays => 150,
             self::CallsStaleAfterHours => 6,
         };
     }

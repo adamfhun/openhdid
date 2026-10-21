@@ -60,6 +60,7 @@ class SyncExternalRecords
         private readonly Settings $settings,
         private readonly Auditor $auditor,
         private readonly PhoneNormalizer $phones,
+        private readonly RunChangeRecorder $changes,
     ) {}
 
     public function run(SourceReader $reader, ?User $triggeredBy = null, bool $dryRun = false, ?SyncRun $run = null): SyncRun
@@ -172,6 +173,7 @@ class SyncExternalRecords
         $stats['email_conflict_samples'] = [];
         $stats['kind_pending'] = 0;
         $stats['kind_changed'] = 0;
+        $stats['changes'] = 0;
         $skipped = [];
         $samples = ['created' => [], 'closed' => [], 'kind_pending' => [], 'kind_changed' => []];
         $kindThreshold = max(1, $this->settings->int(SettingKey::SyncMissedRunsBeforeClose));
@@ -179,6 +181,9 @@ class SyncExternalRecords
         $seen = [];
         /** @var array<string, true> $seenEmails e-mail addresses already imported in this run */
         $seenEmails = [];
+
+        // The per-record diffs go to sync_run_changes, not the audit log.
+        $this->changes->begin($run);
 
         try {
             $transactionStarted = false;
@@ -230,6 +235,7 @@ class SyncExternalRecords
 
                     $record = ExternalRecord::query()->withTrashed()->firstOrNew(['external_id' => $item->externalId]);
                     $isNew = ! $record->exists;
+                    $this->changes->focus($record);
                     [$kind, $oldKind] = $this->settleKind($record, $kind, $kindThreshold, $stats, $samples, $item);
 
                     $stats['incoming'][$kind === PrincipalType::User ? 'users' : 'clients']++;
@@ -303,6 +309,7 @@ class SyncExternalRecords
                 [$stats['missing'], $stats['closed'], $samples['closed']] = $this->handleMissing($run);
                 [$stats['closing_next'], $samples['closing_next']] = $this->closingAtNextRun();
             } finally {
+                $stats['changes'] = $this->changes->end();
                 if ($transactionStarted) {
                     DB::rollBack();
                 }
@@ -502,6 +509,7 @@ class SyncExternalRecords
             ->with(['user', 'client'])
             ->chunkById(200, function ($records) use ($threshold, &$missing, &$closed, &$sample): void {
                 foreach ($records as $record) {
+                    $this->changes->focus($record);
                     $record->missed_runs++;
 
                     if ($record->missing_since === null && $record->missed_runs >= $threshold) {

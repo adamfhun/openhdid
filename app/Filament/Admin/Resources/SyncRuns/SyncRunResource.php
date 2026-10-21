@@ -4,9 +4,11 @@ namespace App\Filament\Admin\Resources\SyncRuns;
 
 use App\Filament\Admin\Clusters\System;
 use App\Filament\Admin\Resources\BaseResource;
+use App\Filament\Admin\Resources\SyncRunChanges\SyncRunChangeResource;
 use App\Filament\Admin\Resources\SyncRuns\Pages\ManageSyncRuns;
 use App\Models\SyncRun;
 use BackedEnum;
+use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
@@ -144,9 +146,17 @@ class SyncRunResource extends BaseResource
                 TextColumn::make('stats.closed')->label(__('Closed'))->color('danger'),
                 TextColumn::make('stats.closing_next')->label(__('Closes next'))->placeholder('-')->color(fn ($state) => $state > 0 ? 'warning' : null)
                     ->tooltip(__('Accounts the next sync closes if their records stay absent')),
+                TextColumn::make('stats.changes')->label(__('Changes'))->placeholder('-')
+                    ->tooltip(__('Directory records this run changed; the detail is on the EMD changes page, not in the audit log')),
                 TextColumn::make('error')->label(__('Error'))->limit(60)->placeholder('-')->tooltip(fn (SyncRun $record) => $record->error),
             ])
-            ->recordActions([ViewAction::make()])
+            ->recordActions([
+                ViewAction::make(),
+                Action::make('changes')->label(__('Changes'))->icon('heroicon-o-arrows-right-left')->color('gray')
+                    ->url(fn (SyncRun $record): string => SyncRunChangeResource::getUrl('index', ['tableFilters' => ['sync_run_id' => ['value' => $record->id]]]))
+                    ->disabled(fn (SyncRun $record): bool => ($record->stats['changes'] ?? 0) === 0)
+                    ->tooltip(fn (SyncRun $record): ?string => ($record->stats['changes'] ?? 0) === 0 ? __('This run changed no directory record.') : null),
+            ])
             ->defaultSort('id', 'desc');
     }
 

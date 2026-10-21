@@ -41,7 +41,7 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
      *
      * @var list<string>
      */
-    protected array $auditExclude = ['last_login_at', 'session_epoch', 'failed_login_attempts', 'locked_until', 'mfa_app_secret', 'mfa_email_enabled_at', 'mfa_sms_number', 'failed_mfa_attempts', 'mfa_locked_until'];
+    protected array $auditExclude = ['last_login_at', 'last_seen_at', 'session_epoch', 'failed_login_attempts', 'locked_until', 'mfa_app_secret', 'mfa_email_enabled_at', 'mfa_sms_number', 'failed_mfa_attempts', 'mfa_locked_until'];
 
     use HasApiTokens;
 
@@ -63,6 +63,7 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
             'active_tier' => ClientTier::class,
             'closed_at' => 'datetime',
             'last_login_at' => 'datetime',
+            'last_seen_at' => 'datetime',
             'session_epoch' => 'integer',
             'failed_login_attempts' => 'integer',
             'locked_until' => 'datetime',

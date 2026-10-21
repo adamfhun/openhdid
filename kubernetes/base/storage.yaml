@@ -1,0 +1,12 @@
+# A storage kötet: arculati képek, Livewire-feltöltések, szinkronfájlok, auditarchívum. Több
+# webpéldány írja egyszerre, ezért ReadWriteMany (NFS, CephFS, Azure Files, EFS); a
+# storageClassName a fürt szerint.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openhdid-storage
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 50Gi

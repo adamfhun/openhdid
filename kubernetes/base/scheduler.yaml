@@ -1,0 +1,58 @@
+# Az ütemező (schedule:work), a cron helyett: pontosan egy példány az egész telepítésben,
+# Recreate stratégiával, hogy frissítéskor se fusson kettő.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openhdid-scheduler
+  labels:
+    app.kubernetes.io/component: scheduler
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: scheduler
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: scheduler
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 82
+        runAsGroup: 82
+        fsGroup: 82
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scheduler
+          image: ghcr.io/adamfhun/openhdid
+          args: [scheduler]
+          envFrom:
+            - secretRef:
+                name: openhdid-env
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 100m, memory: 192Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: storage, mountPath: /app/storage}
+            - {name: ca, mountPath: /etc/openhdid/ca, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {medium: Memory, sizeLimit: 128Mi}
+        - name: storage
+          persistentVolumeClaim:
+            claimName: openhdid-storage
+        - name: ca
+          configMap:
+            name: openhdid-ca
+            optional: true

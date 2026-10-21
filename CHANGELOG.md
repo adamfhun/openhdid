@@ -4,6 +4,42 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.7.0] – 2026-10-21
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- ÜZ-03.2: három használati profil (`5k`, `10k`, `20k`) kész telepítési leírással: `profiles/5k` és `profiles/10k` Compose-kiegészítő fájl (a `.env` `COMPOSE_FILE` sora választja), `kubernetes/` Kustomize-alap és overlayek; 5 000 ügyfél fölött két alkalmazásgép terheléselosztó mögött külső MariaDB-vel, Valkey-vel és NFS-sel (magas rendelkezésre állás), 10 000 fölött Kubernetes. A Rendszerállapot új „Kapacitás” kártyája az utolsó 15 percben aktív fiókokat, a mai csúcsot és az adatbázis-kapcsolatokat mutatja, és a profil (`HDID_SIZING_PROFILE`) tervezett egyidejű felhasználószámához méri (80 %-nál sárga).
+- ADM-03.2: az auditnapló forró kerete az adatbázisban (Beállítások › Adatmegőrzés › „Auditnapló az adatbázisban (nap)”, alapból 150, legalább 30); a régebbi napokat az éjjeli `hdid:prune` napi, tömörített JSON Lines fájlokba írja a `storage` kötetre SHA-256 kísérőfájllal, és csak utána törli; új Auditarchívum oldal letöltéssel (naplózott), „Auditnapló” rendszerállapot-kártya, az auditnapló oldalán az utolsó 7 nap eseményenkénti darabszáma.
+- NYT-01.2: az ügyféltörzs-átvétel tételenkénti változásai nem az auditnaplóba, hanem az új Ügyféltörzs-változások oldalra kerülnek (futásonként és tételenként egy sor a tétel, a fiók és a telefonszámok mezőnkénti változásával; kereshető, szűrhető futásra, CSV-export; 2 éves megőrzés); az auditnaplóban a futás összegző sora és a fiókok lezárása, újranyitása, e-mail-változása marad.
+- ADM-03: a gépi kulcs elfogadott használata (`api_key.used`) nem naplóesemény; az API kulcsok lista „Utoljára használva” oszlopa mutatja. Az elutasítás és a régi kulcsos használat továbbra is naplózott.
+
+**Frissítés előtt:** két migráció (`sync_run_changes` tábla; `last_seen_at` oszlop a munkatársi és ügyfélfiókokon). Az első éjjeli `hdid:prune` futások a 150 napnál régebbi auditbejegyzéseket archívumfájlba viszik (futásonként legfeljebb 120 napot): ha a régi bejegyzéseket az adatbázisban kell tartani, a frissítés előtt emelje a „Auditnapló az adatbázisban (nap)” értékét. A letöltött `env.example` mostantól Valkey-t használ munkamenetre, gyorsítótárra és sorra (`COMPOSE_PROFILES=db,redis`, `*=redis`), és az 5k profilt választja (`COMPOSE_FILE`); meglévő telepítés `.env`-je változatlanul működik, az áttérés a Valkey-re és egy profilra választható (telepítési útmutató 15. fejezet). Új, választható kulcsok: `HDID_SIZING_PROFILE`, `COMPOSE_FILE`, `OPENHDID_NFS_SERVER`, `OPENHDID_NFS_PATH`. A `docker compose run --rm --no-deps web key` mostantól `APP_KEY=…` és `REDIS_PASSWORD=…` sort ír ki.
+
+Részletek:
+- A vezérlőpult számlálói az azonos nézetű ügyintézők között közös gyorsítótárból jönnek (frissítési időnként egy lekérdezés-sorozat); a „Feladatsor” kártya Valkey mellett is mutatja a várakozó feladatok számát.
+- A `worker` szerep PHP-időkorlát nélkül fut (a feladat saját 1200 s-os korlátja marad), a `migrate` Valkey mellett zár alatt (`--isolated`), ezért két alkalmazásgép egyszerre indulhat.
+- A kiadás ellenőrzése a profilokat (`docker compose config`) és a Kubernetes-overlayeket (kustomize, kubeconform) is ellenőrzi.
+- Javítás (kétlépcsős belépés): a küldött SMS- vagy e-mailes kód élettartamát a hibás próbák nem hosszabbítják meg; a kód a kiküldéstől számított 10 percig érvényes.
+- Platform: a MariaDB 12.3.3 image frissített digestje; ellenőrző eszközök kustomize 5.8.3 és kubeconform 0.8.0.
+- A dokumentumok verziója 1.7.0.
+
+### English
+Rule changes in one sentence (with the specification identifiers):
+- ÜZ-03.2: three usage profiles (`5k`, `10k`, `20k`) with ready deployment descriptions: Compose override files `profiles/5k` and `profiles/10k` (selected by `COMPOSE_FILE` in `.env`), a Kustomize base and overlays under `kubernetes/`; above 5,000 clients two application hosts behind a load balancer with an external MariaDB, Valkey and NFS (high availability), above 10,000 Kubernetes. The new "Capacity" tile of the system status shows the accounts active in the last 15 minutes, today's peak and the database connections, measured against the profile's design point (`HDID_SIZING_PROFILE`; yellow at 80 %).
+- ADM-03.2: a hot window of the audit log in the database (Settings › Retention › "Audit hot days", default 150, at least 30); the nightly `hdid:prune` moves older days into compressed daily JSON Lines files on the `storage` volume with a SHA-256 sidecar and deletes them only afterwards; a new Audit archive page with (audited) downloads, an "Audit log" status tile, and the event counts of the last 7 days on the audit log page.
+- NYT-01.2: the per-record changes of an EMD sync no longer go to the audit log but to the new EMD changes page (one row per run and record with the field-level changes of the record, the account and the phone numbers; searchable, filterable by run, CSV export; kept for 2 years); the audit log keeps the run's summary entry and the account closures, reopenings and e-mail changes.
+- ADM-03: an accepted API key use (`api_key.used`) is no longer an audit event; the "Last used" column of the API keys list shows it. Rejections and legacy-key uses are still audited.
+
+**Before upgrading:** two migrations (the `sync_run_changes` table; a `last_seen_at` column on staff and client accounts). The first nightly `hdid:prune` runs move audit entries older than 150 days into archive files (at most 120 days per run): raise "Audit hot days" before upgrading if older entries must stay in the database. The downloaded `env.example` now uses Valkey for sessions, cache and queue (`COMPOSE_PROFILES=db,redis`, `*=redis`) and selects the 5k profile (`COMPOSE_FILE`); an existing installation's `.env` keeps working unchanged, moving to Valkey and a profile is optional (installation guide, chapter 15). New optional keys: `HDID_SIZING_PROFILE`, `COMPOSE_FILE`, `OPENHDID_NFS_SERVER`, `OPENHDID_NFS_PATH`. `docker compose run --rm --no-deps web key` now prints an `APP_KEY=…` and a `REDIS_PASSWORD=…` line.
+
+Details:
+- The dashboard counters come from a cache shared by everyone with the same view (one round of queries per poll interval); the "Queue" tile shows the pending jobs with Valkey as well.
+- The `worker` role runs without a PHP time limit (the job's own 1200 s limit remains), `migrate` runs under a lock with Valkey (`--isolated`), so two application hosts may start at once.
+- The release checks validate the profiles (`docker compose config`) and the Kubernetes overlays (kustomize, kubeconform).
+- Fix (two-factor sign-in): wrong tries no longer extend the lifetime of a sent SMS or e-mail code; a code is valid for 10 minutes from sending.
+- Platform: refreshed digest of the MariaDB 12.3.3 image; checking tools kustomize 5.8.3 and kubeconform 0.8.0.
+- The documents carry version 1.7.0.
+
 ## [1.6.0] – 2026-10-21
 
 ### Magyar

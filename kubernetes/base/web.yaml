@@ -1,0 +1,134 @@
+# Portál, munkatársi panel és gépi API-k: nginx + PHP-FPM egy konténerben, a 8080-as porton
+# (OPENHDID_TLS=off, a TLS az ingressen zárul le). A replikaszámot és az erőforrásokat az overlay
+# adja; a HPA a CPU szerint skáláz az overlay határai között.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openhdid-web
+  labels:
+    app.kubernetes.io/component: web
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: web
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 82
+        runAsGroup: 82
+        fsGroup: 82
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: web
+      containers:
+        - name: web
+          image: ghcr.io/adamfhun/openhdid
+          args: [web]
+          ports:
+            - {name: http, containerPort: 8080}
+          envFrom:
+            - secretRef:
+                name: openhdid-env
+          env:
+            - {name: OPENHDID_TLS, value: "off"}
+            - {name: OPENHDID_FPM_PM, value: static}
+            - {name: OPENHDID_FPM_MAX_CHILDREN, value: "12"}
+            - {name: OPENHDID_FPM_START_SERVERS, value: "12"}
+            - {name: OPENHDID_FPM_MIN_SPARE_SERVERS, value: "4"}
+            - {name: OPENHDID_FPM_MAX_SPARE_SERVERS, value: "12"}
+          startupProbe:
+            exec:
+              command: [/usr/local/bin/openhdid, healthcheck]
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            exec:
+              command: [/usr/local/bin/openhdid, healthcheck]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: [/usr/local/bin/openhdid, healthcheck]
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {memory: 1536Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: storage, mountPath: /app/storage}
+            - {name: ca, mountPath: /etc/openhdid/ca, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {medium: Memory, sizeLimit: 256Mi}
+        - name: storage
+          persistentVolumeClaim:
+            claimName: openhdid-storage
+        - name: ca
+          configMap:
+            name: openhdid-ca
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openhdid-web
+  labels:
+    app.kubernetes.io/component: web
+spec:
+  selector:
+    app.kubernetes.io/component: web
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: openhdid-web
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: openhdid-web
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: openhdid-web
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: web

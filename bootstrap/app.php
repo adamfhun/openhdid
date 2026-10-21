@@ -7,6 +7,7 @@ use App\Http\Middleware\EnsureClientEntitled;
 use App\Http\Middleware\EnsurePrincipal;
 use App\Http\Middleware\EnsureStaffMfa;
 use App\Http\Middleware\SecurityHeaders;
+use App\Http\Middleware\TouchLastSeen;
 use App\Http\Middleware\ValidateCsrfTokenUnlessBearer;
 use App\Localization\SetLocale;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
@@ -32,7 +33,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // before .env and config are loaded, so nothing may be read here.
         $middleware->append(SecurityHeaders::class);
         $middleware->statefulApi();
-        $middleware->web(append: [SetLocale::class, EnforceAuthSessions::class]);
+        $middleware->web(append: [SetLocale::class, EnforceAuthSessions::class, TouchLastSeen::class]);
         // Route-level auth is sorted ahead of the group's tail by priority; the
         // session lifetime and "sign out everywhere" check must run before it.
         $middleware->prependToPriorityList(AuthenticatesRequests::class, EnforceAuthSessions::class);

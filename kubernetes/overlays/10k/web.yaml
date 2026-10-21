@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openhdid-web
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: web
+          env:
+            - {name: HDID_SIZING_PROFILE, value: 10k}
+            - {name: OPENHDID_FPM_MAX_CHILDREN, value: "16"}
+            - {name: OPENHDID_FPM_START_SERVERS, value: "16"}
+            - {name: OPENHDID_FPM_MAX_SPARE_SERVERS, value: "16"}
+          resources:
+            requests: {cpu: "1", memory: 1536Mi}
+            limits: {memory: 2Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openhdid-worker
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: worker
+          env:
+            - {name: HDID_SIZING_PROFILE, value: 10k}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openhdid-sync-worker
+spec:
+  template:
+    spec:
+      containers:
+        - name: sync-worker
+          env:
+            - {name: HDID_SIZING_PROFILE, value: 10k}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openhdid-scheduler
+spec:
+  template:
+    spec:
+      containers:
+        - name: scheduler
+          env:
+            - {name: HDID_SIZING_PROFILE, value: 10k}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: openhdid-web
+spec:
+  minReplicas: 2
+  maxReplicas: 4

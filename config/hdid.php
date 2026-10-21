@@ -63,6 +63,10 @@ return [
     // Release version of the running build, set by the container image; shown on the status page only.
     'version' => env('HDID_VERSION') ?: null,
 
+    // The usage profile the deployment was sized for (5k, 10k, 20k; see the operations
+    // manual): the capacity tile of the system status compares the measured activity with it.
+    'profile' => env('HDID_SIZING_PROFILE') ?: null,
+
     // Public source repository of the running build. When set, the portal and panel footers link to
     // it, which is how a network service offers its source under the AGPL-3.0 (section 13).
     'source_url' => env('HDID_SOURCE_URL') ?: null,

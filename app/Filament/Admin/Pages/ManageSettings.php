@@ -2,6 +2,7 @@
 
 namespace App\Filament\Admin\Pages;
 
+use App\Audit\AuditArchive;
 use App\Auth\Mfa\StaffMfa;
 use App\Auth\Permission;
 use App\Clients\ClientLinks;
@@ -874,8 +875,9 @@ class ManageSettings extends Page implements HasTable
                     SettingKey::QaTypoTolerance => __('Blind check only: how many typos (a letter swapped, missing or extra, or two neighbours swapped) still match, 0–:max. Answers shorter than :short characters must match exactly, and digits always.', ['max' => AnswerMatcher::MAX_TOLERANCE, 'short' => AnswerMatcher::EXACT_BELOW]),
                     SettingKey::SyncMinRowsRatioPercent => __('A run is refused when it reads fewer rows than this share of the previous successful run (0 = off). Protects against a truncated export closing accounts.'),
                     SettingKey::SyncExpectedIntervalHours => __('How often EMD sync is expected to run; the status page fails when no successful run happened in twice this time.'),
-                    SettingKey::RetentionGeneralYears => __('Audit log, identification sessions, calls, outbound messages and EMD sync runs older than this are deleted for good.'),
-                    SettingKey::RetentionShortLivedYears => __('Expired one-time codes and uploaded EMD files older than this are deleted.'),
+                    SettingKey::RetentionGeneralYears => __('Identification sessions, calls, outbound messages, EMD sync runs and the audit archive files older than this are deleted for good.'),
+                    SettingKey::RetentionShortLivedYears => __('Expired one-time codes, uploaded EMD files and the EMD change records of sync runs older than this are deleted.'),
+                    SettingKey::RetentionAuditHotDays => __('Audit entries older than this many days (at least :min) are moved by the nightly task from the database into daily compressed archive files (Audit archive page) and deleted from the database; the archive is kept for the general retention period.', ['min' => AuditArchive::MIN_HOT_DAYS]),
                     SettingKey::CallsStaleAfterHours => __('A call whose end the call center never reported (lost event, PBX restart) is closed as missed after this many hours, so it does not stay on the dashboard forever.'),
                     default => null,
                 }),

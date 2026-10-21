@@ -18,7 +18,7 @@ Az OpenHDID futtatásra kész konténer-image-ként jelenik meg. Ez a repó a te
 
 ## Gyors indítás
 
-Feltételek: Linux-kiszolgáló Docker Engine 27+ és Docker Compose 2.24+ verzióval (Podman nem támogatott), 2 vCPU, 4 GB RAM, egy DNS-név és hozzá TLS-tanúsítvány (teljes lánc és kulcs PEM-formátumban).
+Feltételek: Linux-kiszolgáló Docker Engine 27+ és Docker Compose 2.24+ verzióval (Podman nem támogatott), a használati profil szerinti gép (5k profil: 4 vCPU, 8 GB RAM, 80 GB lemez; kipróbáláshoz 2 vCPU, 4 GB is elég), egy DNS-név és hozzá TLS-tanúsítvány (teljes lánc és kulcs PEM-formátumban).
 
 ```sh
 mkdir openhdid && cd openhdid
@@ -37,8 +37,9 @@ chmod 755 backup.sh
 mkdir -p tls ca
 docker compose pull
 
-# 3. Új alkalmazáskulcs (image nélkül ugyanilyen: echo "base64:$(openssl rand -base64 32)");
-#    a kimenetet a .env APP_KEY sorába írja, és őrizze meg védett helyen is:
+# 3. Új alkalmazáskulcs és Valkey-jelszó (image nélkül: echo "base64:$(openssl rand -base64 32)" és
+#    openssl rand -hex 24); a két kiírt sort a .env APP_KEY és REDIS_PASSWORD sorába írja, az
+#    alkalmazáskulcsot őrizze meg védett helyen is:
 docker compose run --rm --no-deps web key
 
 # 4. A saját tanúsítvány (teljes lánc) és kulcs, a konténer felhasználója (uid 82) számára olvashatóan:
@@ -67,7 +68,7 @@ Ezután lépjen be a `https://<kiszolgáló>/admin` címen, és folytassa az *Ad
 | `scheduler` | `scheduler` | az ütemező, a cron helyett; pontosan egy példány fusson |
 | `migrate` | `migrate` | minden indításkor egyszer: megvárja az adatbázist, migrál |
 | `mariadb` | – | beépített MariaDB LTS (`db` profil); külső kiszolgáló is használható |
-| `valkey` | – | közös gyorsítótár, munkamenet és üzenetsor több webpéldányhoz (`redis` profil) |
+| `valkey` | – | gyorsítótár, munkamenet és üzenetsor (`redis` profil, alapból bekapcsolva); külső Valkey is használható |
 
 - **Beállítások**: a telepítési értékek környezeti változók (`.env`), az üzleti paraméterek a panelen szerkeszthetők és az adatbázisban élnek. Bármely változó fájlból is jöhet (`DB_PASSWORD_FILE=/run/secrets/db_password`), Docker- vagy Kubernetes-titokként. Módosítás után: `docker compose up -d`.
 - **Naplók**: a szabványos kimenetre kerülnek, az access log tömör JSON (URL, lekérdezés és süti nélkül). Olvasás: `docker compose logs -f web`. A Compose-fájl forgatja őket (`json-file` meghajtó, Dockeren és Podmanon is); központi naplógyűjtéshez a konténermotor naplózó-meghajtója kell.
@@ -100,7 +101,7 @@ Nem privilegizált felhasználóként (uid 82) fut, csak olvasható gyökér-fá
 Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz. A `v` a telepített verzió (a `.env` `OPENHDID_VERSION` értéke):
 
 ```sh
-v=1.6.0
+v=1.7.0
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -109,20 +110,19 @@ cosign verify ghcr.io/adamfhun/openhdid:$v \
 
 Az aláírás ellenőrzéséhez cosign 3 vagy újabb kell. Az image-ek a Sigstore-csomag formátumban vannak aláírva, ezt a cosign 2 nem keresi, és „no signatures found” hibát ad.
 
-## Skálázás
+## Használati profilok és skálázás
 
-Egy kiszolgáló az alapszolgáltatásokkal néhány ezer ügyfelet és napi több ezer hívást kiszolgál. Nagyobb terheléshez:
+A telepítés három használati profil egyikére méretezhető; a profilt a `.env` választja ki, a mérete a Rendszerállapot Kapacitás kártyáján látszik (`HDID_SIZING_PROFILE`), amely a mért aktív fiókok csúcsát a profil tervezett értékéhez méri, és 80 %-nál jelez.
 
-1. Emelje a web szolgáltatás `OPENHDID_FPM_MAX_CHILDREN` értékét, és adjon több memóriát a MariaDB-nek (`OPENHDID_DB_BUFFER_POOL`).
-2. A munkamenet, a gyorsítótár és az üzenetsor kerüljön Valkey-re (`COMPOSE_PROFILES=db,redis`, `CACHE_STORE=redis`, `SESSION_DRIVER=redis`, `QUEUE_CONNECTION=redis`), és indítson több feldolgozót.
-3. Több webpéldány terheléselosztó mögött:
-   - ott `OPENHDID_TLS=off`, a `TRUSTED_PROXIES` a terheléselosztó címe;
-   - a `storage` kötet közös tárhelyen;
-   - `APP_MAINTENANCE_DRIVER=cache`;
-   - az ütemezőből továbbra is pontosan egy fusson.
-4. Az adatbázis kerüljön menedzselt vagy replikált MariaDB-re.
+| Profil | Ügyfél (egyidejű portálhasználó) | Topológia | Fájl |
+|---|---|---|---|
+| `5k` | 5 000 (250–400) | egy kiszolgáló, 4 vCPU / 8 GB, beépített MariaDB és Valkey, 2 feldolgozó | `profiles/5k/compose.yaml` (`COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) |
+| `10k` | 10 000 (500–800) | két alkalmazásgép terheléselosztó mögött (magas rendelkezésre állás), külső MariaDB és Valkey, NFS a `storage` kötetnek | `profiles/10k/compose.yaml` mindkét gépen (`COMPOSE_PROFILES=primary` csak az egyiken), vagy `kubernetes/overlays/10k` |
+| `20k` | 20 000 (1 000–1 600) | Kubernetes: web 3–6 pod, 3 feldolgozó, menedzselt MariaDB és Valkey, RWX kötet | `kubernetes/overlays/20k` (`kubectl apply -k`) |
 
-A méretezést, a Kubernetes-megfeleltetést és a skálázás előtti mérést az üzemeltetési kézikönyv írja le.
+Minden profil 20–30 ügyintézővel számol; a munkamenet, a gyorsítótár és az üzenetsor mindhárom profilban Valkey-n fut. Két alkalmazásgép vagy Kubernetes esetén a TLS a terheléselosztón vagy az ingressen zárul le (`OPENHDID_TLS=off`, `TRUSTED_PROXIES` a terheléselosztó címe), a `storage` kötet közös, az ütemezőből pontosan egy fut, a migráció a közös Valkey zárja alatt egyszerre csak egy gépen. A terheléselosztó élő-próbája a `/up`, a felügyeleté a `/health`.
+
+A profilok méretezését, a Kubernetes-telepítés lépéseit és a skálázás előtti mérést a telepítési útmutató és az üzemeltetési kézikönyv írja le.
 
 ## Dokumentáció
 

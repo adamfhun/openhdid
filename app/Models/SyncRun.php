@@ -9,6 +9,7 @@ use Database\Factories\SyncRunFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 #[Fillable(['source', 'status', 'file_name', 'started_at', 'finished_at', 'stats', 'skipped_rows', 'error', 'triggered_by_user_id', 'dry_run'])]
@@ -31,5 +32,11 @@ class SyncRun extends Model
             'skipped_rows' => 'array',
             'dry_run' => 'boolean',
         ];
+    }
+
+    /** @return HasMany<SyncRunChange, $this> */
+    public function changes(): HasMany
+    {
+        return $this->hasMany(SyncRunChange::class, 'sync_run_id');
     }
 }

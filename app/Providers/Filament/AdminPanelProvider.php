@@ -20,6 +20,7 @@ use App\Filament\Pages\Auth\MfaChallenge;
 use App\Filament\Pages\Auth\MfaSetup;
 use App\Http\Middleware\EnforceAuthSessions;
 use App\Http\Middleware\EnsureStaffMfa;
+use App\Http\Middleware\TouchLastSeen;
 use App\Localization\SetLocale;
 use App\Models\User;
 use Filament\Actions\Action;
@@ -128,6 +129,9 @@ class AdminPanelProvider extends PanelProvider
                 Authenticate::class,
                 // The second factor on every panel request, Livewire updates included.
                 EnsureStaffMfa::class,
+                // The panel has its own stack, not the web group: the activity stamp
+                // of the capacity tile has to be listed here as well.
+                TouchLastSeen::class,
             ], isPersistent: true)
             ->authenticatedRoutes(function (): void {
                 Route::get('mfa', MfaChallenge::class)->name('mfa.challenge');

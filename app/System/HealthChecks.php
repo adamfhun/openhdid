@@ -2,6 +2,7 @@
 
 namespace App\System;
 
+use App\Audit\AuditArchive;
 use App\Auth\AccountLogin;
 use App\Auth\Mfa\StaffMfa;
 use App\Auth\Oidc\OidcProvider;
@@ -14,6 +15,7 @@ use App\Enums\PrincipalType;
 use App\Enums\SyncRunStatus;
 use App\Jobs\SendOutboundMessage;
 use App\Models\ApiKey;
+use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\ExternalRecord;
 use App\Models\OutboundMessage;
@@ -30,6 +32,7 @@ use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Throwable;
@@ -51,6 +54,7 @@ class HealthChecks
         private readonly Http $http,
         private readonly Settings $settings,
         private readonly Retention $retention,
+        private readonly AuditArchive $archive,
     ) {}
 
     public function premiumOnly(): Check
@@ -167,6 +171,8 @@ class HealthChecks
             'premium_only' => [__('Premium clients only'), $this->premiumOnly(...)],
             'storage' => [__('Storage'), $this->storage(...)],
             'retention' => [__('Data retention'), $this->retention(...)],
+            'audit' => [__('Audit log'), $this->auditLog(...)],
+            'capacity' => [__('Capacity'), $this->capacity(...)],
         ];
 
         // One broken dependency (say, the database) must not turn the whole
@@ -212,6 +218,8 @@ class HealthChecks
             'oidc' => __('Red: a provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*). Either fill in the configuration or switch the provider off, otherwise the login button leads to an error. Yellow: HDID_ADFS_DEBUG is on, so every ADFS sign-in writes its decoded tokens to the application log; meant for setting up the ADFS claims only, set it to false afterwards. The ADFS claims compared with the account e-mail address come from USER_/CLIENT_ADFS_EMAIL_CLAIM; why a sign-in was refused is in the audit log (login.rejected). After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM.'),
             'storage' => __('Red: the public disk is not writable, fix the permissions of storage/app/public. Yellow: run "php artisan storage:link" on the server, otherwise uploaded logos and images do not show.'),
             'retention' => __('The daily "hdid:prune" task has not run for days. It runs through the scheduler, so check that tile first; run "php artisan hdid:prune" by hand to catch up.'),
+            'audit' => __('The database keeps the audit entries of the last N days (Settings › Retention › Audit hot days); the nightly "hdid:prune" task moves older days into compressed daily files under storage/app/private/audit-archive with a SHA-256 sidecar, and deletes them from the table. Yellow: entries older than the window are still in the database, so the task has not run (see the Scheduler and Data retention tiles) or could not write the storage disk; run "php artisan hdid:prune" by hand, it archives at most 120 days per run. The files are listed and downloadable on the Audit archive page and go into the backups with the storage volume.'),
+            'capacity' => __('Accounts active in the last 15 minutes (any request they made), today\'s peak and, on MariaDB, the connections in use against max_connections. With HDID_SIZING_PROFILE set (5k, 10k, 20k) the tile compares the peak with the profile\'s design point and turns yellow at 80 %: time to step up to the next profile (more PHP-FPM processes and workers, Valkey, a second application server or Kubernetes), see the operations manual. Without a profile the numbers are shown for information only.'),
             default => null,
         };
     }
@@ -266,6 +274,9 @@ class HealthChecks
                 $pending = DB::table((string) config('queue.connections.database.table', 'jobs'))->count();
                 $oldestTs = DB::table((string) config('queue.connections.database.table', 'jobs'))->min('created_at');
                 $oldest = $oldestTs ? Carbon::createFromTimestamp((int) $oldestTs) : null;
+            } else {
+                // Redis and the other drivers know their length, not the age of the oldest job.
+                $pending = Queue::connection($connection)->size() + ($this->syncQueueName() !== 'default' ? Queue::connection($connection)->size($this->syncQueueName()) : 0);
             }
             $failed = DB::table((string) config('queue.failed.table', 'failed_jobs'))->count();
         } catch (Throwable) {
@@ -620,6 +631,113 @@ class HealthChecks
         $detail = __('last run :when · keeps :g years, short-lived :s years', ['when' => $last->diffForHumans(), 'g' => $this->settings->int(SettingKey::RetentionGeneralYears), 's' => $this->settings->int(SettingKey::RetentionShortLivedYears)]);
 
         return $last->lt(now()->subDays(3)) ? Check::warn('retention', $label, $detail) : Check::ok('retention', $label, $detail);
+    }
+
+    private function syncQueueName(): string
+    {
+        return (string) config('hdid.sync.queue', 'default');
+    }
+
+    /**
+     * Hot and cold audit log: rows in the database against the hot window,
+     * and the archive files written so far.
+     */
+    public function auditLog(): Check
+    {
+        $label = __('Audit log');
+        $hotDays = $this->archive->hotDays();
+        $cutoff = $this->archive->cutoff();
+        $rows = AuditLog::query()->count();
+        $oldestRaw = AuditLog::query()->min('created_at');
+        $oldest = $oldestRaw ? Carbon::parse($oldestRaw) : null;
+        $summary = $this->archive->summary();
+        $last = $this->archive->lastRunAt();
+
+        $parts = [
+            __(':n entries in the database, :days days kept', ['n' => number_format($rows, 0, ',', ' '), 'days' => $hotDays]),
+            __(':files archive files, :size', ['files' => $summary['files'], 'size' => $this->humanBytes($summary['bytes'])]),
+            $last === null ? __('archiving has not run yet') : __('archived :when', ['when' => $last->diffForHumans()]),
+        ];
+        $detail = implode(' · ', $parts);
+
+        // Three days of grace: the nightly task may have been skipped once.
+        if ($oldest !== null && $oldest->lt($cutoff->subDays(3))) {
+            return Check::warn('audit', $label, $detail.' · '.__('entries from :date are still waiting to be archived', ['date' => $oldest->format(HuDate::DATE)]));
+        }
+
+        return Check::ok('audit', $label, $detail);
+    }
+
+    /**
+     * Activity against the sizing profile: accounts seen in the last quarter
+     * of an hour, today's peak of that number, database connections.
+     */
+    public function capacity(): Check
+    {
+        $label = __('Capacity');
+        $since = now()->subMinutes(15);
+        $active = Client::query()->where('last_seen_at', '>=', $since)->count()
+            + User::query()->where('last_seen_at', '>=', $since)->count();
+
+        $peakKey = 'hdid.capacity.peak.'.today()->toDateString();
+        $peak = max((int) $this->cache->get($peakKey, 0), $active);
+        $this->cache->put($peakKey, $peak, now()->addDays(2));
+
+        $parts = [
+            __(':n accounts active in the last 15 minutes', ['n' => $active]),
+            __('peak today :n', ['n' => $peak]),
+        ];
+        $warn = false;
+
+        $connections = $this->databaseConnections();
+        if ($connections !== null) {
+            $parts[] = __('database connections :used / :max', ['used' => $connections['used'], 'max' => $connections['max']]);
+            $warn = $warn || ($connections['max'] > 0 && $connections['used'] / $connections['max'] >= 0.8);
+        }
+
+        $profile = SizingProfile::current();
+        if ($profile === null) {
+            $parts[] = __('no sizing profile set (HDID_SIZING_PROFILE)');
+        } else {
+            $designed = $profile->designedConcurrency();
+            $parts[] = __(':profile · designed for :n simultaneous accounts', ['profile' => $profile->label(), 'n' => $designed]);
+            $warn = $warn || $peak >= 0.8 * $designed;
+        }
+
+        $detail = implode(' · ', $parts);
+
+        return $warn ? Check::warn('capacity', $label, $detail) : Check::ok('capacity', $label, $detail);
+    }
+
+    /**
+     * @return array{used: int, max: int}|null null when the driver has no such counters (SQLite)
+     */
+    private function databaseConnections(): ?array
+    {
+        if (! in_array(DB::connection()->getDriverName(), ['mysql', 'mariadb'], true)) {
+            return null;
+        }
+
+        try {
+            $used = DB::selectOne("SHOW STATUS LIKE 'Threads_connected'");
+            $max = DB::selectOne("SHOW VARIABLES LIKE 'max_connections'");
+
+            return $used === null || $max === null ? null : ['used' => (int) $used->Value, 'max' => (int) $max->Value];
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function humanBytes(int $bytes): string
+    {
+        if ($bytes >= 1_073_741_824) {
+            return number_format($bytes / 1_073_741_824, 1, ',', ' ').' GB';
+        }
+        if ($bytes >= 1_048_576) {
+            return number_format($bytes / 1_048_576, 1, ',', ' ').' MB';
+        }
+
+        return number_format($bytes / 1024, 0, ',', ' ').' kB';
     }
 
     private function heartbeat(string $key): ?Carbon

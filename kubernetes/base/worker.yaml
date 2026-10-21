@@ -1,0 +1,58 @@
+# E-mail, SMS és életjel: a default sor feldolgozói. A replikaszám a sor hossza szerint (az
+# üzenetek több példány mellett is egyszer mennek ki); az overlay adja.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openhdid-worker
+  labels:
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: worker
+    spec:
+      automountServiceAccountToken: false
+      # A futó job befejezését várja meg (queue:work --max-time és a jobok saját időkorlátja).
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 82
+        runAsGroup: 82
+        fsGroup: 82
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: ghcr.io/adamfhun/openhdid
+          args: [worker, default]
+          envFrom:
+            - secretRef:
+                name: openhdid-env
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 100m, memory: 192Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: storage, mountPath: /app/storage}
+            - {name: ca, mountPath: /etc/openhdid/ca, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {medium: Memory, sizeLimit: 128Mi}
+        - name: storage
+          persistentVolumeClaim:
+            claimName: openhdid-storage
+        - name: ca
+          configMap:
+            name: openhdid-ca
+            optional: true

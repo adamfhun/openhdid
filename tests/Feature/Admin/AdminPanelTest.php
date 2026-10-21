@@ -52,7 +52,7 @@ beforeEach(function (): void {
 
 it('renders every admin index page', function (string $path): void {
     $this->get('/admin/'.$path)->assertOk();
-})->with(['', 'accounts/users', 'accounts/roles', 'clients', 'system/external-records', 'system/sync-runs', 'system/api-keys', 'system/status', 'questions', 'id-sessions', 'calls', 'system/audit-logs', 'system/settings', 'content/news-posts', 'content/message-templates', 'content/outbound-messages', 'verify-code', 'search-clients', 'reports', 'shared-phone-numbers']);
+})->with(['', 'accounts/users', 'accounts/roles', 'clients', 'system/external-records', 'system/sync-runs', 'system/api-keys', 'system/status', 'questions', 'id-sessions', 'calls', 'system/audit-logs', 'system/settings', 'content/news-posts', 'content/message-templates', 'content/outbound-messages', 'verify-code', 'search-clients', 'reports', 'shared-phone-numbers', 'system/sync-changes', 'system/audit-archive']);
 
 it('hides admin resources from an agent', function (): void {
     $agent = User::factory()->withRole(Role::Agent)->create();

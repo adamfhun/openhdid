@@ -1,0 +1,56 @@
+# OpenHDID – 10k használati profil: két alkalmazásgép terheléselosztó mögött (magas
+# rendelkezésre állás), legfeljebb 10 000 ügyfél (500–800 egyidejű portálhasználó), 20–30
+# ügyintéző. Kiegészítő fájl a compose.yaml mellé, MINDKÉT alkalmazásgépen; a .env választja ki:
+#
+#   COMPOSE_FILE=compose.yaml:profiles/10k/compose.yaml
+#   COMPOSE_PROFILES=primary          # csak az egyik gépen: ütemező és ügyféltörzs-feldolgozó
+#   COMPOSE_PROFILES=                 # a másik gépen: web és worker
+#   OPENHDID_TLS=off                  # a TLS a terheléselosztón zárul le
+#   TRUSTED_PROXIES=<a terheléselosztó címe>
+#   DB_HOST=<külső MariaDB>  REDIS_HOST=<külső Valkey>  REDIS_PASSWORD=…
+#   OPENHDID_NFS_SERVER=<NFS-kiszolgáló>  OPENHDID_NFS_PATH=<exportált útvonal>
+#
+# Gépek: 2 × (4 vCPU, 8 GB RAM) alkalmazásgép; külső MariaDB (elsődleges + replika, 4 vCPU,
+# 16 GB, innodb_buffer_pool_size 4–8G, max_connections 200) és Valkey (1 GB, AOF); NFS a közös
+# storage kötetnek (arculati képek, feltöltések, auditarchívum). A beépített mariadb és valkey
+# szolgáltatás itt nem indul (a db és a redis compose-profil nincs megadva). A migrációt mindkét
+# gép futtatja, a közös Valkey zárja alatt egyszerre csak egy.
+#
+# Terheléselosztó: élő-próba a http://<gép>:80/up címen, a /health a felügyeleté (30 kérés/perc).
+# Részletek: docs/openhdid-telepitesi-utmutato.pdf és docs/openhdid-uzemeltetesi-kezikonyv.pdf.
+
+services:
+  web:
+    environment:
+      HDID_SIZING_PROFILE: 10k
+      OPENHDID_FPM_PM: ${OPENHDID_FPM_PM:-static}
+      OPENHDID_FPM_MAX_CHILDREN: ${OPENHDID_FPM_MAX_CHILDREN:-16}
+      OPENHDID_FPM_START_SERVERS: ${OPENHDID_FPM_START_SERVERS:-16}
+      OPENHDID_FPM_MIN_SPARE_SERVERS: ${OPENHDID_FPM_MIN_SPARE_SERVERS:-4}
+      OPENHDID_FPM_MAX_SPARE_SERVERS: ${OPENHDID_FPM_MAX_SPARE_SERVERS:-16}
+
+  worker:
+    environment:
+      HDID_SIZING_PROFILE: 10k
+
+  # Pontosan egy példány az egész telepítésben: az elsődleges gépen (COMPOSE_PROFILES=primary).
+  sync-worker:
+    profiles: [primary]
+    environment:
+      HDID_SIZING_PROFILE: 10k
+
+  scheduler:
+    profiles: [primary]
+    environment:
+      HDID_SIZING_PROFILE: 10k
+
+# A storage kötet mindkét gépen ugyanaz az NFS-export: a feltöltött képek, a Livewire ideiglenes
+# fájljai, a szinkronfájlok és az auditarchívum így mindkét webpéldányból elérhetők. Az NFS
+# exportja a konténer felhasználójának (uid 82) legyen írható (no_root_squash nem szükséges).
+volumes:
+  storage:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=${OPENHDID_NFS_SERVER:?Set OPENHDID_NFS_SERVER in .env},nfsvers=4,rw,soft,timeo=30
+      device: ":${OPENHDID_NFS_PATH:?Set OPENHDID_NFS_PATH in .env}"

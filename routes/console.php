@@ -8,7 +8,6 @@ use App\Jobs\QueueHeartbeat;
 use App\Jobs\SendOutboundMessage;
 use App\Models\OutboundMessage;
 use App\System\HealthChecks;
-use App\System\Retention;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schedule;
 
@@ -45,11 +44,13 @@ Schedule::call(fn () => app(CallCenterService::class)->expireStale())
     ->name('hdid:expire-stale-calls')
     ->withoutOverlapping();
 
-Schedule::call(fn () => app(Retention::class)->prune())
+// A command, not a closure: the audit archiving inside may take minutes on a
+// large installation, and the scheduler must not wait for it.
+Schedule::command('hdid:prune')
     ->dailyAt('03:30')
-    ->name('hdid:prune')
     ->withoutOverlapping()
-    ->onOneServer();
+    ->onOneServer()
+    ->runInBackground();
 
 Schedule::call(function (): void {
     Cache::put(HealthChecks::SCHEDULER_HEARTBEAT_KEY, now()->toIso8601String(), now()->addHours(6));

@@ -50,8 +50,11 @@ it('prunes business records after the general period and throwaway artefacts aft
 
     $removed = app(Retention::class)->prune();
 
-    expect($removed)->toMatchArray(['id_sessions' => 1, 'calls' => 1, 'outbound_messages' => 1, 'sync_runs' => 1, 'one_time_codes' => 1, 'sync_uploads' => 1])
-        ->and($removed['audit_log'])->toBeGreaterThanOrEqual(1)
+    // The six-year-old audit entry left the table for an archive file before
+    // the general-period delete ran, so the archive counts it, not the delete.
+    expect($removed)->toMatchArray(['id_sessions' => 1, 'calls' => 1, 'outbound_messages' => 1, 'sync_runs' => 1, 'one_time_codes' => 1, 'sync_uploads' => 1, 'audit_log' => 0])
+        ->and($removed['audit_archived'])->toBeGreaterThanOrEqual(1)
+        ->and($removed['audit_archive_files'])->toBe(1, 'a six-year-old archive file is past the general period as well')
         ->and(IdSession::query()->withTrashed()->find($oldSession->id))->toBeNull()
         ->and(IdSession::query()->find($freshSession->id))->not->toBeNull()
         ->and(Call::query()->withTrashed()->find($oldCall->id))->toBeNull()
@@ -159,10 +162,11 @@ it('creates an api key from the command line and prints it once', function (): v
     $key = ApiKey::query()->where('name', 'PBX')->first();
     expect($key->scope)->toBe(ApiKeyScope::CallCenter);
 
-    $key->touchLastUsed('api.v1.callcenter.lookup');
-    $key->touchLastUsed('api.v1.callcenter.lookup');
-    expect(AuditLog::query()->where('event', 'api_key.used')->where('subject_id', $key->id)->count())->toBe(1)
-        ->and(AuditLog::query()->where('event', 'api_key.used')->first()->context)->toMatchArray(['scope' => 'callcenter', 'route' => 'api.v1.callcenter.lookup']);
+    // The use is stamped on the key only; an audit row per minute per key told nothing more.
+    $key->touchLastUsed();
+    $key->touchLastUsed();
+    expect($key->fresh()->last_used_at)->not->toBeNull()
+        ->and(AuditLog::query()->where('event', 'api_key.used')->count())->toBe(0);
 });
 
 it('sends smoke-test messages without touching a client', function (): void {

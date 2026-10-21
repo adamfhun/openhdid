@@ -1,0 +1,16 @@
+# OpenHDID – 10k profil Kubernetesen (a két gépes Compose-telepítés alternatívája): legfeljebb
+# 10 000 ügyfél, 500–800 egyidejű portálhasználó, 20–30 ügyintéző. Web 2–4 pod, 2 feldolgozó;
+# menedzselt MariaDB (4 vCPU, 16 GB) és Valkey (1 GB).
+#
+#   kubectl apply -k kubernetes/overlays/10k
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - path: web.yaml
+  - path: ingress.yaml
+
+# A saját kiszolgálónév: írja át mindkét helyen (ingress.yaml), vagy használjon saját overlayt.

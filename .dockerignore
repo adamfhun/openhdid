@@ -17,3 +17,5 @@ storage/*
 bootstrap/cache/*
 *.md
 compose.yaml
+profiles
+kubernetes

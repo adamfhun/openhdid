@@ -1,0 +1,25 @@
+# Bejárat: a TLS itt zárul le (openhdid-tls Secret), a web a 8080-as porton HTTP-t kap
+# (OPENHDID_TLS=off). A kiszolgálónév az APP_URL-ből: az overlay írja át a sajátjára. Az
+# ingress-vezérlő továbbított fejléceit (X-Forwarded-*) az alkalmazás csak a TRUSTED_PROXIES
+# listában szereplő címekről fogadja el: a .env-ben a vezérlő pod-hálózatának tartománya álljon.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openhdid
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 12m
+spec:
+  tls:
+    - hosts: [hdid.example.org]
+      secretName: openhdid-tls
+  rules:
+    - host: hdid.example.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: openhdid-web
+                port:
+                  name: http

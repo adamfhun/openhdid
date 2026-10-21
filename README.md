@@ -18,7 +18,7 @@ OpenHDID is published as a ready-to-run container image. This repository holds t
 
 ## Quick start
 
-Requirements: a Linux host with Docker Engine 27+ and Docker Compose 2.24+ (Podman is not supported), 2 vCPU, 4 GB RAM, a DNS name and a TLS certificate for it (full chain and key in PEM).
+Requirements: a Linux host with Docker Engine 27+ and Docker Compose 2.24+ (Podman is not supported), sized to the usage profile (5k profile: 4 vCPU, 8 GB RAM, 80 GB disk; 2 vCPU and 4 GB are enough for a trial), a DNS name and a TLS certificate for it (full chain and key in PEM).
 
 ```sh
 mkdir openhdid && cd openhdid
@@ -37,8 +37,9 @@ chmod 755 backup.sh
 mkdir -p tls ca
 docker compose pull
 
-# 3. A new application key (without the image: echo "base64:$(openssl rand -base64 32)");
-#    paste the output into APP_KEY in .env and keep a protected copy:
+# 3. A new application key and a Valkey password (without the image: echo "base64:$(openssl rand -base64 32)"
+#    and openssl rand -hex 24); paste the two printed lines into APP_KEY and REDIS_PASSWORD in .env,
+#    and keep a protected copy of the application key:
 docker compose run --rm --no-deps web key
 
 # 4. Your certificate (full chain) and key, readable by the container user (uid 82):
@@ -67,7 +68,7 @@ Then sign in at `https://<your host>/admin` and continue with *Administration �
 | `scheduler` | `scheduler` | the Laravel scheduler, replaces cron; run exactly one |
 | `migrate` | `migrate` | one-off at every start: waits for the database, applies migrations |
 | `mariadb` | – | bundled MariaDB LTS (profile `db`); an external server works as well |
-| `valkey` | – | shared cache, sessions and queue for several web instances (profile `redis`) |
+| `valkey` | – | cache, sessions and queue (profile `redis`, on by default); an external Valkey works too |
 
 - **Configuration** lives in environment variables (`.env`); business settings are edited in the panel and stored in the database. Any variable can come from a file instead (`DB_PASSWORD_FILE=/run/secrets/db_password`) for Docker or Kubernetes secrets. After a change: `docker compose up -d`.
 - **Logs** go to standard output in a compact JSON access log (no URLs, queries or cookies): `docker compose logs -f web`. The Compose file rotates them (`json-file` driver, on Docker and Podman alike); ship them to your log platform with the engine's logging driver.
@@ -94,7 +95,7 @@ The image contains only what runs the application: Alpine Linux, PHP-FPM with th
 Every image is signed and carries a build provenance and an SBOM attestation. Set `v` to the version you install (the `OPENHDID_VERSION` of your `.env`):
 
 ```sh
-v=1.6.0
+v=1.7.0
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -103,16 +104,19 @@ cosign verify ghcr.io/adamfhun/openhdid:$v \
 
 The signature check needs cosign 3 or later. The images are signed in the Sigstore bundle format, which cosign 2 does not look for: it reports "no signatures found".
 
-## Scaling
+## Usage profiles and scaling
 
-One host with the default services serves a few thousand clients and several thousand calls a day. For more load:
+A deployment is sized to one of three usage profiles; `.env` selects the profile, and the Capacity tile of the system status (`HDID_SIZING_PROFILE`) compares the measured peak of active accounts with the profile's design point, turning yellow at 80 %.
 
-1. Raise `OPENHDID_FPM_MAX_CHILDREN` on the web service and give MariaDB more memory (`OPENHDID_DB_BUFFER_POOL`).
-2. Switch sessions, cache and queue to Valkey (`COMPOSE_PROFILES=db,redis`, `CACHE_STORE=redis`, `SESSION_DRIVER=redis`, `QUEUE_CONNECTION=redis`) and add workers.
-3. Run several web instances behind a load balancer (`OPENHDID_TLS=off` there, `TRUSTED_PROXIES` set to the balancer), with the `storage` volume on shared storage and `APP_MAINTENANCE_DRIVER=cache`. Keep exactly one scheduler.
-4. Move the database to a managed or replicated MariaDB.
+| Profile | Clients (concurrent portal users) | Topology | Files |
+|---|---|---|---|
+| `5k` | 5,000 (250–400) | one host, 4 vCPU / 8 GB, bundled MariaDB and Valkey, 2 workers | `profiles/5k/compose.yaml` (`COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) |
+| `10k` | 10,000 (500–800) | two application hosts behind a load balancer (high availability), external MariaDB and Valkey, NFS for the `storage` volume | `profiles/10k/compose.yaml` on both hosts (`COMPOSE_PROFILES=primary` on one of them), or `kubernetes/overlays/10k` |
+| `20k` | 20,000 (1,000–1,600) | Kubernetes: 3–6 web pods, 3 workers, managed MariaDB and Valkey, RWX volume | `kubernetes/overlays/20k` (`kubectl apply -k`) |
 
-The operations manual explains the sizing, the Kubernetes mapping and how to measure before scaling.
+Every profile assumes 20–30 agents; sessions, cache and queue run on Valkey in all three. With two hosts or Kubernetes, TLS ends at the load balancer or the ingress (`OPENHDID_TLS=off`, `TRUSTED_PROXIES` set to the balancer), the `storage` volume is shared, exactly one scheduler runs, and the migration runs on one host at a time under the shared Valkey lock. The load balancer's liveness probe is `/up`, monitoring uses `/health`.
+
+The installation guide and the operations manual describe the sizing of the profiles, the Kubernetes deployment and how to measure before scaling.
 
 ## Documentation
 

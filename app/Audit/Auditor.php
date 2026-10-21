@@ -3,6 +3,7 @@
 namespace App\Audit;
 
 use App\Models\AuditLog;
+use Closure;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Auth\Factory as AuthFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -16,6 +17,15 @@ class Auditor
 {
     /** @var list<string> */
     private const GUARDS = ['web', 'client', 'sanctum'];
+
+    /**
+     * Where a bulk job sends the entries it keeps elsewhere (see divert()).
+     * Static on purpose: the auditor is resolved anew by every caller, the
+     * diversion must hold for the whole process while the job runs.
+     *
+     * @var (Closure(string, ?Model, array<string, mixed>): bool)|null
+     */
+    private static ?Closure $sink = null;
 
     public function __construct(
         private readonly AuthFactory $auth,
@@ -33,7 +43,7 @@ class Auditor
     ): AuditLog {
         $actor ??= $this->currentActor();
 
-        return AuditLog::query()->create([
+        $attributes = [
             'event' => $event,
             'actor_type' => $actor instanceof Model ? $actor->getMorphClass() : null,
             'actor_id' => $actor?->getAuthIdentifier(),
@@ -43,7 +53,35 @@ class Auditor
             'ip_address' => $this->request?->ip(),
             'user_agent' => $this->request?->userAgent() ? mb_substr($this->request->userAgent(), 0, 500) : null,
             'request_id' => $this->requestId(),
-        ]);
+        ];
+
+        // A diverted entry is handed back unsaved: the caller gets the same
+        // shape, the audit_log table gets nothing.
+        if (self::$sink !== null && (self::$sink)($event, $subject, $context)) {
+            return new AuditLog($attributes);
+        }
+
+        return AuditLog::query()->create($attributes);
+    }
+
+    /**
+     * Routes the entries a bulk job keeps on its own record (the EMD sync
+     * stores the per-record diffs on the run, not in the audit log) to the
+     * given sink while the job runs. The sink returns true for an entry it
+     * took; every other entry is written as usual. The returned closure ends
+     * the diversion and must run in a finally block.
+     *
+     * @param  Closure(string, ?Model, array<string, mixed>): bool  $sink
+     * @return Closure(): void
+     */
+    public static function divert(Closure $sink): Closure
+    {
+        $previous = self::$sink;
+        self::$sink = $sink;
+
+        return static function () use ($previous): void {
+            self::$sink = $previous;
+        };
     }
 
     /**

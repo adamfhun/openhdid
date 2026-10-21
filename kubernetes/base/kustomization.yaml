@@ -1,0 +1,41 @@
+# OpenHDID – Kubernetes-alap (Kustomize). Ne közvetlenül alkalmazza: a méretet az overlays/10k
+# vagy overlays/20k adja (replikák, erőforrások, PHP-FPM, a profil neve), az image címkéjét a
+# kiadás írja ide. Előfeltételek a névtérben, az alkalmazás előtt:
+#
+#   kubectl create namespace openhdid
+#   kubectl -n openhdid create secret generic openhdid-env --from-env-file=.env
+#   kubectl -n openhdid create secret generic openhdid-db-env --from-env-file=db.env
+#   kubectl -n openhdid create secret tls openhdid-tls --cert=fullchain.pem --key=privkey.pem
+#   kubectl -n openhdid create configmap openhdid-ca --from-file=ca/   # belső CA-k, elhagyható
+#
+# A .env ugyanaz, mint a Compose-telepítésnél (.env.example), ezekkel az eltérésekkel:
+# OPENHDID_TLS=off (a TLS az ingressen zárul le), TRUSTED_PROXIES az ingress-vezérlő pod-hálózata,
+# DB_HOST és REDIS_HOST a menedzselt MariaDB és Valkey címe, COMPOSE_* sorok nélkül.
+#
+#   kubectl apply -k kubernetes/overlays/20k
+#   kubectl -n openhdid wait --for=condition=complete job/openhdid-migrate --timeout=600s
+#
+# Részletek: docs/openhdid-telepitesi-utmutato.pdf (Kubernetes fejezet).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: openhdid
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/name: openhdid
+      app.kubernetes.io/part-of: openhdid
+
+resources:
+  - storage.yaml
+  - migrate.yaml
+  - web.yaml
+  - worker.yaml
+  - sync-worker.yaml
+  - scheduler.yaml
+  - ingress.yaml
+
+images:
+  - name: ghcr.io/adamfhun/openhdid
+    newTag: "1.7.0"

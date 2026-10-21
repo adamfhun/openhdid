@@ -9,6 +9,7 @@ use App\Enums\OneTimeCodePurpose;
 use App\Enums\PhoneNumberSource;
 use App\Enums\PhoneVerificationSource;
 use App\Enums\PrincipalType;
+use App\Enums\SyncChangeKind;
 use App\Enums\SyncRunStatus;
 use App\Enums\SyncSource;
 use App\Filament\Admin\Resources\Clients\Pages\ListClients;
@@ -22,6 +23,7 @@ use App\Models\ClientPhoneNumber;
 use App\Models\ExternalRecord;
 use App\Models\Setting;
 use App\Models\SyncRun;
+use App\Models\SyncRunChange;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
@@ -361,19 +363,29 @@ it('adopts the client behind an e-mail when the directory reissues the record', 
         ->and(AuditLog::query()->where('event', 'account.rebound')->exists())->toBeTrue();
 });
 
-it('writes no audit row for the bookkeeping columns a run stamps on every record', function (): void {
+it('writes no change row for the bookkeeping columns a run stamps on every record', function (): void {
     $sync = app(SyncExternalRecords::class);
     $sync->run(readerOf([row('1', 'a@x.hu'), row('2', 'b@x.hu')]));
-    AuditLog::query()->delete();
+    SyncRunChange::query()->delete();
 
     // An unchanged directory: only last_seen_at and last_seen_run_id move.
-    $sync->run(readerOf([row('1', 'a@x.hu'), row('2', 'b@x.hu')]));
+    $quiet = $sync->run(readerOf([row('1', 'a@x.hu'), row('2', 'b@x.hu')]));
 
-    expect(AuditLog::query()->where('event', 'external_record.updated')->count())->toBe(0);
+    expect(SyncRunChange::query()->count())->toBe(0)
+        ->and($quiet->stats['changes'])->toBe(0)
+        ->and(AuditLog::query()->where('event', 'like', 'external_record.%')->count())->toBe(0);
 
-    // A real change is still audited.
-    $sync->run(readerOf([row('1', 'a@x.hu', 'New Company'), row('2', 'b@x.hu')]));
-    expect(AuditLog::query()->where('event', 'external_record.updated')->count())->toBe(1);
+    // A real change is recorded on the run, one row for the record, not in the audit log.
+    $run = $sync->run(readerOf([row('1', 'a@x.hu', 'New Company'), row('2', 'b@x.hu')]));
+    $change = SyncRunChange::query()->sole();
+    expect($run->stats['changes'])->toBe(1)
+        ->and($change->sync_run_id)->toBe($run->id)
+        ->and($change->external_id)->toBe(1)
+        ->and($change->kind)->toBe(SyncChangeKind::Updated)
+        ->and($change->email)->toBe('a@x.hu')
+        ->and(collect($change->changes)->pluck('event')->all())->toBe(['external_record.updated'])
+        ->and($change->changes[0]['context']['to'])->toMatchArray(['company' => 'New Company'])
+        ->and(AuditLog::query()->where('event', 'like', 'external_record.%')->count())->toBe(0);
 });
 
 it('reports a dry run without writing anything', function (): void {

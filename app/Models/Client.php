@@ -42,13 +42,14 @@ class Client extends Authenticatable implements Principal
     use SoftDeletes;
 
     /** @var list<string> */
-    protected array $auditExclude = ['pin_failed_attempts', 'pin_locked_until', 'pin_lockout_count', 'last_login_at', 'session_epoch', 'failed_login_attempts', 'locked_until'];
+    protected array $auditExclude = ['pin_failed_attempts', 'pin_locked_until', 'pin_lockout_count', 'last_login_at', 'last_seen_at', 'session_epoch', 'failed_login_attempts', 'locked_until'];
 
     protected function casts(): array
     {
         return [
             'closed_at' => 'datetime',
             'last_login_at' => 'datetime',
+            'last_seen_at' => 'datetime',
             'pin_set_at' => 'datetime',
             'pin_locked_until' => 'datetime',
             'pin_failed_attempts' => 'integer',

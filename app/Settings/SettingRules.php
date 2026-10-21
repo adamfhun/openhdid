@@ -2,6 +2,7 @@
 
 namespace App\Settings;
 
+use App\Audit\AuditArchive;
 use App\Auth\Mfa\StaffMfa;
 use App\Auth\Oidc\OidcProvider;
 use App\Clients\PackageListImpact;
@@ -53,6 +54,7 @@ class SettingRules
             SettingKey::CallsDashboardPollSeconds => ['integer', 'min:2', 'max:120'],
             SettingKey::RetentionGeneralYears => ['integer', 'min:1', 'max:30'],
             SettingKey::RetentionShortLivedYears => ['integer', 'min:1', 'max:30'],
+            SettingKey::RetentionAuditHotDays => ['integer', 'min:'.AuditArchive::MIN_HOT_DAYS, 'max:3650'],
             SettingKey::SupportStandardEmail, SettingKey::SupportPremiumEmail => ['nullable', 'email'],
             SettingKey::PortalPrivacyUrl, SettingKey::PortalTermsUrl, SettingKey::PortalImprintUrl => ['nullable', 'url'],
             SettingKey::SyncCsvEncoding => ['nullable', 'string', 'max:40'],

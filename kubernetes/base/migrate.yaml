@@ -1,0 +1,57 @@
+# Egyszeri migráció a db.env migrációs fiókjával, minden frissítés előtt. A Job neve állandó:
+# frissítéskor az előzőt törölni kell (kubectl -n openhdid delete job openhdid-migrate), vagy a
+# ttlSecondsAfterFinished már eltakarította. A közös Valkey zárja alatt fut (--isolated).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openhdid-migrate
+  labels:
+    app.kubernetes.io/component: migrate
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 82
+        runAsGroup: 82
+        fsGroup: 82
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/adamfhun/openhdid
+          args: [migrate]
+          envFrom:
+            - secretRef:
+                name: openhdid-env
+            - secretRef:
+                name: openhdid-db-env
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: storage, mountPath: /app/storage}
+            - {name: ca, mountPath: /etc/openhdid/ca, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {medium: Memory, sizeLimit: 256Mi}
+        - name: storage
+          persistentVolumeClaim:
+            claimName: openhdid-storage
+        - name: ca
+          configMap:
+            name: openhdid-ca
+            optional: true

@@ -2,6 +2,7 @@
 
 namespace App\System;
 
+use App\Audit\AuditArchive;
 use App\Audit\Auditor;
 use App\Models\AuditLog;
 use App\Models\Call;
@@ -9,6 +10,7 @@ use App\Models\IdSession;
 use App\Models\OneTimeCode;
 use App\Models\OutboundMessage;
 use App\Models\SyncRun;
+use App\Models\SyncRunChange;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Illuminate\Contracts\Cache\Repository as Cache;
@@ -18,9 +20,12 @@ use Illuminate\Support\Facades\Storage;
 /**
  * Deletes for good what the retention settings no longer allow us to keep:
  * business records after the general period (default 5 years), throwaway
- * artefacts such as expired one-time codes and uploaded directory files
- * after the short-lived period (default 2 years). Runs daily; the status
- * page warns when it has not run for a few days.
+ * artefacts such as expired one-time codes, uploaded directory files and the
+ * EMD change records after the short-lived period (default 2 years). The
+ * audit log is archived first: entries past the hot window leave the
+ * database for daily archive files (AuditArchive), and the files themselves
+ * fall under the general period. Runs daily; the status page warns when it
+ * has not run for a few days.
  */
 class Retention
 {
@@ -34,6 +39,7 @@ class Retention
         private readonly Settings $settings,
         private readonly Cache $cache,
         private readonly Auditor $auditor,
+        private readonly AuditArchive $archive,
     ) {}
 
     public function generalCutoff(): Carbon
@@ -54,12 +60,19 @@ class Retention
         $general = $this->generalCutoff();
         $short = $this->shortLivedCutoff();
 
+        // Archive before deleting: whatever the general period would drop from
+        // the audit log has long been archived, the table only holds the hot days.
+        $archived = $this->archive->archive();
+
         $removed = [
+            'audit_archived' => $archived['rows'],
             'id_sessions' => $this->deleteInBatches(fn () => IdSession::query()->withTrashed()->where('started_at', '<', $general)->limit(self::BATCH)->forceDelete()),
             'calls' => $this->deleteInBatches(fn () => Call::query()->withTrashed()->where('arrived_at', '<', $general)->limit(self::BATCH)->forceDelete()),
             'outbound_messages' => $this->deleteInBatches(fn () => OutboundMessage::query()->where('created_at', '<', $general)->limit(self::BATCH)->delete()),
             'sync_runs' => $this->deleteInBatches(fn () => SyncRun::query()->withTrashed()->where('started_at', '<', $general)->limit(self::BATCH)->forceDelete()),
             'audit_log' => $this->deleteInBatches(fn () => AuditLog::query()->where('created_at', '<', $general)->limit(self::BATCH)->delete()),
+            'audit_archive_files' => $this->archive->pruneFiles($general),
+            'sync_run_changes' => $this->deleteInBatches(fn () => SyncRunChange::query()->where('created_at', '<', $short)->limit(self::BATCH)->delete()),
             'one_time_codes' => $this->deleteInBatches(fn () => OneTimeCode::query()->where('expires_at', '<', $short)->limit(self::BATCH)->delete()),
             'sync_uploads' => $this->deleteOldUploads($short),
         ];

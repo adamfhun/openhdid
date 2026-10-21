@@ -15,6 +15,7 @@ use App\Support\HuDate;
 use App\Support\PhoneNormalizer;
 use Filament\Auth\MultiFactor\App\AppAuthentication;
 use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Hash;
@@ -227,6 +228,7 @@ class StaffMfa
         RateLimiter::hit($quarterKey, 900);
 
         $code = str_pad((string) random_int(0, 10 ** self::CODE_LENGTH - 1), self::CODE_LENGTH, '0', STR_PAD_LEFT);
+        $expires = now()->addMinutes(self::CODE_TTL_MINUTES);
         Cache::put($this->codeKey($user), [
             'session' => $this->sessionFingerprint(),
             'method' => $method->value,
@@ -234,7 +236,9 @@ class StaffMfa
             'number' => $method === MfaMethod::Sms ? $destination : null,
             'hash' => Hash::make($code),
             'attempts' => 0,
-        ], now()->addMinutes(self::CODE_TTL_MINUTES));
+            // Kept in the entry: a wrong try must not give the code a fresh lifetime.
+            'expires' => $expires->getTimestamp(),
+        ], $expires);
 
         // SMS in Hungarian only (house rule), e-mail in the language of the staff member's panel.
         $text = fn (string $locale): string => __('Your sign-in code: :code. Valid for :minutes minutes. Do not give it to anyone.', ['code' => $code, 'minutes' => self::CODE_TTL_MINUTES], $locale);
@@ -438,19 +442,22 @@ class StaffMfa
     private function consumeSentCode(User $user, MfaMethod $method, string $purpose, string $code): bool
     {
         $entry = Cache::get($this->codeKey($user));
+        $expires = is_array($entry) ? Carbon::createFromTimestamp((int) ($entry['expires'] ?? 0)) : null;
 
         if (! is_array($entry)
             || ($entry['method'] ?? null) !== $method->value
             || ($entry['purpose'] ?? null) !== $purpose
             || ! hash_equals((string) ($entry['session'] ?? ''), $this->sessionFingerprint())
-            || (int) ($entry['attempts'] ?? self::CODE_MAX_ATTEMPTS) >= self::CODE_MAX_ATTEMPTS) {
+            || (int) ($entry['attempts'] ?? self::CODE_MAX_ATTEMPTS) >= self::CODE_MAX_ATTEMPTS
+            || $expires === null || $expires->isPast()) {
             Hash::check($code, '$2y$12$'.str_repeat('a', 53));
 
             return false;
         }
 
+        // The try is reserved for the rest of the code's own lifetime, not a new one.
         $entry['attempts'] = (int) $entry['attempts'] + 1;
-        Cache::put($this->codeKey($user), $entry, now()->addMinutes(self::CODE_TTL_MINUTES));
+        Cache::put($this->codeKey($user), $entry, $expires);
 
         if (! Hash::check(self::digits($code), (string) $entry['hash'])) {
             return false;

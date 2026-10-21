@@ -3,7 +3,6 @@
 namespace App\Models;
 
 use App\Audit\Auditable;
-use App\Audit\Auditor;
 use App\Enums\ApiKeyScope;
 use App\Models\Concerns\HasUuidKey;
 use Database\Factories\ApiKeyFactory;
@@ -129,15 +128,15 @@ class ApiKey extends Model
     }
 
     /**
-     * Stamp the last use and leave an audit trace, at most once a minute per
-     * key: enough to answer "which partner called what, when" without an
-     * audit row per IVR request.
+     * Stamp the last use, at most once a minute per key. No audit row: a key
+     * in use wrote one per minute (half a million rows a year per key) and
+     * told nothing the "last used" column does not; rejected and legacy uses
+     * are still audited.
      */
-    public function touchLastUsed(?string $routeName = null): void
+    public function touchLastUsed(): void
     {
         if ($this->last_used_at === null || $this->last_used_at->lt(now()->subMinute())) {
             $this->forceFill(['last_used_at' => now()])->saveQuietly();
-            app(Auditor::class)->record('api_key.used', $this, ['scope' => $this->scope->value, 'route' => $routeName ?? request()->route()?->getName()]);
         }
     }
 

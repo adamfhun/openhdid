@@ -286,6 +286,23 @@ it('shows on the system status who has no second factor yet', function (): void 
     expect(app(HealthChecks::class)->staffMfa()->status)->toBe(CheckStatus::Fail);
 });
 
+it('keeps the ten-minute lifetime of a sent code however many wrong tries come in between', function (): void {
+    $this->agent->forceFill(['mfa_email_enabled_at' => now()])->save();
+    $this->actingAs($this->agent);
+    $this->freezeSecond();
+
+    $this->mfa->sendCode($this->agent, MfaMethod::Email, StaffMfa::PURPOSE_CHALLENGE);
+    $code = lastSentCode();
+
+    // A wrong try nine minutes in must not restart the clock.
+    $this->travel(9)->minutes();
+    expect(fn () => $this->mfa->verify($this->agent, MfaMethod::Email, '000000'))->toThrow(MfaException::class);
+
+    $this->travel(2)->minutes();
+    expect(fn () => $this->mfa->verify($this->agent->fresh(), MfaMethod::Email, $code))->toThrow(MfaException::class, 'not valid')
+        ->and($this->mfa->passedInSession($this->agent->fresh()))->toBeFalse();
+});
+
 it('spends a sent code after the allowed number of tries, even before the account lock', function (): void {
     app(Settings::class)->set(SettingKey::UserLoginLockoutMaxAttempts, 20);
     $this->agent->forceFill(['mfa_email_enabled_at' => now()])->save();
