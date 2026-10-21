@@ -4,6 +4,28 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.7.1] – 2026-10-21
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- ÜZ-03.2: a használati profilok fájljai a kiadás mellékletei (`profile-5k.yaml`, `profile-10k.yaml`), és a gyorsindítás letölti az 5k profilét a `profiles/5k/compose.yaml` helyre, mert a letöltött `env.example` `COMPOSE_FILE` sora erre mutat; az 1.7.0 gyorsindítása e fájl nélkül „profiles/5k/compose.yaml nem található” hibával állt meg (friss telepítésnél; a meglévő telepítéseket nem érintette).
+
+**Frissítés előtt:** migráció és új telepítési kulcs nincs. Aki az 1.7.0 `env.example`-jéből indult, töltse le a profilfájlt (`curl -fsSL --create-dirs -o profiles/5k/compose.yaml "$base/profile-5k.yaml"`), vagy törölje a `.env` `COMPOSE_FILE` sorát.
+
+Részletek:
+- A kiadás ellenőrzése bukik, ha a `.env.example` `COMPOSE_FILE` sora olyan fájlra mutat, amely nincs a mellékletek között.
+- A dokumentumok verziója 1.7.1.
+
+### English
+Rule changes in one sentence (with the specification identifiers):
+- ÜZ-03.2: the usage profile files are release assets (`profile-5k.yaml`, `profile-10k.yaml`), and the quick start downloads the 5k one to `profiles/5k/compose.yaml`, because `COMPOSE_FILE` in the downloaded `env.example` points there; the 1.7.0 quick start stopped without this file with "profiles/5k/compose.yaml not found" (fresh installations only; existing ones were not affected).
+
+**Before upgrading:** no migration, no new deployment key. Installations started from the 1.7.0 `env.example`: download the profile file (`curl -fsSL --create-dirs -o profiles/5k/compose.yaml "$base/profile-5k.yaml"`), or remove the `COMPOSE_FILE` line from `.env`.
+
+Details:
+- The release checks fail when `COMPOSE_FILE` in `.env.example` points to a file that is not among the assets.
+- The documents carry version 1.7.1.
+
 ## [1.7.0] – 2026-10-21
 
 ### Magyar

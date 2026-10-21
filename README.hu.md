@@ -27,6 +27,7 @@ curl -fsSL -O "$base/compose.yaml"
 curl -fsSL -o .env "$base/env.example"
 curl -fsSL -o db.env "$base/db.env.example"
 curl -fsSL -O "$base/backup.sh"
+curl -fsSL --create-dirs -o profiles/5k/compose.yaml "$base/profile-5k.yaml"   # a használati profil, a .env COMPOSE_FILE sora erre mutat
 chmod 600 .env db.env
 chmod 755 backup.sh
 
@@ -101,7 +102,7 @@ Nem privilegizált felhasználóként (uid 82) fut, csak olvasható gyökér-fá
 Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz. A `v` a telepített verzió (a `.env` `OPENHDID_VERSION` értéke):
 
 ```sh
-v=1.7.0
+v=1.7.1
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -116,8 +117,8 @@ A telepítés három használati profil egyikére méretezhető; a profilt a `.e
 
 | Profil | Ügyfél (egyidejű portálhasználó) | Topológia | Fájl |
 |---|---|---|---|
-| `5k` | 5 000 (250–400) | egy kiszolgáló, 4 vCPU / 8 GB, beépített MariaDB és Valkey, 2 feldolgozó | `profiles/5k/compose.yaml` (`COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) |
-| `10k` | 10 000 (500–800) | két alkalmazásgép terheléselosztó mögött (magas rendelkezésre állás), külső MariaDB és Valkey, NFS a `storage` kötetnek | `profiles/10k/compose.yaml` mindkét gépen (`COMPOSE_PROFILES=primary` csak az egyiken), vagy `kubernetes/overlays/10k` |
+| `5k` | 5 000 (250–400) | egy kiszolgáló, 4 vCPU / 8 GB, beépített MariaDB és Valkey, 2 feldolgozó | `profiles/5k/compose.yaml` (a kiadás `profile-5k.yaml` melléklete; `COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) |
+| `10k` | 10 000 (500–800) | két alkalmazásgép terheléselosztó mögött (magas rendelkezésre állás), külső MariaDB és Valkey, NFS a `storage` kötetnek | `profiles/10k/compose.yaml` mindkét gépen (a kiadás `profile-10k.yaml` melléklete; `COMPOSE_PROFILES=primary` csak az egyiken), vagy `kubernetes/overlays/10k` |
 | `20k` | 20 000 (1 000–1 600) | Kubernetes: web 3–6 pod, 3 feldolgozó, menedzselt MariaDB és Valkey, RWX kötet | `kubernetes/overlays/20k` (`kubectl apply -k`) |
 
 Minden profil 20–30 ügyintézővel számol; a munkamenet, a gyorsítótár és az üzenetsor mindhárom profilban Valkey-n fut. Két alkalmazásgép vagy Kubernetes esetén a TLS a terheléselosztón vagy az ingressen zárul le (`OPENHDID_TLS=off`, `TRUSTED_PROXIES` a terheléselosztó címe), a `storage` kötet közös, az ütemezőből pontosan egy fut, a migráció a közös Valkey zárja alatt egyszerre csak egy gépen. A terheléselosztó élő-próbája a `/up`, a felügyeleté a `/health`.

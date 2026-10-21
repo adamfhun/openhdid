@@ -27,6 +27,7 @@ curl -fsSL -O "$base/compose.yaml"
 curl -fsSL -o .env "$base/env.example"
 curl -fsSL -o db.env "$base/db.env.example"
 curl -fsSL -O "$base/backup.sh"
+curl -fsSL --create-dirs -o profiles/5k/compose.yaml "$base/profile-5k.yaml"   # the usage profile COMPOSE_FILE in .env points to
 chmod 600 .env db.env
 chmod 755 backup.sh
 
@@ -95,7 +96,7 @@ The image contains only what runs the application: Alpine Linux, PHP-FPM with th
 Every image is signed and carries a build provenance and an SBOM attestation. Set `v` to the version you install (the `OPENHDID_VERSION` of your `.env`):
 
 ```sh
-v=1.7.0
+v=1.7.1
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -110,8 +111,8 @@ A deployment is sized to one of three usage profiles; `.env` selects the profile
 
 | Profile | Clients (concurrent portal users) | Topology | Files |
 |---|---|---|---|
-| `5k` | 5,000 (250–400) | one host, 4 vCPU / 8 GB, bundled MariaDB and Valkey, 2 workers | `profiles/5k/compose.yaml` (`COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) |
-| `10k` | 10,000 (500–800) | two application hosts behind a load balancer (high availability), external MariaDB and Valkey, NFS for the `storage` volume | `profiles/10k/compose.yaml` on both hosts (`COMPOSE_PROFILES=primary` on one of them), or `kubernetes/overlays/10k` |
+| `5k` | 5,000 (250–400) | one host, 4 vCPU / 8 GB, bundled MariaDB and Valkey, 2 workers | `profiles/5k/compose.yaml` (the release asset `profile-5k.yaml`; `COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) |
+| `10k` | 10,000 (500–800) | two application hosts behind a load balancer (high availability), external MariaDB and Valkey, NFS for the `storage` volume | `profiles/10k/compose.yaml` on both hosts (the release asset `profile-10k.yaml`; `COMPOSE_PROFILES=primary` on one of them), or `kubernetes/overlays/10k` |
 | `20k` | 20,000 (1,000–1,600) | Kubernetes: 3–6 web pods, 3 workers, managed MariaDB and Valkey, RWX volume | `kubernetes/overlays/20k` (`kubectl apply -k`) |
 
 Every profile assumes 20–30 agents; sessions, cache and queue run on Valkey in all three. With two hosts or Kubernetes, TLS ends at the load balancer or the ingress (`OPENHDID_TLS=off`, `TRUSTED_PROXIES` set to the balancer), the `storage` volume is shared, exactly one scheduler runs, and the migration runs on one host at a time under the shared Valkey lock. The load balancer's liveness probe is `/up`, monitoring uses `/health`.

@@ -196,6 +196,9 @@ jobs:
           mkdir -p "$assets"
           cp docs/*.pdf compose.yaml db.env.example backup.sh TROUBLESHOOTING.md UPGRADE.md "$assets/"
           cp .env.example "$assets/env.example"
+          # The usage profiles .env.example refers to (COMPOSE_FILE): downloadable next to compose.yaml.
+          cp profiles/5k/compose.yaml "$assets/profile-5k.yaml"
+          cp profiles/10k/compose.yaml "$assets/profile-10k.yaml"
           cp "$RUNNER_TEMP/openhdid-$VERSION.spdx.json" "$assets/"
           (cd "$assets" && sha256sum -- * > SHA256SUMS)
           awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {found=1; next} found && /^## \[/ {exit} found' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
