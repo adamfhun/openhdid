@@ -83,10 +83,19 @@ class OngoingCallsWidget extends TableWidget
                 // releasing and handling need the identification permission.
                 TakeCallAction::make('take')
                     ->authorize(fn (): bool => auth()->user()?->can(Permission::IdentificationRun->value) ?? false)
-                    ->label(fn (Call $call) => $call->isHeldBySomeoneElse(auth()->user()) ? __('Take over') : __('Identify'))
-                    ->icon('heroicon-o-identification')
+                    ->label(fn (Call $call) => match (true) {
+                        $call->isHeldBySomeoneElse(auth()->user()) => __('Take over'),
+                        static::recordUrl($call) !== null => __('Client record'),
+                        default => __('Identify'),
+                    })
+                    ->icon(fn (Call $call) => static::recordUrl($call) !== null ? 'heroicon-o-user' : 'heroicon-o-identification')
                     ->button()
                     ->color(fn (Call $call) => $call->isHeldBySomeoneElse(auth()->user()) ? 'warning' : 'primary')
+                    // The caller the agent identified: nothing left to identify, the record has everything (AZO-07).
+                    ->url(fn (Call $call) => static::recordUrl($call))
+                    // An identified call belongs to the agent who proved the caller; it is neither released nor taken over.
+                    ->disabled(fn (Call $call) => $call->isHeldBySomeoneElse(auth()->user()) && $call->isIdentified())
+                    ->tooltip(fn (Call $call) => $call->isHeldBySomeoneElse(auth()->user()) && $call->isIdentified() ? __('The caller is identified: the call stays with the agent who handled it.') : null)
                     ->requiresConfirmation(fn (Call $call) => $call->isHeldBySomeoneElse(auth()->user()))
                     ->modal(fn (Call $record): bool => $record->isHeldBySomeoneElse(auth()->user()))
                     ->modalHeading(fn (Call $call) => __(':name has already taken this call.', ['name' => $call->agent?->name ?? '?']))
@@ -101,6 +110,10 @@ class OngoingCallsWidget extends TableWidget
                             app(CallCenterService::class)->claim($call, auth()->user(), takeOver: $from !== null, takeOverFrom: $from);
                         } catch (CallAlreadyClaimedException $e) {
                             Notification::make()->title($e->getMessage())->warning()->send();
+
+                            return;
+                        } catch (ValidationException $e) {
+                            Notification::make()->title($e->validator->errors()->first())->warning()->send();
 
                             return;
                         }
@@ -138,6 +151,19 @@ class OngoingCallsWidget extends TableWidget
         }
 
         return $call->passedSession() !== null ? 'passed' : ($call->clientIdSessions()->isNotEmpty() ? 'failed' : null);
+    }
+
+    /**
+     * The identified client's record, for the agent holding the call who
+     * proved the caller; null for every other row, which keeps its button.
+     */
+    public static function recordUrl(Call $call): ?string
+    {
+        if (! $call->isHeldBy(auth()->user()) || ! $call->isIdentified() || ! app(ClientTiers::class)->isServed($call->client)) {
+            return null;
+        }
+
+        return ClientResource::getUrl('view', ['record' => $call->client_id]);
     }
 
     /**

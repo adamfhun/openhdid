@@ -80,10 +80,10 @@ class AdminPanelProvider extends PanelProvider
             ))
             // The call view switch would be refused before the second factor: not offered there.
             ->renderHook(PanelsRenderHook::USER_MENU_BEFORE, fn (): string => auth()->user() instanceof User && ! app(StaffMfa::class)->isSatisfied(auth()->user())
-                ? '' : view('filament.admin.tier-switch')->render())
+                ? '' : view('filament.admin.identified-pill')->render().view('filament.admin.tier-switch')->render())
             ->renderHook(PanelsRenderHook::TOPBAR_BEFORE, fn (): View => view('filament.admin.premium-only-bar'))
             // Pages with a Save button ask before their unsaved changes are left behind.
-            ->renderHook(PanelsRenderHook::HEAD_END, fn (): View => view('filament.admin.unsaved-guard-script'))
+            ->renderHook(PanelsRenderHook::HEAD_END, fn (): string => view('filament.admin.unsaved-guard-script')->render().view('filament.admin.identified-guard-script')->render())
             ->renderHook(PanelsRenderHook::PAGE_END, fn (array $scopes): string => collect($scopes)
                 ->contains(fn (string $scope): bool => in_array(GuardsUnsavedChanges::class, class_uses_recursive($scope), true))
                 ? view('filament.admin.unsaved-guard')->render() : '')

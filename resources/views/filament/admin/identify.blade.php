@@ -123,9 +123,16 @@
                         @if ($outcome->method === \App\Enums\IdMethod::Manual)
                             <x-filament::badge color="warning">{{ __('recorded manually') }}</x-filament::badge>
                         @endif
-                        <x-filament::button tag="a" :href="$this->dashboardUrl()" color="gray" outlined size="sm" icon="heroicon-o-phone-arrow-down-left" class="ml-auto">
-                            {{ __('Back to the call queue') }}
-                        </x-filament::button>
+                        <span class="ml-auto flex flex-wrap gap-2" data-hdid-no-guard>
+                            @if ($outcome->status === \App\Enums\IdSessionStatus::Passed)
+                                <x-filament::button tag="a" :href="$this->clientRecordUrl()" size="sm" icon="heroicon-o-user">
+                                    {{ __('Open the client record') }}
+                                </x-filament::button>
+                            @endif
+                            <x-filament::button tag="a" :href="$this->dashboardUrl()" color="gray" outlined size="sm" icon="heroicon-o-phone-arrow-down-left">
+                                {{ __('Back to the call queue') }}
+                            </x-filament::button>
+                        </span>
                     </div>
                 </x-filament::section>
             @endif
@@ -304,4 +311,10 @@
             </x-filament::section>
         </div>
     </div>
+
+    @if ($this->isGuarded())
+        @include('filament.admin.identified-guard', $session?->isOpen()
+            ? ['heading' => __('Leave the identification in progress?'), 'message' => __('A question-and-answer session is open. It stays open until it expires, and only this page can continue it; the call queue leads back here.')]
+            : ['heading' => __('Leave the identified client?'), 'message' => __('The caller is identified and the call is still in progress. You can come back any time with the Identified client button in the header.')])
+    @endif
 </x-filament-panels::page>

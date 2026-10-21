@@ -113,6 +113,15 @@ docker context ls
 sudo usermod -aG docker "$(id -un)"   # utána új bejelentkezés / then log in again
 ```
 
+Rootless Dockernél nincs `docker` csoport: a démon a felhasználó egysége, a kliensnek a saját socket kell.
+
+Under rootless Docker there is no `docker` group: the daemon is the user's unit and the client needs its socket.
+
+```sh
+systemctl --user status docker
+export DOCKER_HOST="unix:///run/user/$(id -u)/docker.sock"
+```
+
 ## 6. Fájlok tulajdonosa / File ownership
 
 A telepítési mappa, a `tls`, a `ca`, a `.env` és a `db.env` az üzemeltetőé; a `tls` kulcsa a konténer
@@ -125,6 +134,21 @@ container user (82), mode 400. The last line shows it from the container's view.
 ls -ld . tls ca .env db.env compose.yaml
 ls -ln tls ca
 docker compose exec web sh -c 'stat -c "%n %u:%a" /etc/openhdid/tls/*.pem'
+```
+
+Rootless Dockernél a konténer 82-es felhasználója a gazdagépen a `/etc/subuid` tartomány `kezdő + 81` eleme
+(például `app:165536:65536` → `165617`); a `sudo chown 82:82` ott idegen fiókhoz rendeli a kulcsot. A tulajdonost a
+konténer névterén belül kell beállítani (a telepítési útmutató „Rootless Docker” része):
+
+Under rootless Docker the container's uid 82 is `start + 81` of the `/etc/subuid` range on the host
+(for example `app:165536:65536` → `165617`); `sudo chown 82:82` there hands the key to a foreign account. Set the
+owner inside the container's user namespace (see "Rootless Docker" in the installation guide):
+
+```sh
+grep "^$(id -un):" /etc/subuid /etc/subgid
+docker compose run --rm --no-deps --user 0 --cap-add CHOWN -v "$PWD/tls":/t --entrypoint sh web \
+  -c 'chown 82:82 /t/fullchain.pem /t/privkey.pem && chmod 444 /t/fullchain.pem && chmod 400 /t/privkey.pem'
+ls -ln tls   # a leképezett szám a helyes / the mapped number is right
 ```
 
 ## 7. Névfeloldás a konténerből / Name resolution inside the container
@@ -340,6 +364,27 @@ touches no client.
 docker compose exec web php artisan hdid:test-mail cim@example.org --now
 docker compose exec web php artisan hdid:test-sms +36301234567 --now
 ```
+
+Az EWS hibaszövege a HTTP-státusszal kezdődik, és megmondja, mit válaszolt az Exchange. / The EWS
+error starts with the HTTP status and says what Exchange answered.
+
+- `HTTP 401 … the server offers: Negotiate, NTLM` – a kiszolgáló csak Windows-hitelesítést kínál:
+  `EWS_AUTH=ntlm` és `EWS_USERNAME=TARTOMANY\felhasznalo` (az image 1.8.0-től NTLM-képes libcurl-lel
+  jön; régebbi image-dzsel a basic engedélyezése az EWS virtuális könyvtáron vagy SMTP-összekötő:
+  `MAIL_MAILER=smtp`, `MAIL_HOST`, `MAIL_PORT=587`, STARTTLS). `HTTP 401 … Basic` basic mellett:
+  jelszó, postaláda; Exchange Online-nál `oauth`. / The server offers Windows authentication only:
+  `EWS_AUTH=ntlm` and `EWS_USERNAME=DOMAIN\user` (the image ships an NTLM-capable libcurl from 1.8.0;
+  with an older image enable basic authentication on the EWS virtual directory, or use an SMTP
+  connector: `MAIL_MAILER=smtp`, `MAIL_HOST`, `MAIL_PORT=587`, STARTTLS). `HTTP 401 … Basic` with basic
+  set: password, mailbox; Exchange Online: `oauth`.
+- `HTTP 404` vagy `HTML answer (sign-in page or proxy?)` – rossz `EWS_URL` (helyesen
+  `https://<kiszolgáló>/EWS/Exchange.asmx`), vagy egy bejelentkező oldal, proxy válaszolt. / Wrong
+  `EWS_URL` (`https://<host>/EWS/Exchange.asmx`), or a sign-in page or proxy answered.
+- `EWS ErrorNonExistentMailbox`, `ErrorAccessDenied` stb. – az Exchange válaszkódja és szövege; a
+  szolgáltatásfióknak küldési joga és postaládája kell. / Exchange's own response code and text; the
+  service account needs a mailbox and the right to send.
+- `could not be reached` – hálózat, tűzfal, kimenő proxy (`HDID_HTTP_PROXY`), belső CA (`ca` mappa,
+  utána `docker compose restart web worker`). / Network, firewall, outbound proxy, internal CA.
 
 ## 14. Mentés és visszaállítás / Backup and restore
 

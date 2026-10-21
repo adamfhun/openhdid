@@ -231,6 +231,17 @@
 }
 @media (prefers-reduced-motion: reduce) { .hdid-tier-pill-premium .hdid-tier-dot { animation: none; } }
 
+/* The identified client's shortcut in the top bar (AZO-07): same shape as the level switch, success green. */
+.hdid-ident-pill {
+    margin-inline-end: 0.75rem; text-decoration: none;
+    color: #fff; background: rgb(22 163 74); border-color: rgb(21 128 61);
+    box-shadow: 0 0 0 3px rgb(22 163 74 / 0.22);
+}
+.hdid-ident-pill:hover { color: #fff; }
+.hdid-ident-icon { width: 1.25rem; height: 1.25rem; flex: none; }
+.hdid-ident-time { font-weight: 500; opacity: 0.85; }
+.hdid-ident-pill .hdid-tier-name { max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Footer link to the published source of the running build (only when HDID_SOURCE_URL is set). */
 .hdid-source-link { padding: 1rem 0 1.25rem; text-align: center; font-size: 0.75rem; }
 .hdid-source-link a { color: var(--brand-muted, #5e6975); text-decoration: none; }

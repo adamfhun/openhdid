@@ -181,6 +181,12 @@ class CallCenterService
                 throw new CallAlreadyClaimedException($holder);
             }
 
+            // Once the caller is identified the call belongs to the agent who proved it,
+            // like it cannot go back to the queue: nobody takes it over.
+            if ($holder !== null && $call->isIdentified()) {
+                throw ValidationException::withMessages(['call' => __('The caller has already been identified on this call by :name; the call stays with them and cannot be taken over.', ['name' => $holder->name])]);
+            }
+
             $call->forceFill([
                 'agent_user_id' => $agent->id,
                 'status' => $call->status->isOver() ? $call->status : CallStatus::Active,

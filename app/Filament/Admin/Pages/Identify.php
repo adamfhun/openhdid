@@ -12,8 +12,10 @@ use App\Enums\IdChannel;
 use App\Enums\IdMethod;
 use App\Enums\IdSessionStatus;
 use App\Enums\StepVerdict;
+use App\Filament\Actions\WrapUpNoteAction;
 use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Identification\ClientAnswers;
+use App\Identification\CurrentIdentification;
 use App\Identification\IdentificationException;
 use App\Identification\PinService;
 use App\Identification\QaSessionEngine;
@@ -40,13 +42,11 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
  * optional agent PIN entry, manual identification with a reason, and the
  * history of attempts on the current call. One-time codes are checked on
  * the separate "Verify code" page, because the code alone identifies the
- * client.
+ * client. A pass sends the agent on to the client's record, where every
+ * detail of the identified client is at hand (AZO-07).
  */
 class Identify extends Page
 {
-    /** A passed session without a call counts as current for this long. */
-    public const RECENT_MINUTES = 30;
-
     protected static ?string $slug = 'identify/{client}';
 
     protected static bool $shouldRegisterNavigation = false;
@@ -343,19 +343,28 @@ class Identify extends Page
      */
     public function getCurrentPassed(): ?IdSession
     {
-        $query = IdSession::query()
-            ->where('client_id', $this->clientId)
-            ->where('status', IdSessionStatus::Passed)
-            ->latest('decided_at');
+        return app(CurrentIdentification::class)->forClient($this->agent(), $this->getClient(), $this->getCall());
+    }
 
-        if (($call = $this->getCall()) !== null) {
-            return $query->where('call_id', $call->id)->first();
+    /**
+     * Whether leaving this page should ask first: the caller is identified
+     * and the call is still in the agent's hands, or a question-and-answer
+     * session is open, which the agent can only continue from here.
+     */
+    public function isGuarded(): bool
+    {
+        if ($this->getSession()?->isOpen()) {
+            return true;
         }
 
-        return $query
-            ->where('agent_user_id', auth()->id())
-            ->where('decided_at', '>=', now()->subMinutes(self::RECENT_MINUTES))
-            ->first();
+        $passed = $this->getCurrentPassed();
+
+        return $passed !== null && app(CurrentIdentification::class)->guards($passed, $this->agent());
+    }
+
+    public function clientRecordUrl(): string
+    {
+        return ClientResource::getUrl('view', ['record' => $this->clientId]);
     }
 
     /**
@@ -370,7 +379,7 @@ class Identify extends Page
             ->where('client_id', $this->clientId)
             ->where('agent_user_id', auth()->id())
             ->whereNot('status', IdSessionStatus::Open)
-            ->when($call !== null, fn ($q) => $q->where('call_id', $call->id), fn ($q) => $q->where('decided_at', '>=', now()->subMinutes(self::RECENT_MINUTES)))
+            ->when($call !== null, fn ($q) => $q->where('call_id', $call->id), fn ($q) => $q->where('decided_at', '>=', now()->subMinutes(CurrentIdentification::RECENT_MINUTES)))
             ->latest('decided_at')
             ->first();
     }
@@ -539,31 +548,9 @@ class Identify extends Page
         return $session;
     }
 
-    /**
-     * A short note on the call for whoever looks at it later.
-     */
     public function wrapUpNoteAction(): Action
     {
-        return Action::make('wrapUpNote')
-            ->label(fn () => filled($this->getHeldCall()?->wrap_up_note) ? __('Edit call note') : __('Call note'))
-            ->icon('heroicon-o-pencil-square')
-            ->color('gray')
-            ->outlined()
-            ->visible(fn () => $this->getHeldCall() !== null)
-            ->modalHeading(__('Note on this call'))
-            ->schema([
-                Textarea::make('note')->label(__('Note'))->maxLength(1000)->rows(4)
-                    ->default(fn () => $this->getHeldCall()?->wrap_up_note)
-                    ->placeholder(__('What was the call about, what is left to do?')),
-            ])
-            ->modalSubmitActionLabel(__('Save'))
-            ->action(function (array $data): void {
-                $call = $this->getHeldCall() ?? abort(403);
-
-                $note = trim((string) ($data['note'] ?? ''));
-                $call->forceFill(['wrap_up_note' => $note === '' ? null : $note])->save();
-                Notification::make()->title(__('Call note saved'))->success()->send();
-            });
+        return WrapUpNoteAction::for(fn (): ?Call => $this->getHeldCall());
     }
 
     /**
@@ -618,5 +605,10 @@ class Identify extends Page
         };
 
         $notification->send();
+
+        // Identified: on to the client's record, where every detail is at hand.
+        if ($session->status === IdSessionStatus::Passed) {
+            $this->redirect($this->clientRecordUrl());
+        }
     }
 }

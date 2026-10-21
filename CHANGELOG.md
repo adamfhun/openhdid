@@ -4,6 +4,34 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.8.0] – 2026-10-21
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- KOM-02: az Exchange (EWS) elutasított kérésének hibaszövege a HTTP-státusszal kezdődik, 401-nél a kiszolgáló felkínált hitelesítési módjaival, az Exchange saját válaszkódjával és szövegével (`EWS Error…`), bejelentkező oldal vagy proxy válaszánál ennek jelzésével, üres törzsnél ennek kimondásával, elérhetetlen kiszolgálónál a hálózati hibával; eddig egy üres válasz „EWS CreateItem failed:” után semmit nem mondott.
+- AZO-07 (új): bármelyik módszer sikeres azonosítása után az ügyintéző az ügyfél adatlapjára kerül, amelynek tetején „Azonosítva” sáv mondja a módszert, az időt és a hívást (hívásmegjegyzés és „Vissza a hívósorhoz” gombbal), így az azonosított ügyfél minden adata egy helyen van; amíg a hívás tart (hívás nélkül 30 percig) a fejléc zöld „Azonosított ügyfél” gombja minden oldalról visszavezet az adatlapra; amíg a hívás tart, az adatlap és az azonosítás oldal elhagyása előtt a rendszer rákérdez (nyitott kérdés-válasz menet alatt is); a Kód ellenőrzése oldal menüből megnyitva is a saját, folyamatban lévő hívásra köti az ellenőrzést, és siker után az adatlapra visz (eddig a találat csak az oldalon élt, egy félrekattintás elveszítette); a vezérlőpulton a saját, már azonosított hívás gombja „Adatlap”, a kolléga által azonosított hívás nem vehető át (a gomb letiltva mondja az okot, a kiszolgáló is elutasítja).
+
+**Frissítés előtt:** migráció és új telepítési kulcs nincs.
+
+Részletek:
+- A `TROUBLESHOOTING.md` és az üzemeltetési kézikönyv felsorolja, melyik státusz mit jelent (`EWS_AUTH`, `EWS_URL`, postaláda, proxy, CA).
+- Rootless Docker a dokumentumokban: a telepítési útmutató 3. fejezetének új „Rootless Docker” része (telepítés és indítás, portok, a subuid/subgid-számítás – a konténer 82-es felhasználója a gazdagépen `kezdő + 81`, például `165617` –, a TLS-kulcs tulajdonosa a konténer névterén belül `--user 0 --cap-add CHOWN`-nal a `sudo chown 82:82` helyett, a hívók forrás-IP-je a `slirp4netns` port-továbbítóval, tároló és áttérés), az üzemeltetési kézikönyv három helyzete, a `TROUBLESHOOTING.md` 5. és 6. pontja és a README gyorsindítása.
+- Platform: PHP 8.5.12 (a 2026. október 21-én közzétett két kritikus PHP-sérülékenység javítása; korábban 8.5.11), nginx 1.31.8, libcurl 8.23.0; az ellenőrző Trivy 0.76.1.
+- Az image saját, NTLM-képes libcurl-t hoz (curl 8.23.0 forrásból, SHA-256 és PGP-ellenőrzéssel), mert az Alpine curl-je NTLM nélkül épül, és így az `EWS_AUTH=ntlm` (Windows-hitelesítésű Exchange) eddig mindig 401-et kapott; a build, az indításkori ellenőrzés és a füstteszt számon kéri az NTLM-képességet, a Rendszerállapot Levelezés kártyája piros, ha hiányozna. A `platform.sh` a libcurl-t is követi.
+
+### English
+Rule changes in one sentence (with the specification identifiers):
+- KOM-02: the error of a request Exchange (EWS) refused starts with the HTTP status, lists the authentication methods the server offers on a 401, names Exchange's own response code and text (`EWS Error…`), says when a sign-in page or proxy answered or the body was empty, and reports the network error of an unreachable server; an empty answer used to say nothing after "EWS CreateItem failed:".
+- AZO-07 (new): after a successful identification by any method the agent lands on the client's record, headed by an "Identified" bar with the method, the time and the call (with a call-note and a "Back to the call queue" button), so every detail of the identified client is in one place; while the call is in progress (30 minutes without a call) a green "Identified client" button in the header leads back to the record from any page; while the call is in progress, leaving the record or the identification page asks first (also during an open question-and-answer session); the Verify code page binds the check to the agent's own ongoing call also when opened from the menu, and moves on to the record after a correct code (the match used to live only on the page, one stray click lost it); on the dashboard the button of the agent's own identified call reads "Client record", and a call a colleague identified cannot be taken over (the disabled button says why, the server refuses too).
+
+**Before upgrading:** no migration, no new deployment key.
+
+Details:
+- `TROUBLESHOOTING.md` and the operations manual list what each status means (`EWS_AUTH`, `EWS_URL`, mailbox, proxy, CA).
+- Rootless Docker in the documents: a new "Rootless Docker" part of chapter 3 of the installation guide (set-up and start, ports, the subuid/subgid arithmetic – the container's uid 82 is `start + 81` on the host, for example `165617` –, the TLS key's owner set inside the container's user namespace with `--user 0 --cap-add CHOWN` instead of `sudo chown 82:82`, the callers' source IP with the `slirp4netns` port driver, storage and migration), three situations of the operations manual, points 5 and 6 of `TROUBLESHOOTING.md` and the README quick start.
+- Platform: PHP 8.5.12 (fixes the two critical PHP vulnerabilities published on 21 October 2026; previously 8.5.11), nginx 1.31.8, libcurl 8.23.0; the scanning Trivy 0.76.1.
+- The image ships its own NTLM-capable libcurl (curl 8.23.0 from source, SHA-256 and PGP verified), because Alpine builds curl without NTLM and `EWS_AUTH=ntlm` (Exchange with Windows authentication) always got a 401 before; the build, the start-up check and the smoke test assert NTLM, and the Mail tile of the system status turns red should it be missing. `platform.sh` tracks libcurl too.
+
 ## [1.7.1] – 2026-10-21
 
 ### Magyar

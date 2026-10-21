@@ -46,6 +46,10 @@ docker compose run --rm --no-deps web key
 # 4. Your certificate (full chain) and key, readable by the container user (uid 82):
 cp /path/to/fullchain.pem /path/to/privkey.pem tls/
 sudo chown 82:82 tls/*.pem && sudo chmod 400 tls/privkey.pem
+#    Rootless Docker: uid 82 maps to a subordinate uid on the host, so do not chown on the host;
+#    set the owner inside the container's user namespace instead (installation guide, "Rootless Docker"):
+#    docker compose run --rm --no-deps --user 0 --cap-add CHOWN -v "$PWD/tls":/t --entrypoint sh web \
+#      -c 'chown 82:82 /t/*.pem && chmod 444 /t/fullchain.pem && chmod 400 /t/privkey.pem'
 
 # 5. Start: database, migrations, web, workers, scheduler.
 docker compose up -d
@@ -96,7 +100,7 @@ The image contains only what runs the application: Alpine Linux, PHP-FPM with th
 Every image is signed and carries a build provenance and an SBOM attestation. Set `v` to the version you install (the `OPENHDID_VERSION` of your `.env`):
 
 ```sh
-v=1.7.1
+v=1.8.0
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \

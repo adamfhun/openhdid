@@ -6,6 +6,8 @@ use App\Enums\CallStatus;
 use App\Enums\ClientTier;
 use App\Enums\IdSessionStatus;
 use App\Filament\Admin\Pages\VerifyCode;
+use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
 use App\Identification\MobileOtpService;
 use App\Models\Call;
 use App\Models\Client;
@@ -15,7 +17,6 @@ use App\Support\HuDate;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Auth\Access\AuthorizationException;
-use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Livewire;
 
 beforeEach(function (): void {
@@ -32,16 +33,16 @@ it('identifies the client from a dictated code and attaches the call', function 
 
     $this->get(VerifyCode::getUrl())->assertOk();
 
+    // The last digit typed checks the code at once (live field); a wrong one empties the fields.
     Livewire::test(VerifyCode::class, ['call' => $call->id])
-        ->fillForm(['code' => '00000000'])
-        ->call('verify')
+        ->set('data.code', '00000000')
         ->assertSet('failed', true)
-        ->assertSet('sessionId', null)
-        ->fillForm(['code' => $code])
-        ->call('verify')
+        ->assertSet('data.code', '')
+        ->assertNoRedirect()
+        ->set('data.code', $code)
         ->assertSet('failed', false)
-        ->assertSee($client->name)
-        ->assertSee(__('Identified'));
+        // Identified: on to the client's record, which carries the "Identified" bar (AZO-07).
+        ->assertRedirect(ClientResource::getUrl('view', ['record' => $client]));
 
     $session = IdSession::query()->where('client_id', $client->id)->first();
     expect($session->status)->toBe(IdSessionStatus::Passed)
@@ -56,16 +57,20 @@ it('is hidden from users without the identification permission', function (): vo
     $this->actingAs($viewer)->get(VerifyCode::getUrl())->assertForbidden();
 });
 
-it('offers the way back to the queue after a successful check', function (): void {
+it('offers the way back to the queue on the client record after a successful check', function (): void {
     $client = Client::factory()->synced()->create();
     $code = app(MobileOtpService::class)->issue($client)['code'];
 
+    // Typing the last digit checks the code at once (live field) and moves on to the record.
     Livewire::test(VerifyCode::class)
         ->assertSee(__('Codes requested by the mobile app are IVR codes: only the phone menu accepts them, this page does not.'))
-        ->fillForm(['code' => $code])
-        ->call('verify')
+        ->set('data.code', $code)
+        ->assertRedirect(ClientResource::getUrl('view', ['record' => $client]));
+
+    Livewire::test(ViewClient::class, ['record' => $client->id])
+        ->assertSee(__('Identified'))
         ->assertSee(__('Back to the call queue'))
-        ->assertSee(now()->format(HuDate::DATE));
+        ->assertSee(now()->format(HuDate::DATETIME));
 });
 
 it('refuses to attach a dictated code to a call held by another agent', function (): void {
@@ -125,11 +130,4 @@ it('opens the verify code page for a missed call reached from the identification
     Livewire::test(VerifyCode::class, ['call' => $missed->id])
         ->assertOk()
         ->assertSee($missed->callerNumber());
-});
-
-it('does not let a browser replace the successful identification session', function (): void {
-    $otherSession = IdSession::factory()->create();
-
-    expect(fn () => Livewire::test(VerifyCode::class)->set('sessionId', $otherSession->id))
-        ->toThrow(CannotUpdateLockedPropertyException::class);
 });

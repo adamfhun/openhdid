@@ -194,6 +194,11 @@ function check_env(string $role): void
     if ($production && $tls === 'selfsigned') {
         $warnings[] = 'OPENHDID_TLS=selfsigned is for trials only; browsers and partners will reject the certificate.';
     }
+    // The image builds its own libcurl with NTLM (Alpine's has none); should the PHP extension ever
+    // load the wrong library, say so at start instead of answering every EWS request with a 401.
+    if (env_value('MAIL_MAILER', 'log') === 'ews' && env_value('EWS_AUTH', 'basic') === 'ntlm' && ! (curl_version()['features'] & CURL_VERSION_NTLM)) {
+        $errors[] = 'EWS_AUTH=ntlm cannot work: the libcurl this PHP loaded has no NTLM support (libcurl '.curl_version()['version'].'). Report it with the image version; meanwhile enable basic authentication on the Exchange EWS virtual directory (EWS_AUTH=basic), use oauth (Exchange Online), or an SMTP connector (MAIL_MAILER=smtp).';
+    }
     if ($production && in_array(env_value('MAIL_MAILER', 'log'), ['log', 'array'], true)) {
         $warnings[] = 'MAIL_MAILER writes e-mails to the log only; no e-mail leaves the server.';
     }

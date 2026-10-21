@@ -10,6 +10,7 @@ use App\Filament\Admin\Pages\Identify;
 use App\Filament\Admin\Pages\SearchClients;
 use App\Filament\Admin\Pages\VerifyCode;
 use App\Filament\Admin\Resources\Calls\Pages\ManageCalls;
+use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Admin\Resources\Clients\Pages\ListClients;
 use App\Filament\Admin\Widgets\MissedCallsWidget;
 use App\Filament\Admin\Widgets\OngoingCallsWidget;
@@ -55,10 +56,12 @@ it('runs a full q-a session from the page', function (): void {
     expect($session)->not->toBeNull()->and($page->get('sessionId'))->toBe($session->id);
 
     $page->assertSee('Stored answer')->assertSee('válasz ');
-    $page->call('judge', 'accepted')->call('judge', 'accepted');
+    $page->call('judge', 'accepted')->assertNoRedirect()->call('judge', 'accepted');
 
     expect($session->fresh()->status)->toBe(IdSessionStatus::Passed);
-    $page->assertSee('Identified')->assertDontSee('Stored answer');
+    // Identified: on to the client's record (AZO-07); the page itself shows the pass when reopened.
+    $page->assertRedirect(ClientResource::getUrl('view', ['record' => $this->client]));
+    Livewire::test(Identify::class, ['client' => $this->client->id])->assertSee('Identified')->assertDontSee('Stored answer');
 });
 
 it('attaches the client to the call and claims it from the dashboard', function (): void {
@@ -90,7 +93,7 @@ it('offers the pin method only when enabled and set', function (): void {
         ->assertSee('PIN told by the caller')
         ->set('pin', '123456')
         ->call('verifyPin')
-        ->assertSee('Identified');
+        ->assertRedirect(ClientResource::getUrl('view', ['record' => $this->client]));
 
     expect(IdSession::query()->where('method', 'pin')->where('channel', 'manual')->first()->status)->toBe(IdSessionStatus::Passed);
 });
@@ -149,7 +152,8 @@ it('links a pin verification started from the missed-calls list to that call', f
 
     // The page reads the outcome "by call", so without the link it would not
     // even show the agent that the caller has just been identified.
-    $page->assertSee(__('Identified'));
+    $page->assertRedirect(ClientResource::getUrl('view', ['record' => $this->client]));
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $missed->id])->assertSee(__('Identified'));
 });
 
 it('links a question-answer session started from the missed-calls list to that call', function (): void {
@@ -250,6 +254,8 @@ it('records a manual identification with a reason', function (): void {
     Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id])
         ->callAction('manualIdentify', data: ['reason' => 'Visszahívtam a rögzített számon, egyeztettük.'])
         ->assertHasNoActionErrors()
+        ->assertRedirect(ClientResource::getUrl('view', ['record' => $this->client]));
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id])
         ->assertSee(__('Identified'))
         ->assertSee(__('recorded manually'));
 

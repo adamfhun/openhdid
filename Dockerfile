@@ -6,18 +6,23 @@
 #
 # Every base image is pinned by digest and every download by SHA-256. The
 # maintainer script (platform.sh) updates the values below together; nginx
-# tarballs are checked against the nginx.org PGP signatures before pinning.
+# and curl tarballs are checked against their PGP signatures before pinning,
+# and the curl signature is checked again at build time.
 
-ARG PHP_IMAGE=php:8.5.11-fpm-alpine3.24@sha256:fa01fb1645cd0fc566a5f146b099adace33b906571f972f71f2182a7c12d1cd7
+ARG PHP_IMAGE=php:8.5.12-fpm-alpine3.24@sha256:4c9541a4506014672d074652a1cc9754d3c5f97cad6c6027bae35be0e4a4dea9
 ARG NODE_IMAGE=node:24.22.0-alpine3.24@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f
-ARG COMPOSER_IMAGE=composer:2.10.3@sha256:af98f42dfff7c68ba8d53c2164fd9fde1087b7d449514baa38c418b1f6bc4bac
+ARG COMPOSER_IMAGE=composer:2.10.3@sha256:d0c32820c62cc860fddd22adceed4eeda7698b093a7a88d503414172ce400626
 ARG ALPINE_IMAGE=alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
-ARG NGINX_VERSION=1.31.7
-ARG NGINX_SHA256=89ea8a3dc171511f7325043b50e4c036248d9fad5feb7ec809c0b82d5df42c65
+ARG NGINX_VERSION=1.31.8
+ARG NGINX_SHA256=0652b760b3b772d2ec17b47c2fc15d9a95e6fe35cd5b877eadc1a62d9bc75af1
 ARG HEADERS_MORE_VERSION=0.40
 ARG HEADERS_MORE_SHA256=c14cb5e6c998590c209efbf77bd7637ce2cab02332e4192756a8af5b26ba4284
 ARG PHPREDIS_VERSION=6.3.0
 ARG PHPREDIS_SHA256=0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5
+ARG CURL_VERSION=8.23.0
+ARG CURL_SHA256=8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5
+# Daniel Stenberg's release-signing key (https://daniel.haxx.se/mykey.asc); the build refuses any other.
+ARG CURL_PGP_FINGERPRINT=27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2
 
 FROM ${COMPOSER_IMAGE} AS composer
 
@@ -76,6 +81,48 @@ RUN set -eux; \
     make install; \
     strip /usr/sbin/nginx; \
     /usr/sbin/nginx -V
+
+# --- libcurl from source: Alpine builds curl without NTLM, and Exchange (EWS) behind
+# Windows authentication needs it. The version is at least the Alpine package's, so the
+# PHP curl extension (linked against libcurl.so.4) finds every symbol and loads it
+# unchanged from /usr/local/lib, which musl searches before /usr/lib. Only the shared
+# library goes into the runtime image; the runtime stage asserts that PHP picked it up.
+FROM ${ALPINE_IMAGE} AS libcurl
+ARG CURL_VERSION
+ARG CURL_SHA256
+ARG CURL_PGP_FINGERPRINT
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+WORKDIR /src
+RUN set -eux; \
+    apk add --no-cache build-base gnupg nghttp2-dev openssl-dev zlib-dev; \
+    wget -q -O curl.tar.xz "https://curl.se/download/curl-${CURL_VERSION}.tar.xz"; \
+    wget -q -O curl.tar.xz.asc "https://curl.se/download/curl-${CURL_VERSION}.tar.xz.asc"; \
+    wget -q -O mykey.asc https://daniel.haxx.se/mykey.asc; \
+    echo "${CURL_SHA256}  curl.tar.xz" | sha256sum -c -; \
+    GNUPGHOME="$(mktemp -d)"; export GNUPGHOME; \
+    gpg --batch --quiet --import mykey.asc; \
+    gpg --batch --with-colons --fingerprint | grep -q "^fpr:::::::::${CURL_PGP_FINGERPRINT}:"; \
+    gpg --batch --verify curl.tar.xz.asc curl.tar.xz; \
+    gpgconf --kill all; rm -rf "$GNUPGHOME"; \
+    tar -xJf curl.tar.xz
+WORKDIR /src/curl-${CURL_VERSION}
+RUN set -eux; \
+    ./configure \
+        --prefix=/usr/local \
+        --disable-static \
+        --with-openssl \
+        --with-nghttp2 \
+        --with-zlib \
+        --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
+        --enable-ntlm \
+        --enable-ipv6 \
+        --disable-dict --disable-file --disable-ftp --disable-gopher --disable-imap --disable-ldap --disable-ldaps \
+        --disable-mqtt --disable-pop3 --disable-rtsp --disable-smb --disable-smtp --disable-telnet --disable-tftp \
+        --disable-manual --disable-docs \
+        --without-brotli --without-libidn2 --without-libpsl --without-zstd; \
+    make -j"$(nproc)"; \
+    make install-strip DESTDIR=/out; \
+    LD_LIBRARY_PATH=/out/usr/local/lib /out/usr/local/bin/curl -V | grep -q NTLM
 
 # --- PHP with only the extensions the application needs ---
 FROM ${PHP_IMAGE} AS php
@@ -156,6 +203,7 @@ RUN set -eux; \
     mkdir -p /etc/nginx /usr/local/share/openhdid /etc/openhdid/tls /etc/openhdid/ca
 COPY --from=nginx /usr/sbin/nginx /usr/sbin/nginx
 COPY --from=nginx /etc/nginx/mime.types /etc/nginx/fastcgi_params /etc/nginx/
+COPY --from=libcurl /out/usr/local/lib/libcurl.so.4* /usr/local/lib/
 COPY docker/php.ini /usr/local/etc/php/conf.d/zz-openhdid.ini
 COPY docker/php-fpm.conf /usr/local/etc/php-fpm.d/openhdid.conf
 COPY docker/runtime.php docker/error.html /usr/local/share/openhdid/
@@ -170,7 +218,8 @@ RUN set -eux; \
     ln -s ../storage/app/public /app/public/storage; \
     chown -R www-data:www-data /app/storage; \
     nginx -v; \
-    php -r 'foreach (["intl", "redis", "pdo_mysql", "pcntl", "soap", "zip", "bcmath", "Zend OPcache"] as $e) { if (! extension_loaded($e)) { fwrite(STDERR, "missing PHP extension: $e\n"); exit(1); } }'
+    php -r 'foreach (["intl", "redis", "pdo_mysql", "pcntl", "soap", "zip", "bcmath", "Zend OPcache"] as $e) { if (! extension_loaded($e)) { fwrite(STDERR, "missing PHP extension: $e\n"); exit(1); } }'; \
+    php -r 'if (! (curl_version()["features"] & CURL_VERSION_NTLM)) { fwrite(STDERR, "the PHP curl extension did not pick up the NTLM-capable libcurl\n"); exit(1); }'
 
 ENV HOME=/tmp \
     APP_ENV=production \

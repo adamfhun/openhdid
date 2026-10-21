@@ -14,6 +14,7 @@ use App\Enums\OutboundMessageStatus;
 use App\Enums\PrincipalType;
 use App\Enums\SyncRunStatus;
 use App\Jobs\SendOutboundMessage;
+use App\Mail\Transport\EwsTransport;
 use App\Models\ApiKey;
 use App\Models\AuditLog;
 use App\Models\Client;
@@ -208,7 +209,7 @@ class HealthChecks
             'scheduler' => __('The scheduler does not run: the cron entry "* * * * * php artisan schedule:run" or the scheduler container is missing or stopped. It drives the EMD sync, the stale-call cleanup, the override expiry and the data retention. Add or repair it on the app server.'),
             'php' => __('EMD sync and large file imports need a PHP max_execution_time of at least 120 seconds (300 recommended) in both PHP-FPM (the panel, this page) and the CLI (the worker, hdid:emd-sync); 0 means unlimited and is fine. Set it in php.ini or the FPM pool (php_admin_value[max_execution_time]) with request_terminate_timeout above it, then restart PHP-FPM. Below 120 s a sync refuses to start. This tile shows the limit of the process that ran the check: the panel shows PHP-FPM, "php artisan hdid:health" shows the CLI.'),
             'messages' => __('Failed messages of the last 24 hours. Open Outbound messages, look at the error of a failed row and fix the transport (E-mail or SMS tile), then resend from the list. Queued ones that never leave point to the queue worker.'),
-            'mail' => __('Red: the EWS URL or credentials are missing in the environment (MAIL_MAILER, EWS_*). Yellow: a log/array mailer is set, so no e-mail leaves the server, fine for testing, not for production. Test with a magic link to your own client account.'),
+            'mail' => __('Red: the EWS URL or credentials are missing in the environment (MAIL_MAILER, EWS_*), or EWS_AUTH=ntlm is set where the libcurl has no NTLM (the OpenHDID image has it from 1.8.0; elsewhere use basic, oauth or SMTP). Yellow: a log/array mailer is set, so no e-mail leaves the server, fine for testing, not for production. Test with a magic link to your own client account.'),
             'sms' => __('Red with Ozeki: the gateway is unreachable or the credentials are wrong (OZEKI_*), check the Ozeki service and the network path. Red/yellow with the log driver: SMS are only written to the log, set SMS_DRIVER=ozeki for production.'),
             'sync' => __('Red: the last run failed or no successful run happened in twice the expected interval. Open EMD sync runs for the error; check the API URL/key or upload the file manually. A refused run usually means the export was much smaller than before (row-ratio guard). Yellow with a waiting run: the sync started from the panel was not picked up, start a worker for the EMD_SYNC_QUEUE queue. With {{ ids }} in the export payload, a failed ID list query (EMD_SYNC_ID_LIST_URL, ID list settings) or no selected ID on the list also fails the run; the run details show the status codes. Yellow with accounts closing at the next sync: their records were absent from the last run(s); open EMD records, tab "Closes at the next sync", and check the export (or the ID list selection) before the next run closes them. Yellow with e-mail conflicts: the directory renamed an account e-mail to an address another account holds; the account kept its old address and cannot sign in until the duplicate is resolved in EMD or the other account is deleted. A changed classification (staff/client) closes the old account only after the same number of runs as a missing record; the run details list the pending ones.'),
             'api_keys' => __('Red: a mobile app backend key has no signing secret, so every request with it is refused (signing is mandatory for this scope). Issue one under API keys › Signing secret and hand it to the operator of the mobile backend, or revoke the key if it is not used. Yellow: a scope (call center or mobile backend) has no active key, so that partner cannot call in; create one under API keys and hand it over, or ignore this while the integration is not live yet.'),
@@ -366,6 +367,10 @@ class HealthChecks
             $configured = filled($cfg['url'] ?? null) && (($cfg['auth'] ?? 'basic') === 'oauth'
                 ? filled($cfg['oauth']['client_id'] ?? null) && filled($cfg['oauth']['client_secret'] ?? null)
                 : filled($cfg['username'] ?? null) && filled($cfg['password'] ?? null));
+
+            if (($cfg['auth'] ?? 'basic') === 'ntlm' && ! EwsTransport::ntlmSupported()) {
+                return Check::fail('mail', $label, EwsTransport::ntlmUnavailableMessage());
+            }
 
             return $configured
                 ? Check::ok('mail', $label, __('EWS (:auth) · from :from', ['auth' => $cfg['auth'] ?? 'basic', 'from' => $from]))
