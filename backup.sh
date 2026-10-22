@@ -20,8 +20,9 @@
 # Egy mentés tartalma (a mappa 700-as, a fájlok 600-as jogúak):
 #   database.sql.gz   a beépített MariaDB adatbázisa, konzisztens pillanatképként
 #   storage.tar.gz    a storage kötet (arculati képek, feltöltések)
-#   config.tar.gz     .env, db.env, compose.yaml, compose.override.yaml és a ca mappa –
-#                     benne az APP_KEY és minden jelszó: ezt a fájlt védje a legjobban
+#   config.tar.gz     .env, db.env, compose.yaml, compose.override.yaml, a használati profil
+#                     fájlja (profiles/*/compose.yaml) és a ca mappa – benne az APP_KEY és
+#                     minden jelszó: ezt a fájlt védje a legjobban
 #   tls.tar.gz        a tanúsítvány és a kulcs (a tls mappa)
 #   info.txt          időpont, OpenHDID-verzió, image, adatbázis
 #   SHA256SUMS        ellenőrzőösszegek; visszaállítás előtt ellenőrizve. A sérülést mutatják ki,
@@ -160,8 +161,13 @@ run_web() {
 
 # The operator's own files, archived with the operator's rights.
 config_archive() {
-    local files=(.env db.env compose.yaml)
+    local files=(.env db.env compose.yaml) profile
     [[ -f compose.override.yaml ]] && files+=(compose.override.yaml)
+    # The usage profile COMPOSE_FILE in .env points to: without it the restored .env names a
+    # missing file and no docker compose command works.
+    for profile in profiles/*/compose.yaml; do
+        [[ -f $profile ]] && files+=("$profile")
+    done
     [[ -d ca ]] && files+=(ca)
     # Archive and compress in two steps: some tar builds (bsdtar) pad a compressed stream.
     tar cf - "${files[@]}" | gzip -c
@@ -253,7 +259,7 @@ check_config_archive() {
     local archive=$1 names entries unexpected
     names=$(tar tzf "$archive") || die "A beállítások mentése nem olvasható."
     entries=$(tar tvzf "$archive") || die "A beállítások mentése nem olvasható."
-    unexpected=$(grep -vxE '(\./)?(\.env|db\.env|compose\.yaml|compose\.override\.yaml|ca(/[^/]+)*/?)' <<<"$names" || true)
+    unexpected=$(grep -vxE '(\./)?(\.env|db\.env|compose\.yaml|compose\.override\.yaml|profiles/[A-Za-z0-9_.-]+/compose\.yaml|ca(/[^/]+)*/?)' <<<"$names" || true)
     [[ -z $unexpected ]] || die "A beállítások mentésében nem várt fájl van ($(tr '\n' ' ' <<<"$unexpected")); ezt a mentést nem ez a szkript készítette, vagy módosították. Nem állítom vissza."
     unexpected=$(grep -vE '^[-d]' <<<"$entries" || true)
     [[ -z $unexpected ]] || die "A beállítások mentésében hivatkozás vagy különleges fájl van; ezt a mentést nem állítom vissza."
@@ -305,7 +311,13 @@ restore_backup() {
     fi
     mkdir -p tls
     [[ -O tls ]] || die "A tls mappa nem az Ön tulajdona ($(ls -ld tls | awk '{print $3}')); állítsa át a tulajdonost, majd indítsa újra. Semmi nem változott."
-    for f in .env db.env compose.yaml compose.override.yaml; do
+    local -a config_files=(.env db.env compose.yaml compose.override.yaml)
+    for f in profiles/*/compose.yaml "$stage"/profiles/*/compose.yaml; do
+        f=${f#"$stage"/}
+        [[ -e $f || -e $stage/$f ]] || continue
+        [[ " ${config_files[*]} " == *" $f "* ]] || config_files+=("$f")
+    done
+    for f in "${config_files[@]}"; do
         [[ -e $f || -e $stage/$f ]] || continue
         cmp -s "$f" "$stage/$f" 2>/dev/null || differs+=("$f")
     done
@@ -343,7 +355,7 @@ restore_backup() {
     # The CA files must stay readable for the container user: the archived modes count, not this script's umask.
     (umask 022 && tar xzf "$source/config.tar.gz") || die "A beállítások visszaállítása nem sikerült (írható a mappa: $DIR?)."
     chmod 600 .env db.env
-    say "    .env, db.env, compose.yaml, ca visszaállítva (OpenHDID $version)"
+    say "    .env, db.env, compose.yaml, profil, ca visszaállítva (OpenHDID $version)"
 
     # The container user writes the key into a folder inside backup/ (700): open to that user,
     # out of reach of every other local account. The finished folder then takes the place of tls.

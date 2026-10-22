@@ -4,6 +4,36 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.8.1] – 2026-10-22
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- KOM-02: az `EWS_AUTH=ntlm` most valóban NTLM-mel hitelesít: a Guzzle 8 az `auth` opció `ntlm` típusát csendben figyelmen kívül hagyja, így a kérés hitelesítés nélkül ment ki, és az Exchange minden küldésre „HTTP 401 · the server offers: NTLM · empty response body” választ adott az NTLM-képes libcurl mellett is; az NTLM-et mostantól a libcurl saját beállításai (`CURLOPT_HTTPAUTH`, `CURLOPT_USERPWD`) kapcsolják be, és egy teszt helyi Exchange-utánzattal bizonyítja a háromlépéses kézfogást (1. típusú üzenet törzs nélkül, 2. típusú kihívás, 3. típusú válasz a SOAP-törzzsel).
+- ÜZ-03.2: a mentés (`backup.sh`) a használati profil fájlját (`profiles/*/compose.yaml`) is menti és visszaállítja; eddig a `COMPOSE_FILE`-os telepítés visszaállítása a „mentett beállításokból a compose nem olvasható” hibával állt meg, mert a visszaállított `.env` hiányzó fájlra mutatott (a füstteszt mostantól ezt az utat járja).
+- ÜZ-03.2: a konténer elindul a `.env` `COMPOSE_FILE` sorával: a `.env` a konténerek `env_file`-ja is, az indítószkript pedig minden `NÉV_FILE` változót titokfájl-mutatónak vett, így a használati profilt választó telepítésen a `migrate` „`COMPOSE_FILE points to a file that cannot be read`” hibával, 64-es kóddal lépett ki, és a többi szolgáltatás nem indult el (1.7.0-tól minden profilos telepítést érintett; a füstteszt eddig profil nélkül futott, mostantól az 5k profillal, `COMPOSE_FILE`-lal indítja a vermet, és két feldolgozót vár).
+- ÜZ-03.2: az `UPGRADE.md` 3. lépése a használati profil fájlját (`profile-5k.yaml` → `profiles/5k/compose.yaml`) is letölti és ellenőrzi a `compose.yaml`-lal együtt, a 4. lépés kimondja, hogy az 1.7.0 előtti telepítésen újként megjelenő `COMPOSE_FILE` kulcs felvételéhez a profilfájl kell; az 1.7.1 „a meglévő telepítéseket nem érintette” állítása csak addig igaz, amíg a kulcs nincs felvéve: a frissítési útmutató szerint felvett kulcs a profilfájl nélkül minden `docker compose` parancsot a `compose file "profiles/5k/compose.yaml" set by COMPOSE_FILE environment variable is invalid` hibával állít meg.
+
+**Frissítés előtt:** migráció és új telepítési kulcs nincs. Akinek a `.env`-jében `COMPOSE_FILE` áll, és a profilfájl hiányzik, vagy a konténer a `COMPOSE_FILE points to a file that cannot be read` hibával áll: `TROUBLESHOOTING.md` 15. fejezet (a profilfájl letöltése ellenőrzőösszeggel; régebbi image-dzsel a profil `compose.override.yaml`-ként).
+
+Részletek:
+- `TROUBLESHOOTING.md` új 15. fejezete a hiányzó profilfájl hibájára; az `UPGRADE.md` „Ha valami elakad” listája is megnevezi.
+- A telepítési útmutató 14. fejezete (frissítés) a kiadás fájljainak cseréjét külön lépésként mondja, a profilfájllal és az új kulcsok átnézésével; a 3. fejezet a hiba pontos szövegét idézi.
+- A dokumentumok verziója 1.8.1.
+
+### English
+Rule changes in one sentence (with the specification identifiers):
+- KOM-02: `EWS_AUTH=ntlm` now really authenticates with NTLM: Guzzle 8 silently ignores the `ntlm` type of the `auth` option, so the request went out without credentials and Exchange answered every send with "HTTP 401 · the server offers: NTLM · empty response body" even with the NTLM-capable libcurl; NTLM is now switched on through libcurl's own options (`CURLOPT_HTTPAUTH`, `CURLOPT_USERPWD`), and a test proves the three-step handshake against a local stand-in Exchange (type-1 message without a body, type-2 challenge, type-3 answer with the SOAP body).
+- ÜZ-03.2: the backup (`backup.sh`) saves and restores the usage profile file (`profiles/*/compose.yaml`) too; until now the restore of a `COMPOSE_FILE` installation stopped with "the compose of the saved settings cannot be read", because the restored `.env` pointed to a missing file (the smoke test now walks this path).
+- ÜZ-03.2: the container starts with the `COMPOSE_FILE` line of `.env`: `.env` is the containers' `env_file` too, and the start script took every `NAME_FILE` variable for a secret-file pointer, so on an installation that selects a usage profile `migrate` exited with code 64 and "`COMPOSE_FILE points to a file that cannot be read`", and the other services did not start (every profiled installation since 1.7.0 was affected; the smoke test used to run without a profile, from now on it starts the stack with the 5k profile and `COMPOSE_FILE`, and expects two workers).
+- ÜZ-03.2: step 3 of `UPGRADE.md` downloads and verifies the usage profile file (`profile-5k.yaml` → `profiles/5k/compose.yaml`) together with `compose.yaml`, and step 4 says that adding the `COMPOSE_FILE` key (new on installations older than 1.7.0) needs the profile file; the 1.7.1 statement "existing installations were not affected" only holds until the key is added: a key added by the upgrade guide without the profile file stops every `docker compose` command with `compose file "profiles/5k/compose.yaml" set by COMPOSE_FILE environment variable is invalid`.
+
+**Before upgrading:** no migration, no new deployment key. If `.env` has `COMPOSE_FILE` and the profile file is missing, or the container stops with `COMPOSE_FILE points to a file that cannot be read`: `TROUBLESHOOTING.md`, chapter 15 (download of the profile file with checksum; with an older image the profile as `compose.override.yaml`).
+
+Details:
+- New chapter 15 of `TROUBLESHOOTING.md` for the missing profile file; the "If something gets stuck" list of `UPGRADE.md` names it too.
+- Chapter 14 (upgrade) of the installation guide states the replacement of the release files as its own step, with the profile file and the review of new keys; chapter 3 quotes the exact error text.
+- The documents carry version 1.8.1.
+
 ## [1.8.0] – 2026-10-21
 
 ### Magyar

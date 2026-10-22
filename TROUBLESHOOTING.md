@@ -369,14 +369,19 @@ Az EWS hibaszövege a HTTP-státusszal kezdődik, és megmondja, mit válaszolt 
 error starts with the HTTP status and says what Exchange answered.
 
 - `HTTP 401 … the server offers: Negotiate, NTLM` – a kiszolgáló csak Windows-hitelesítést kínál:
-  `EWS_AUTH=ntlm` és `EWS_USERNAME=TARTOMANY\felhasznalo` (az image 1.8.0-től NTLM-képes libcurl-lel
-  jön; régebbi image-dzsel a basic engedélyezése az EWS virtuális könyvtáron vagy SMTP-összekötő:
-  `MAIL_MAILER=smtp`, `MAIL_HOST`, `MAIL_PORT=587`, STARTTLS). `HTTP 401 … Basic` basic mellett:
-  jelszó, postaláda; Exchange Online-nál `oauth`. / The server offers Windows authentication only:
-  `EWS_AUTH=ntlm` and `EWS_USERNAME=DOMAIN\user` (the image ships an NTLM-capable libcurl from 1.8.0;
-  with an older image enable basic authentication on the EWS virtual directory, or use an SMTP
-  connector: `MAIL_MAILER=smtp`, `MAIL_HOST`, `MAIL_PORT=587`, STARTTLS). `HTTP 401 … Basic` with basic
-  set: password, mailbox; Exchange Online: `oauth`.
+  `EWS_AUTH=ntlm` és `EWS_USERNAME=TARTOMANY\felhasznalo` (1.8.1-től; az 1.8.0 image libcurl-je már
+  NTLM-képes volt, de a kérés hitelesítés nélkül ment ki, és `ntlm` mellett is ugyanez a 401 jött;
+  régebbi image-dzsel a basic engedélyezése az EWS virtuális könyvtáron vagy SMTP-összekötő:
+  `MAIL_MAILER=smtp`, `MAIL_HOST`, `MAIL_PORT=587`, STARTTLS). Ha `ntlm` mellett 1.8.1-től is 401 jön:
+  a tartományvezérlő utasította el a fiókot (név alakja, jelszó, letiltott vagy NTLM-tiltott fiók).
+  `HTTP 401 … Basic` basic mellett: jelszó, postaláda; Exchange Online-nál `oauth`. / The server offers
+  Windows authentication only: `EWS_AUTH=ntlm` and `EWS_USERNAME=DOMAIN\user` (from 1.8.1; the 1.8.0
+  image already had an NTLM-capable libcurl, but the request went out without credentials and the same
+  401 came with `ntlm` set; with an older image enable basic authentication on the EWS virtual
+  directory, or use an SMTP connector: `MAIL_MAILER=smtp`, `MAIL_HOST`, `MAIL_PORT=587`, STARTTLS). A 401
+  with `ntlm` from 1.8.1 on: the domain controller refused the account (name form, password, disabled
+  or NTLM-restricted account). `HTTP 401 … Basic` with basic set: password, mailbox; Exchange Online:
+  `oauth`.
 - `HTTP 404` vagy `HTML answer (sign-in page or proxy?)` – rossz `EWS_URL` (helyesen
   `https://<kiszolgáló>/EWS/Exchange.asmx`), vagy egy bejelentkező oldal, proxy válaszolt. / Wrong
   `EWS_URL` (`https://<host>/EWS/Exchange.asmx`), or a sign-in page or proxy answered.
@@ -401,3 +406,57 @@ a szkript nem ír bele: ilyen mentést ne állítson vissza. / "A backup or rest
 (process: N)" means that run is really working (`ps -p N`); the lock of an interrupted run (reboot,
 `kill -9`) is lifted by the next run. A restore stopping on an "unexpected file" means the backup's
 configuration archive holds something the script never writes: do not restore that backup.
+
+## 15. Használati profil fájlja / Usage profile file
+
+```
+compose file "profiles/5k/compose.yaml" set by COMPOSE_FILE environment variable is invalid: stat …/profiles/5k/compose.yaml: no such file or directory
+```
+
+A `.env` `COMPOSE_FILE` sora a használati profil kiegészítő fájljára mutat, amely nincs a telepítési mappában.
+A profil fájlja is a kiadás melléklete (`profile-5k.yaml` → `profiles/5k/compose.yaml`, `profile-10k.yaml` →
+`profiles/10k/compose.yaml`), és frissítésnél a `compose.yaml`-lal együtt kell letölteni (UPGRADE.md 3. lépés);
+tipikusan akkor hiányzik, ha a `COMPOSE_FILE` kulcs frissítéskor, új kulcsként került a `.env`-be. Minden
+`docker compose` parancs ezzel a hibával áll meg, a futó konténereket nem érinti.
+
+The `COMPOSE_FILE` line of `.env` names the usage profile's override file, which is not in the installation
+folder. The profile file is a release asset too (`profile-5k.yaml` → `profiles/5k/compose.yaml`,
+`profile-10k.yaml` → `profiles/10k/compose.yaml`) and is downloaded together with `compose.yaml` on every
+upgrade (UPGRADE.md, step 3); it is typically missing when `COMPOSE_FILE` was added to `.env` as a new key
+during an upgrade. Every `docker compose` command stops with this error; running containers are not affected.
+
+```sh
+v=$(sed -n 's/^OPENHDID_VERSION=//p' .env)
+base=https://github.com/adamfhun/openhdid/releases/download/v$v
+curl -fsSL -O "$base/profile-5k.yaml" -O "$base/SHA256SUMS"
+sha256sum -c --ignore-missing SHA256SUMS
+mkdir -p profiles/5k && mv profile-5k.yaml profiles/5k/compose.yaml
+docker compose config --quiet && docker compose up -d
+```
+
+Profil nélkül is futtatható a telepítés: a `COMPOSE_FILE` sor törlésével a `compose.yaml` alapértékei élnek
+(egy feldolgozó, az image PHP-FPM-alapértékei), és a Rendszerállapot Kapacitás kártyája nem mutat profilt. /
+The installation also runs without a profile: delete the `COMPOSE_FILE` line and the defaults of `compose.yaml`
+apply (one worker, the image's PHP-FPM defaults), and the Capacity card of the system status shows no profile.
+
+```
+openhdid: ERROR: COMPOSE_FILE points to a file that cannot be read: compose.yaml:profiles/5k/compose.yaml
+```
+
+Ezt a konténer mondja (a `migrate` 64-es kóddal kilép, a többi szolgáltatás nem indul el), és csak az 1.8.0-s
+és régebbi image-et érinti: a `.env` a konténerek `env_file`-ja is, így a `COMPOSE_FILE` bejut a konténerbe,
+és az indítószkript titokfájl-mutatónak (`NÉV_FILE`) nézte. Az 1.8.1 image kihagyja. Régebbi image-dzsel a
+profil a `compose.override.yaml` néven is használható, amelyet a Compose magától olvas, és nem jut a
+konténerbe:
+
+This comes from the container (`migrate` exits with code 64, the other services do not start) and affects
+images 1.8.0 and older only: `.env` is the containers' `env_file` too, so `COMPOSE_FILE` reaches the container,
+and the start script took it for a secret-file pointer (`NAME_FILE`). The 1.8.1 image skips it. With an older
+image the profile also works as `compose.override.yaml`, which Compose reads on its own and does not pass into
+the container:
+
+```sh
+sed -i '/^COMPOSE_FILE=/d' .env
+cp profiles/5k/compose.yaml compose.override.yaml      # ha már van saját compose.override.yaml, abba kell beolvasztani
+docker compose config --quiet && docker compose up -d
+```

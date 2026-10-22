@@ -22,8 +22,11 @@ log() { printf '%s openhdid: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; }
 die() { log "ERROR: $*"; exit 64; }
 
 # NAME_FILE=/run/secrets/x becomes NAME=<file content> (Docker and Kubernetes secrets).
+# COMPOSE_FILE is Docker Compose's own variable: the .env Compose reads is also the
+# containers' env_file, so it arrives here, but it names Compose files, not a secret.
 load_file_secrets() {
     for name in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)_FILE=.*/\1/p'); do
+        [ "$name" = COMPOSE ] && continue
         file=$(printenv "${name}_FILE")
         [ -r "$file" ] || die "${name}_FILE points to a file that cannot be read: $file"
         if [ -n "$(printenv "$name" 2>/dev/null || true)" ]; then

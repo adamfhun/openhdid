@@ -131,8 +131,14 @@ XML;
     {
         $request = $this->http->timeout(30)->withOptions(['verify' => $this->config['verify_tls']]);
 
+        // Guzzle 8 handles basic and digest itself and ignores other `auth` types, so an
+        // `auth => [user, password, 'ntlm']` request went out without credentials. NTLM is
+        // libcurl's own: it is set on the handle, and libcurl runs the three-step handshake.
         return match ($this->config['auth']) {
-            'ntlm' => $request->withOptions(['auth' => [$this->config['username'], $this->config['password'], 'ntlm']]),
+            'ntlm' => $request->withOptions(['curl' => [
+                CURLOPT_HTTPAUTH => CURLAUTH_NTLM,
+                CURLOPT_USERPWD => $this->config['username'].':'.$this->config['password'],
+            ]]),
             'oauth' => $request->withToken($this->oauthToken()),
             default => $request->withBasicAuth((string) $this->config['username'], (string) $this->config['password']),
         };
