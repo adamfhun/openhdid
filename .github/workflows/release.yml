@@ -41,6 +41,8 @@ jobs:
       - name: Code style
         run: vendor/bin/pint --test
       - name: Front-end build
+        env:
+          NODE_OPTIONS: --network-family-autoselection-attempt-timeout=10000
         run: npm ci --ignore-scripts && npm run build
       - name: Tests
         run: |

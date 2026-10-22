@@ -8,6 +8,7 @@ use App\Jobs\QueueHeartbeat;
 use App\Jobs\SendOutboundMessage;
 use App\Models\OutboundMessage;
 use App\System\HealthChecks;
+use App\System\QueueMaintenance;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schedule;
 
@@ -52,9 +53,14 @@ Schedule::command('hdid:prune')
     ->onOneServer()
     ->runInBackground();
 
+// One heartbeat per configured queue: the default worker and, when the EMD
+// sync runs on its own queue, that worker too (unique per queue while waiting).
 Schedule::call(function (): void {
     Cache::put(HealthChecks::SCHEDULER_HEARTBEAT_KEY, now()->toIso8601String(), now()->addHours(6));
-    QueueHeartbeat::dispatch();
+
+    foreach (app(QueueMaintenance::class)->configuredQueues() as $queue) {
+        QueueHeartbeat::dispatch($queue);
+    }
 })->everyMinute()->name('hdid:heartbeat');
 
 // Fallback for messages no worker picked up: re-dispatch them.

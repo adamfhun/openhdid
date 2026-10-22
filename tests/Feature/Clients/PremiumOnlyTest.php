@@ -255,7 +255,7 @@ it('shows the mode on every panel page and on the status page', function (): voi
 
     $this->get(ClientResource::getUrl('index'))->assertOk()->assertSee(__('The system currently serves premium clients only.'));
     $tile = app(HealthChecks::class)->premiumOnly();
-    expect($tile->status)->toBe(CheckStatus::Warn)
+    expect($tile->status)->toBe(CheckStatus::Info)
         ->and($tile->detail)->toContain('1')
         ->and(collect(app(HealthChecks::class)->all())->firstWhere('key', 'premium_only')->hint)->not->toBeEmpty();
 });

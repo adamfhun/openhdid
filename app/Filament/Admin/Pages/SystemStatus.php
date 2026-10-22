@@ -4,7 +4,13 @@ namespace App\Filament\Admin\Pages;
 
 use App\Auth\Permission;
 use App\Filament\Admin\Clusters\System;
+use App\Filament\Admin\Resources\ApiKeys\ApiKeyResource;
+use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\Admin\Resources\OutboundMessages\OutboundMessageResource;
+use App\Filament\Admin\Resources\SyncRuns\SyncRunResource;
+use App\Filament\Admin\Resources\Users\UserResource;
 use App\System\Check;
+use App\System\CheckStatus;
 use App\System\HealthChecks;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -57,6 +63,42 @@ class SystemStatus extends Page
     public function getChecks(): array
     {
         return app(HealthChecks::class)->all();
+    }
+
+    /**
+     * The two blocks of the page: operation first, then modes and settings.
+     *
+     * @return array<string, list<Check>> keyed by CheckGroup value
+     */
+    public function getGroupedChecks(): array
+    {
+        return app(HealthChecks::class)->grouped();
+    }
+
+    /**
+     * Where a tile that is not green can be acted on inside the panel; null
+     * when the remedy lives in the environment or on the server.
+     *
+     * @return array{url: string, label: string}|null
+     */
+    public function linkFor(Check $check): ?array
+    {
+        if ($check->status === CheckStatus::Ok) {
+            return null;
+        }
+
+        return match ($check->key) {
+            'queue' => ['url' => Queues::getUrl(), 'label' => Queues::getNavigationLabel()],
+            'messages' => ['url' => OutboundMessageResource::getUrl(), 'label' => OutboundMessageResource::getNavigationLabel()],
+            'sync', 'sync_auth' => ['url' => SyncRunResource::getUrl(), 'label' => SyncRunResource::getNavigationLabel()],
+            'api_keys' => ['url' => ApiKeyResource::getUrl(), 'label' => ApiKeyResource::getNavigationLabel()],
+            'mfa' => ['url' => UserResource::getUrl(), 'label' => UserResource::getNavigationLabel()],
+            'audit' => ['url' => AuditArchives::getUrl(), 'label' => AuditArchives::getNavigationLabel()],
+            'package_overrides' => ['url' => ClientResource::getUrl(), 'label' => ClientResource::getNavigationLabel()],
+            'shared_numbers' => ['url' => SharedPhoneNumbers::getUrl(), 'label' => SharedPhoneNumbers::getNavigationLabel()],
+            'premium_only', 'login_link_preview', 'retention' => ['url' => ManageSettings::getUrl(), 'label' => ManageSettings::getNavigationLabel()],
+            default => null,
+        };
     }
 
     /**

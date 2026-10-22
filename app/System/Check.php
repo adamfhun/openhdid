@@ -10,10 +10,13 @@ use Illuminate\Support\Carbon;
  * @phpstan-type CheckArray array{key: string, label: string, status: string, detail: string, checked_at: string}
  *
  * `hint` tells the operator what to do when the check is not green; it is
- * static per check key so the status page can show it on every tile.
+ * static per check key so the status page can show it on every tile. The
+ * group (operation or modes) follows from the key, see CheckGroup.
  */
 final readonly class Check
 {
+    public CheckGroup $group;
+
     public function __construct(
         public string $key,
         public string $label,
@@ -21,7 +24,9 @@ final readonly class Check
         public string $detail,
         public Carbon $checkedAt,
         public ?string $hint = null,
-    ) {}
+    ) {
+        $this->group = CheckGroup::forKey($key);
+    }
 
     public function withHint(?string $hint): self
     {
@@ -31,6 +36,11 @@ final readonly class Check
     public static function ok(string $key, string $label, string $detail): self
     {
         return new self($key, $label, CheckStatus::Ok, $detail, now());
+    }
+
+    public static function info(string $key, string $label, string $detail): self
+    {
+        return new self($key, $label, CheckStatus::Info, $detail, now());
     }
 
     public static function warn(string $key, string $label, string $detail): self

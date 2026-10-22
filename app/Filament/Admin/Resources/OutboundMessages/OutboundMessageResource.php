@@ -15,6 +15,7 @@ use App\Messaging\Messenger;
 use App\Models\OutboundMessage;
 use BackedEnum;
 use Filament\Actions\Action;
+use Filament\Actions\BulkAction;
 use Filament\Actions\ViewAction;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
@@ -25,6 +26,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\HtmlString;
 
 /**
@@ -131,7 +133,8 @@ class OutboundMessageResource extends BaseResource
                 SelectFilter::make('status')->label(__('Status'))->options(collect(OutboundMessageStatus::cases())->mapWithKeys(fn (OutboundMessageStatus $s) => [$s->value => $s->label()])->all()),
             ])
             ->recordActions([
-                ViewAction::make()->iconButton(),
+                // The schema is named so the same table works inside the Queues page widget too.
+                ViewAction::make()->iconButton()->schema(fn (Schema $schema): Schema => static::infolist($schema)),
                 Action::make('retry')->label(__('Retry'))->icon('heroicon-o-arrow-path')->color('warning')->requiresConfirmation()
                     ->modalDescription(__('The same message is queued again and sent to the same recipient; an SMS costs again.'))
                     ->authorize(fn () => auth()->user()?->can(Permission::SettingsManage->value) ?? false)
@@ -158,8 +161,59 @@ class OutboundMessageResource extends BaseResource
                         }
                     }),
             ])
+            ->headerActions([
+                Action::make('retryAllFailed')->label(__('Retry all failed'))->icon('heroicon-o-arrow-path')->color('warning')
+                    ->authorize(fn (): bool => static::canManage())
+                    ->requiresConfirmation()
+                    ->modalHeading(__('Retry every failed message?'))
+                    ->modalDescription(fn (): string => __(':n failed message(s) are queued again and sent to the same recipients; an SMS costs again. Failed messages whose confidential content was wiped are skipped.', ['n' => app(Messenger::class)->retryableFailed()->count()]))
+                    ->modalSubmitActionLabel(__('Retry all failed'))
+                    ->action(function (): void {
+                        $retried = app(Messenger::class)->retryAllFailed();
+                        Notification::make()->title(__(':n message(s) queued again', ['n' => $retried]))->success()->send();
+                    }),
+                Action::make('sendQueuedNow')->label(__('Send queued now'))->icon('heroicon-o-paper-airplane')->color('gray')
+                    ->authorize(fn (): bool => static::canManage())
+                    ->tooltip(__('Sends the oldest queued messages from the browser, without a worker; at most :n per click.', ['n' => Messenger::SEND_NOW_LIMIT]))
+                    ->action(function (): void {
+                        $result = app(Messenger::class)->sendQueuedNow();
+                        Notification::make()
+                            ->title(__(':sent sent, :failed failed, :retrying to retry, :remaining still queued', $result))
+                            ->status($result['failed'] > 0 ? 'warning' : 'success')
+                            ->send();
+                    }),
+            ])
+            ->toolbarActions([
+                BulkAction::make('retry')->label(__('Retry selected'))->icon('heroicon-o-arrow-path')->color('warning')
+                    ->authorize(fn (): bool => static::canManage())
+                    ->requiresConfirmation()
+                    ->modalHeading(__('Retry the selected messages?'))
+                    ->modalDescription(fn (Collection $records): string => __(':n of the selected message(s) can be retried (failed, content still there); they are sent to the same recipients again, an SMS costs again.', ['n' => $records->filter(fn (OutboundMessage $record): bool => $record->status === OutboundMessageStatus::Failed && ! $record->isRedacted() && ! static::hiddenClient($record))->count()]))
+                    ->modalSubmitActionLabel(__('Retry selected'))
+                    ->deselectRecordsAfterCompletion()
+                    ->action(function (Collection $records): void {
+                        $retried = app(Messenger::class)->retryMany($records->reject(fn (OutboundMessage $record): bool => static::hiddenClient($record)));
+                        Notification::make()->title(__(':n message(s) queued again', ['n' => $retried]))->success()->send();
+                    }),
+                BulkAction::make('cancel')->label(__('Cancel selected'))->icon('heroicon-o-x-mark')->color('gray')
+                    ->authorize(fn (): bool => static::canManage())
+                    ->requiresConfirmation()
+                    ->modalHeading(__('Cancel the selected queued messages?'))
+                    ->modalDescription(fn (Collection $records): string => __(':n of the selected message(s) are still queued; a cancelled message is not sent and cannot be retried.', ['n' => $records->where('status', OutboundMessageStatus::Queued)->count()]))
+                    ->modalSubmitActionLabel(__('Cancel selected'))
+                    ->deselectRecordsAfterCompletion()
+                    ->action(function (Collection $records): void {
+                        $cancelled = app(Messenger::class)->cancelMany($records);
+                        Notification::make()->title(__(':n message(s) cancelled', ['n' => $cancelled]))->success()->send();
+                    }),
+            ])
             ->defaultSort('created_at', 'desc')
             ->poll('30s');
+    }
+
+    public static function canManage(): bool
+    {
+        return auth()->user()?->can(Permission::SettingsManage->value) ?? false;
     }
 
     public static function getPages(): array

@@ -2,6 +2,7 @@
 
 namespace App\Messaging;
 
+use App\Audit\Auditor;
 use App\Clients\ClientTiers;
 use App\Enums\OutboundMessageStatus;
 use App\Jobs\SendOutboundMessage;
@@ -9,6 +10,8 @@ use App\Models\Client;
 use App\Models\OutboundMessage;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use Illuminate\Contracts\Bus\Dispatcher;
+use Illuminate\Database\Eloquent\Builder;
 
 /**
  * The one way to send a client an e-mail or an SMS: render the template,
@@ -16,10 +19,15 @@ use App\Settings\Settings;
  */
 class Messenger
 {
+    /** How many queued messages one "send now" click sends inside the web request. */
+    public const SEND_NOW_LIMIT = 25;
+
     public function __construct(
         private readonly TemplateRenderer $renderer,
         private readonly ClientTiers $tiers,
         private readonly Settings $settings,
+        private readonly Auditor $auditor,
+        private readonly Dispatcher $bus,
     ) {}
 
     /**
@@ -120,6 +128,104 @@ class Messenger
         $message->redactSecret();
 
         return true;
+    }
+
+    /**
+     * Failed messages that can be queued again: their content is still there.
+     *
+     * @return Builder<OutboundMessage>
+     */
+    public function retryableFailed(): Builder
+    {
+        return OutboundMessage::query()->where('status', OutboundMessageStatus::Failed)->whereNull('redacted_at');
+    }
+
+    /**
+     * Queue the given messages again; the ones that cannot be retried (not
+     * failed any more, content wiped) are skipped. Returns how many went.
+     *
+     * @param  iterable<OutboundMessage>  $messages
+     */
+    public function retryMany(iterable $messages): int
+    {
+        $retried = 0;
+
+        foreach ($messages as $message) {
+            try {
+                $this->retry($message);
+                $retried++;
+            } catch (MessageNotRetryableException) {
+                // Skipped on purpose; the count tells the operator.
+            }
+        }
+
+        return $retried;
+    }
+
+    public function retryAllFailed(): int
+    {
+        $retried = $this->retryMany($this->retryableFailed()->orderBy('id')->get());
+
+        if ($retried > 0) {
+            $this->auditor->record('message.retried_all', context: ['count' => $retried]);
+        }
+
+        return $retried;
+    }
+
+    /**
+     * Cancel the given queued messages; returns how many were still queued.
+     *
+     * @param  iterable<OutboundMessage>  $messages
+     */
+    public function cancelMany(iterable $messages): int
+    {
+        $cancelled = 0;
+
+        foreach ($messages as $message) {
+            if ($this->cancel($message)) {
+                $cancelled++;
+            }
+        }
+
+        if ($cancelled > 0) {
+            $this->auditor->record('message.cancelled_selected', context: ['count' => $cancelled]);
+        }
+
+        return $cancelled;
+    }
+
+    /**
+     * Send the oldest queued messages right now, in this process, without a
+     * worker: the way out when the worker is down and a login link must
+     * still arrive. Capped so one click cannot outlast the PHP time limit;
+     * the rest stays queued for the next click or the worker.
+     *
+     * @return array{sent: int, failed: int, retrying: int, remaining: int}
+     */
+    public function sendQueuedNow(int $limit = self::SEND_NOW_LIMIT): array
+    {
+        $ids = OutboundMessage::query()->queued()->orderBy('id')->limit(max(1, $limit))->pluck('id');
+
+        foreach ($ids as $id) {
+            $this->bus->dispatchSync(new SendOutboundMessage($id));
+        }
+
+        $outcome = OutboundMessage::query()->whereIn('id', $ids)->pluck('status', 'id')
+            ->countBy(fn (OutboundMessageStatus $status): string => $status->value);
+
+        $result = [
+            'sent' => (int) $outcome->get(OutboundMessageStatus::Sent->value, 0),
+            'failed' => (int) $outcome->get(OutboundMessageStatus::Failed->value, 0),
+            'retrying' => (int) $outcome->get(OutboundMessageStatus::Queued->value, 0),
+            'remaining' => OutboundMessage::query()->queued()->count(),
+        ];
+
+        if ($ids->isNotEmpty()) {
+            $this->auditor->record('message.flushed', context: $result + ['processed' => $ids->count()]);
+        }
+
+        return $result;
     }
 
     public function dispatch(OutboundMessage $message): void

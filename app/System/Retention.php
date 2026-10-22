@@ -21,8 +21,9 @@ use Illuminate\Support\Facades\Storage;
  * Deletes for good what the retention settings no longer allow us to keep:
  * business records after the general period (default 5 years), throwaway
  * artefacts such as expired one-time codes, uploaded directory files and the
- * EMD change records after the short-lived period (default 2 years). The
- * audit log is archived first: entries past the hot window leave the
+ * EMD change records after the short-lived period (default 2 years), failed
+ * queue jobs after a fixed thirty days (QueueMaintenance). The audit log is
+ * archived first: entries past the hot window leave the
  * database for daily archive files (AuditArchive), and the files themselves
  * fall under the general period. Runs daily; the status page warns when it
  * has not run for a few days.
@@ -40,6 +41,7 @@ class Retention
         private readonly Cache $cache,
         private readonly Auditor $auditor,
         private readonly AuditArchive $archive,
+        private readonly QueueMaintenance $queue,
     ) {}
 
     public function generalCutoff(): Carbon
@@ -75,6 +77,8 @@ class Retention
             'sync_run_changes' => $this->deleteInBatches(fn () => SyncRunChange::query()->where('created_at', '<', $short)->limit(self::BATCH)->delete()),
             'one_time_codes' => $this->deleteInBatches(fn () => OneTimeCode::query()->where('expires_at', '<', $short)->limit(self::BATCH)->delete()),
             'sync_uploads' => $this->deleteOldUploads($short),
+            // Failed queue jobs are evidence for a few weeks, not records: a fixed window.
+            'failed_jobs' => $this->queue->pruneFailed(QueueMaintenance::FAILED_JOB_DAYS),
         ];
 
         $this->cache->put(self::LAST_RUN_KEY, now()->toIso8601String(), now()->addDays(30));

@@ -13,7 +13,6 @@ use App\Enums\MfaMethod;
 use App\Enums\OutboundMessageStatus;
 use App\Enums\PrincipalType;
 use App\Enums\SyncRunStatus;
-use App\Jobs\SendOutboundMessage;
 use App\Mail\Transport\EwsTransport;
 use App\Models\ApiKey;
 use App\Models\AuditLog;
@@ -67,7 +66,7 @@ class HealthChecks
             return Check::ok('premium_only', $label, __('Off: premium and standard clients are served.'));
         }
 
-        return Check::warn('premium_only', $label, __('On: only premium clients are served; :n open standard client(s) held back.', ['n' => $tiers->heldBackCount()]));
+        return Check::info('premium_only', $label, __('On: only premium clients are served; :n open standard client(s) held back.', ['n' => $tiers->heldBackCount()]));
     }
 
     public function loginLinkPreview(): Check
@@ -150,6 +149,8 @@ class HealthChecks
      */
     public function all(): array
     {
+        // Operation first, then the modes block (see CheckGroup); the status
+        // page shows them as two blocks in this order.
         $checks = [
             'database' => [__('Database'), $this->database(...)],
             'cache' => [__('Cache'), $this->cacheStore(...)],
@@ -162,18 +163,19 @@ class HealthChecks
             'sync' => [__('EMD sync'), $this->syncApi(...)],
             'sync_auth' => [__('EMD API authentication'), $this->syncAuthentication(...)],
             'api_keys' => [__('API keys'), $this->apiKeys(...)],
-            'package_overrides' => [__('Package overrides'), $this->packageOverrides(...)],
-            'shared_numbers' => [__('Shared phone numbers'), $this->sharedPhoneNumbers(...)],
             'oidc' => [__('Single sign-on'), $this->oidc(...)],
             'proxy' => [__('Outbound proxy'), $this->outboundProxy(...)],
-            'login_link_preview' => [__('Login link preview'), $this->loginLinkPreview(...)],
-            'client_login_emd' => [__('Client login and EMD'), $this->clientLoginEmd(...)],
             'mfa' => [__('Two-factor sign-in'), $this->staffMfa(...)],
-            'premium_only' => [__('Premium clients only'), $this->premiumOnly(...)],
             'storage' => [__('Storage'), $this->storage(...)],
             'retention' => [__('Data retention'), $this->retention(...)],
             'audit' => [__('Audit log'), $this->auditLog(...)],
             'capacity' => [__('Capacity'), $this->capacity(...)],
+            'premium_only' => [__('Premium clients only'), $this->premiumOnly(...)],
+            'login_link_preview' => [__('Login link preview'), $this->loginLinkPreview(...)],
+            'client_login_emd' => [__('Client login and EMD'), $this->clientLoginEmd(...)],
+            'adfs_debug' => [__('ADFS debugging'), $this->adfsDebug(...)],
+            'package_overrides' => [__('Package overrides'), $this->packageOverrides(...)],
+            'shared_numbers' => [__('Shared phone numbers'), $this->sharedPhoneNumbers(...)],
         ];
 
         // One broken dependency (say, the database) must not turn the whole
@@ -190,13 +192,29 @@ class HealthChecks
     }
 
     /**
+     * The checks in their two blocks, operation first.
+     *
+     * @return array<string, list<Check>> keyed by CheckGroup value
+     */
+    public function grouped(): array
+    {
+        $groups = array_fill_keys(array_map(fn (CheckGroup $group): string => $group->value, CheckGroup::cases()), []);
+
+        foreach ($this->all() as $check) {
+            $groups[$check->group->value][] = $check;
+        }
+
+        return $groups;
+    }
+
+    /**
      * What an operator can do when the check turns yellow or red. Kept next
      * to the checks so the advice stays in step with what is measured.
      */
     public static function hint(string $key): ?string
     {
         return match ($key) {
-            'premium_only' => __('Yellow: Settings › Packages › "Premium only" is on, so only premium clients are served; standard clients cannot sign in, the phone menu does not recognise them and no staff view shows them. Their data is kept and the sync keeps importing them. Switch it off to serve them again; the number shown is how many open standard clients are held back.'),
+            'premium_only' => __('Information: Settings › Packages › "Premium only" is on, so only premium clients are served; standard clients cannot sign in, the phone menu does not recognise them and no staff view shows them. Their data is kept and the sync keeps importing them. Switch it off to serve them again; the number shown is how many open standard clients are held back.'),
             'login_link_preview' => __('Yellow: Settings › Client login › "Magic link preview in panel" is on, so every sent client login link is shown to the staff member who sends it. Meant for test environments only; switch it off for production.'),
             'mfa' => __('Yellow: some staff have no second factor yet (they set one up at their next sign-in, an app with an e-mail code too) or are locked after wrong codes (Users list, "Unlock login"). Red: two-factor sign-in is on but none of the chosen methods can be used, so nobody can finish signing in; choose another method under Settings › User login, or switch it off with "php artisan hdid:mfa-reset --off" (in the container: docker compose exec web php artisan hdid:mfa-reset --off). A staff member who lost the factor: "Reset second factor" on the Users list, or hdid:mfa-reset <e-mail>.'),
             'client_login_emd' => __('Yellow: CLIENT_LOGIN_REQUIRE_EMD=false in the .env file (or the environment of the web container), so client logins do not ask for an EMD record. Closed accounts and clients without an entitling package are still refused. To require the record again, remove the line or set it to true, then reload the configuration (php artisan config:cache, or restart the containers).'),
@@ -205,10 +223,10 @@ class HealthChecks
                 : __('EMD_SYNC_TOKEN_KEEP_ALIVE is disabled. EMD sync reuses tokens refreshed less than 15 minutes ago, otherwise refreshes them on demand and logs in again when the refresh fails. Check the login/refresh URLs and credentials, or run hdid:emd-sync-token manually.'),
             'database' => __('Check that the database server is running and that the DB_* values in .env are correct. Nothing works without it; restart the DB service or fix the credentials, then reload this page.'),
             'cache' => __('The cache store (CACHE_STORE in .env) cannot be written or read. With Redis check that the service runs and REDIS_* is right; with the file or database store check disk space and permissions on storage/. Settings, sessions and login throttling depend on it.'),
-            'queue' => __('E-mails, SMS and EMD sync run in the queue. Red: no worker heartbeat, start or restart the queue worker (the "php artisan queue:work" service or the worker container). The EMD sync started from the panel runs on the EMD_SYNC_QUEUE queue, which needs a worker too. Yellow: failed or piling jobs, see "php artisan queue:failed" and retry with "queue:retry all" once the cause (mail, SMS, DB) is fixed.'),
+            'queue' => __('E-mails, SMS and EMD sync run in the queue. Red: no worker heartbeat on the default queue, start or restart the queue worker (the "php artisan queue:work" service or the worker container). Yellow: the EMD sync queue (EMD_SYNC_QUEUE) has no worker of its own, or there are failed or piling jobs. Open the Queues page: it lists every queue with its worker, lets you run failed jobs again or delete them, and clears a queue, once the cause (mail, SMS, database) is fixed. The console equivalents are "php artisan queue:failed" and "queue:retry all".'),
             'scheduler' => __('The scheduler does not run: the cron entry "* * * * * php artisan schedule:run" or the scheduler container is missing or stopped. It drives the EMD sync, the stale-call cleanup, the override expiry and the data retention. Add or repair it on the app server.'),
             'php' => __('EMD sync and large file imports need a PHP max_execution_time of at least 120 seconds (300 recommended) in both PHP-FPM (the panel, this page) and the CLI (the worker, hdid:emd-sync); 0 means unlimited and is fine. Set it in php.ini or the FPM pool (php_admin_value[max_execution_time]) with request_terminate_timeout above it, then restart PHP-FPM. Below 120 s a sync refuses to start. This tile shows the limit of the process that ran the check: the panel shows PHP-FPM, "php artisan hdid:health" shows the CLI.'),
-            'messages' => __('Failed messages of the last 24 hours. Open Outbound messages, look at the error of a failed row and fix the transport (E-mail or SMS tile), then resend from the list. Queued ones that never leave point to the queue worker.'),
+            'messages' => __('Failed messages of the last 24 hours. Open Outbound messages or the Queues page, look at the error of a failed row and fix the transport (E-mail or SMS tile), then resend from the list (one, the selected ones or every failed one). Queued ones that never leave point to the queue worker; "Send queued now" sends them from the browser without a worker.'),
             'mail' => __('Red: the EWS URL or credentials are missing in the environment (MAIL_MAILER, EWS_*), or EWS_AUTH=ntlm is set where the libcurl has no NTLM (the OpenHDID image has it from 1.8.0; elsewhere use basic, oauth or SMTP). Yellow: a log/array mailer is set, so no e-mail leaves the server, fine for testing, not for production. Test with a magic link to your own client account.'),
             'sms' => __('Red with Ozeki: the gateway is unreachable or the credentials are wrong (OZEKI_*), check the Ozeki service and the network path. Red/yellow with the log driver: SMS are only written to the log, set SMS_DRIVER=ozeki for production.'),
             'sync' => __('Red: the last run failed or no successful run happened in twice the expected interval. Open EMD sync runs for the error; check the API URL/key or upload the file manually. A refused run usually means the export was much smaller than before (row-ratio guard). Yellow with a waiting run: the sync started from the panel was not picked up, start a worker for the EMD_SYNC_QUEUE queue. With {{ ids }} in the export payload, a failed ID list query (EMD_SYNC_ID_LIST_URL, ID list settings) or no selected ID on the list also fails the run; the run details show the status codes. Yellow with accounts closing at the next sync: their records were absent from the last run(s); open EMD records, tab "Closes at the next sync", and check the export (or the ID list selection) before the next run closes them. Yellow with e-mail conflicts: the directory renamed an account e-mail to an address another account holds; the account kept its old address and cannot sign in until the duplicate is resolved in EMD or the other account is deleted. A changed classification (staff/client) closes the old account only after the same number of runs as a missing record; the run details list the pending ones.'),
@@ -216,7 +234,8 @@ class HealthChecks
             'package_overrides' => __('Informational: these clients carry a temporary manual package. Nothing to fix, but review the list now and then and end an override EMD has caught up with.'),
             'shared_numbers' => __('A number on file for more than one client recognises nobody in the phone menu, so those callers are not asked for their PIN. Open Shared phone numbers, decide whose number it is and remove it from the others; a number EMD lists for several people has to be corrected in the directory.'),
             'proxy' => __('Red: HDID_HTTP_PROXY is not a usable address; write it as http://host:port, with a password as http://user:password@host:port (special characters percent-encoded, @ as %40). Proxies with Windows (NTLM) sign-in are not supported. Internal servers reached without the proxy (master data, ADFS, Exchange, SMS gateway) go into HDID_NO_PROXY, comma-separated. After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM and php artisan queue:restart.'),
-            'oidc' => __('Red: a provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*). Either fill in the configuration or switch the provider off, otherwise the login button leads to an error. Yellow: HDID_ADFS_DEBUG is on, so every ADFS sign-in writes its decoded tokens to the application log; meant for setting up the ADFS claims only, set it to false afterwards. The ADFS claims compared with the account e-mail address come from USER_/CLIENT_ADFS_EMAIL_CLAIM; why a sign-in was refused is in the audit log (login.rejected). After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM.'),
+            'oidc' => __('Red: a provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*). Either fill in the configuration or switch the provider off, otherwise the login button leads to an error. The ADFS claims compared with the account e-mail address come from USER_/CLIENT_ADFS_EMAIL_CLAIM; why a sign-in was refused is in the audit log (login.rejected). After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM.'),
+            'adfs_debug' => __('Yellow: HDID_ADFS_DEBUG is on, so every ADFS sign-in writes its decoded tokens, personal data included, to the application log. Meant for setting up the ADFS claims only; set it to false afterwards and restart the services (docker compose up -d, or php artisan config:cache and PHP-FPM on a classic installation).'),
             'storage' => __('Red: the public disk is not writable, fix the permissions of storage/app/public. Yellow: run "php artisan storage:link" on the server, otherwise uploaded logos and images do not show.'),
             'retention' => __('The daily "hdid:prune" task has not run for days. It runs through the scheduler, so check that tile first; run "php artisan hdid:prune" by hand to catch up.'),
             'audit' => __('The database keeps the audit entries of the last N days (Settings › Retention › Audit hot days); the nightly "hdid:prune" task moves older days into compressed daily files under storage/app/private/audit-archive with a SHA-256 sidecar, and deletes them from the table. Yellow: entries older than the window are still in the database, so the task has not run (see the Scheduler and Data retention tiles) or could not write the storage disk; run "php artisan hdid:prune" by hand, it archives at most 120 days per run. The files are listed and downloadable on the Audit archive page and go into the backups with the storage volume.'),
@@ -266,40 +285,50 @@ class HealthChecks
             return Check::warn('queue', $label, __('Connection "sync": jobs run inside the web request, no worker needed.'));
         }
 
-        $pending = null;
-        $oldest = null;
-        $failed = null;
-
-        try {
-            if ($connection === 'database') {
-                $pending = DB::table((string) config('queue.connections.database.table', 'jobs'))->count();
-                $oldestTs = DB::table((string) config('queue.connections.database.table', 'jobs'))->min('created_at');
-                $oldest = $oldestTs ? Carbon::createFromTimestamp((int) $oldestTs) : null;
-            } else {
-                // Redis and the other drivers know their length, not the age of the oldest job.
-                $pending = Queue::connection($connection)->size() + ($this->syncQueueName() !== 'default' ? Queue::connection($connection)->size($this->syncQueueName()) : 0);
-            }
-            $failed = DB::table((string) config('queue.failed.table', 'failed_jobs'))->count();
-        } catch (Throwable) {
-            // Tables may not exist yet; the heartbeat still tells the story.
-        }
-
-        $heartbeat = $this->heartbeat(SendOutboundMessage::HEARTBEAT_KEY);
+        // One line per queue: the default one carries the messages, the EMD
+        // sync queue (when separate) needs a worker of its own.
+        $states = app(QueueMaintenance::class)->overview();
         $parts = [$connection];
-        $parts[] = $heartbeat === null ? __('no worker seen yet') : __('worker seen :when', ['when' => $heartbeat->diffForHumans()]);
-        if ($pending !== null) {
-            $parts[] = __(':n pending', ['n' => $pending]).($oldest ? ' ('.__('oldest :when', ['when' => $oldest->diffForHumans()]).')' : '');
+        $pending = 0;
+        $failed = 0;
+        $defaultDown = false;
+        $otherDown = false;
+
+        foreach ($states as $state) {
+            $line = $state->name.': '.($state->heartbeat === null ? __('no worker seen yet') : __('worker seen :when', ['when' => $state->heartbeat->diffForHumans()]));
+
+            if ($state->waiting !== null) {
+                $line .= ' · '.__(':n pending', ['n' => $state->pending()]).($state->oldestWaitingAt ? ' ('.__('oldest :when', ['when' => $state->oldestWaitingAt->diffForHumans()]).')' : '');
+            }
+
+            if ($state->failed > 0) {
+                $line .= ' · '.__(':n failed', ['n' => $state->failed]);
+            }
+
+            if (! $state->configured) {
+                $line .= ' · '.__('no worker configured for this queue');
+            }
+
+            $parts[] = $line;
+            $pending += $state->pending();
+            $failed += $state->failed;
+
+            if ($state->configured && ! $state->isAlive()) {
+                if ($state->name === 'default') {
+                    $defaultDown = true;
+                } else {
+                    $otherDown = true;
+                }
+            }
         }
-        if ($failed !== null) {
-            $parts[] = __(':n failed', ['n' => $failed]);
-        }
+
         $detail = implode(' · ', $parts);
 
-        if ($heartbeat === null || $heartbeat->lt(now()->subMinutes(self::HEARTBEAT_MAX_AGE_MINUTES))) {
+        if ($defaultDown) {
             return Check::fail('queue', $label, $detail);
         }
 
-        return ($failed ?? 0) > 0 || ($pending ?? 0) > 50 ? Check::warn('queue', $label, $detail) : Check::ok('queue', $label, $detail);
+        return $otherDown || $failed > 0 || $pending > 50 ? Check::warn('queue', $label, $detail) : Check::ok('queue', $label, $detail);
     }
 
     public function scheduler(): Check
@@ -518,7 +547,7 @@ class HealthChecks
 
         $list = $active->take(5)->map(fn (Client $c) => $c->name.' → '.$c->package_override.' ('.$c->package_override_until?->format(HuDate::DATE).')')->implode(' · ');
 
-        return Check::warn('package_overrides', $label, __(':n client(s) with a temporary package override: :list', ['n' => $active->count(), 'list' => $list]));
+        return Check::info('package_overrides', $label, __(':n client(s) with a temporary package override: :list', ['n' => $active->count(), 'list' => $list]));
     }
 
     public function sharedPhoneNumbers(): Check
@@ -528,7 +557,7 @@ class HealthChecks
 
         return $count === 0
             ? Check::ok('shared_numbers', $label, __('Every registered number belongs to one client.'))
-            : Check::warn('shared_numbers', $label, __(':n phone number(s) on file for more than one client; the phone menu recognises nobody from them.', ['n' => $count]));
+            : Check::info('shared_numbers', $label, __(':n phone number(s) on file for more than one client; the phone menu recognises nobody from them.', ['n' => $count]));
     }
 
     public function apiKeys(): Check
@@ -570,15 +599,12 @@ class HealthChecks
         $parts = [];
         $broken = false;
 
-        $debug = false;
-
         foreach (PrincipalType::cases() as $principal) {
             foreach (OidcProvider::cases() as $provider) {
                 $config = $provider->configFor($principal);
                 $enabled = $this->settings->bool($provider->enabledSetting($principal));
                 $configured = $config->isConfigured();
                 $broken = $broken || ($enabled && ! $configured);
-                $debug = $debug || $config->logsTokens();
                 $state = $enabled ? ($configured ? __('on') : __('on, NOT configured')) : __('off');
 
                 // Which claim binds an ADFS sign-in is deployment configuration: show it where it acts.
@@ -592,13 +618,29 @@ class HealthChecks
 
         $detail = implode(' · ', $parts);
 
-        if ($broken) {
-            return Check::fail('oidc', $label, $detail);
+        return $broken ? Check::fail('oidc', $label, $detail) : Check::ok('oidc', $label, $detail);
+    }
+
+    /**
+     * The ADFS token log is a debugging aid that writes personal data: a
+     * mode of its own, so the provider tile only reflects configuration.
+     */
+    public function adfsDebug(): Check
+    {
+        $label = __('ADFS debugging');
+        $principals = [];
+
+        foreach (PrincipalType::cases() as $principal) {
+            if (OidcProvider::Adfs->configFor($principal)->logsTokens()) {
+                $principals[] = __($principal->value);
+            }
         }
 
-        return $debug
-            ? Check::warn('oidc', $label, __('HDID_ADFS_DEBUG is on: the decoded content of every ADFS token, personal data included, goes to the application log.').' · '.$detail)
-            : Check::ok('oidc', $label, $detail);
+        if ($principals === []) {
+            return Check::ok('adfs_debug', $label, __('Off: ADFS tokens are not written to the log.'));
+        }
+
+        return Check::warn('adfs_debug', $label, __('HDID_ADFS_DEBUG is on (:principals): the decoded content of every ADFS token, personal data included, goes to the application log.', ['principals' => implode(', ', $principals)]));
     }
 
     public function storage(): Check

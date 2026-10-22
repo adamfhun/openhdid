@@ -9,10 +9,10 @@
 # and curl tarballs are checked against their PGP signatures before pinning,
 # and the curl signature is checked again at build time.
 
-ARG PHP_IMAGE=php:8.5.12-fpm-alpine3.24@sha256:4c9541a4506014672d074652a1cc9754d3c5f97cad6c6027bae35be0e4a4dea9
-ARG NODE_IMAGE=node:24.22.0-alpine3.24@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f
-ARG COMPOSER_IMAGE=composer:2.10.3@sha256:d0c32820c62cc860fddd22adceed4eeda7698b093a7a88d503414172ce400626
-ARG ALPINE_IMAGE=alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+ARG PHP_IMAGE=php:8.5.12-fpm-alpine3.24@sha256:f09d9172dd28b8696aef729ca2c2081a132c1f8d581218c99497d552c82a92df
+ARG NODE_IMAGE=node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+ARG COMPOSER_IMAGE=composer:2.10.3@sha256:da624c2c705d54e2f5a9bb77a5dc6c7d091711433ebefd7035672e84c2010fee
+ARG ALPINE_IMAGE=alpine:3.24@sha256:71e9b7bae160ba167fa17414401b94cbcdaf3c32feeab9298bd794a2a0614c35
 ARG NGINX_VERSION=1.31.8
 ARG NGINX_SHA256=0652b760b3b772d2ec17b47c2fc15d9a95e6fe35cd5b877eadc1a62d9bc75af1
 ARG HEADERS_MORE_VERSION=0.40
@@ -182,8 +182,10 @@ COPY vite.config.js ./
 COPY resources ./resources
 COPY --from=app /app/vendor/filament ./vendor/filament
 COPY --from=app /app/app/Filament ./app/Filament
+# The fonts plugin downloads the web font during the build; Node's default
+# 250 ms happy-eyeballs attempt timeout fails with ETIMEDOUT on a slow link.
 RUN set -eux; \
-    npm run build; \
+    NODE_OPTIONS=--network-family-autoselection-attempt-timeout=10000 npm run build; \
     find public/build -type f \( -name '*.js' -o -name '*.css' -o -name '*.svg' -o -name '*.json' \) -exec gzip -9 -k -n {} +
 
 # --- Runtime image ---

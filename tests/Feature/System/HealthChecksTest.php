@@ -7,11 +7,14 @@ use App\Filament\Admin\Pages\SystemStatus;
 use App\Jobs\QueueHeartbeat;
 use App\Jobs\SendOutboundMessage;
 use App\Models\ApiKey;
+use App\Models\Client;
 use App\Models\OutboundMessage;
 use App\Models\SyncRun;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\Check;
+use App\System\CheckGroup;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -166,4 +169,58 @@ it('reports the PHP time limit of the checking process and fails below 120 secon
     } finally {
         set_time_limit(0);
     }
+});
+
+it('splits the tiles into an operation block and a modes block, and reports deliberate modes as information', function (): void {
+    $grouped = app(HealthChecks::class)->grouped();
+
+    expect(array_keys($grouped))->toBe(['operation', 'modes'])
+        ->and(collect($grouped['modes'])->pluck('key')->all())->toBe(['premium_only', 'login_link_preview', 'client_login_emd', 'adfs_debug', 'package_overrides', 'shared_numbers'])
+        ->and(collect($grouped['operation'])->pluck('key')->all())->toContain('database', 'queue', 'mfa', 'oidc', 'capacity')
+        ->and(collect($grouped['operation'])->pluck('key')->all())->not->toContain('premium_only');
+
+    Client::factory()->create(['package_override' => 'Premium', 'package_override_until' => now()->addDay()]);
+    $tile = app(HealthChecks::class)->packageOverrides();
+
+    expect($tile->status)->toBe(CheckStatus::Info)
+        ->and($tile->group)->toBe(CheckGroup::Modes)
+        ->and(app(HealthChecks::class)->database()->group)->toBe(CheckGroup::Operation);
+});
+
+it('does not fail the strict command or the health endpoint on information tiles', function (): void {
+    $this->mock(HealthChecks::class, function ($mock): void {
+        $mock->shouldReceive('all')->andReturn([
+            Check::ok('database', 'Database', 'ok'),
+            Check::info('package_overrides', 'Package overrides', '1 client'),
+        ]);
+    });
+
+    $this->artisan('hdid:health --strict')->assertExitCode(0);
+    $this->getJson('/health')->assertOk()->assertJsonFragment(['key' => 'package_overrides', 'status' => 'info']);
+
+    $this->mock(HealthChecks::class, function ($mock): void {
+        $mock->shouldReceive('all')->andReturn([Check::warn('login_link_preview', 'Login link preview', 'on')]);
+    });
+
+    $this->artisan('hdid:health --strict')->assertExitCode(1);
+    $this->getJson('/health')->assertOk();
+});
+
+it('renders the status page in two blocks with links to the pages that fix a tile', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    Filament::setCurrentPanel('admin');
+    app(Settings::class)->set(SettingKey::PackagesPremiumOnly, true);
+
+    $this->get('/admin/system/status')
+        ->assertOk()
+        ->assertSeeInOrder([__('System operation'), __('Modes and settings')])
+        ->assertSee(__('Information'))
+        ->assertSee(__('Queues'))
+        ->assertSee(__('Settings'));
+
+    $page = new SystemStatus;
+    expect($page->linkFor(app(HealthChecks::class)->database()))->toBeNull('a green tile needs no link')
+        ->and($page->linkFor(app(HealthChecks::class)->premiumOnly())['label'])->toBe(__('Settings'))
+        ->and($page->linkFor(app(HealthChecks::class)->queue())['label'])->toBe(__('Queues'));
 });

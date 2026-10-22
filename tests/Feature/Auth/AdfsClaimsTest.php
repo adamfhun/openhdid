@@ -225,18 +225,23 @@ it('records the cause ADFS gives for a refused authorization', function (): void
         && $context['provider_error_description'] === 'MSIS9605: The client is not allowed to access the requested scope.');
 });
 
-it('shows the compared ADFS claims on the status tile and turns it yellow while debugging', function (): void {
+it('shows the compared ADFS claims on the provider tile and reports debugging on its own mode tile', function (): void {
     adfsConfig('user', ['email_claims' => 'emailaddress,upn']);
     $check = app(HealthChecks::class)->oidc();
 
     expect($check->status)->toBe(CheckStatus::Ok)
         ->and($check->detail)->toContain('emailaddress, upn')
-        ->and($check->detail)->toContain('emailaddress, email, upn, preferred_username, unique_name');
+        ->and($check->detail)->toContain('emailaddress, email, upn, preferred_username, unique_name')
+        ->and(app(HealthChecks::class)->adfsDebug()->status)->toBe(CheckStatus::Ok);
 
     adfsConfig('client', ['debug' => true]);
 
-    expect(app(HealthChecks::class)->oidc()->status)->toBe(CheckStatus::Warn)
-        ->and(app(HealthChecks::class)->oidc()->detail)->toContain('HDID_ADFS_DEBUG');
+    // The provider tile only reflects configuration; the token log is a mode of its own.
+    expect(app(HealthChecks::class)->oidc()->status)->toBe(CheckStatus::Ok)
+        ->and(app(HealthChecks::class)->adfsDebug()->status)->toBe(CheckStatus::Warn)
+        ->and(app(HealthChecks::class)->adfsDebug()->detail)->toContain('HDID_ADFS_DEBUG')
+        ->and(app(HealthChecks::class)->adfsDebug()->detail)->toContain(__('client'))
+        ->and(collect(app(HealthChecks::class)->all())->firstWhere('key', 'adfs_debug')->hint)->not->toBeEmpty();
 });
 
 it('tells why each claim was passed over', function (mixed $value, string $verdict): void {

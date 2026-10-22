@@ -178,7 +178,7 @@ it('lists shared numbers for client managers only, with the count on the menu an
     expect(app(ClientPhones::class)->sharedNumberCount())->toBe(1, 'a closed client does not share')
         ->and(app(ClientPhones::class)->sharedNumbersOf($first))->toBe([sharedNumber()])
         ->and(app(ClientPhones::class)->sharedNumbersOf($alone))->toBe([])
-        ->and(app(HealthChecks::class)->sharedPhoneNumbers()->status->value)->toBe('warn');
+        ->and(app(HealthChecks::class)->sharedPhoneNumbers()->status->value)->toBe('info');
 
     $this->actingAs(User::factory()->withRole(Role::Agent)->create());
     expect(SharedPhoneNumbers::canAccess())->toBeFalse();

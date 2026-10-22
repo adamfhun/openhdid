@@ -4,6 +4,40 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.9.0] – 2026-10-22
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- ÜZ-08 (új): a sor és a kimenő üzenetek a felületen kezelhetők: az *Adminisztráció › Rendszer › Üzenetsorok* oldal (a beállítások kezelése joggal) soronként mutatja a feldolgozó életjelét és a feladatok számát, a sikertelen feladatokat a hibával (újrafuttatás, törlés egyesével, kijelölve, mind, régebbiek), a várakozó feladatokat (törlés, a folyamatban lévő védett), a sor ürítését megerősítéssel, és a kimenő üzenetek listáját tömeges újraküldéssel, visszavonással, az összes sikertelen újraküldésével és a várakozók azonnali, feldolgozó nélküli küldésével (legfeljebb 25 kattintásonként); ugyanezek a tömeges műveletek a Tartalom › Kimenő üzenetek listán is; minden művelet auditált.
+- ÜZ-03: a Rendszerállapot két blokkra oszlik (fent a rendszer működése, lent az üzemmódok és beállítások); új „Tájékoztatás” (kék) státusz: az élő csomag-felülírás, a megosztott telefonszám és a bekapcsolt csak prémium mód nem figyelmeztetés többé; az ADFS-hibakeresés külön csempét kapott; a nem zöld csempéről hivatkozás vezet a kezelő oldalra.
+- ÜZ-03.1: a `/health` válasz `info` státuszt is adhat (nem rontja a választ), a `hdid:health --strict` a tájékoztatáson nem bukik.
+- ÜZ-04: az ütemező minden beállított sorra (`default` és az `EMD_SYNC_QUEUE`) külön életjelet küld, a feldolgozó nélküli sorban az életjel nem halmozódik; a „Feladatsor” csempe sárga, ha a `sync-worker` nem ad életjelet.
+- ÜZ-05: a 30 napnál régebbi sikertelen feladatokat a napi tisztítás törli.
+
+**Frissítés előtt:** migráció és új telepítési kulcs nincs.
+
+Részletek:
+- Az üzemeltetési kézikönyv napi ellenőrzése, az üzenet- és életjel-helyzetek és a parancsreferencia az új oldalra mutatnak; a felhasználói kézikönyv új „Üzenetsorok” szakaszt és képet kap.
+- Platform: Node 24.22.1 (csak a frontend buildje; korábban 24.22.0); a PHP 8.5.12, a Composer 2.10.3 és az Alpine 3.24 image frissített digestje.
+- Az image frontend-buildje lassú hálózaton is lefut: a betűtípus letöltésénél a Node címválasztási időkorlátja 10 s (az alapértelmezett 250 ms a kiadás napján `ETIMEDOUT` hibával állította meg a buildet); a kiadási workflow ugyanezt az értéket használja.
+- A dokumentumok verziója 1.9.0.
+
+### English
+Rule changes in one sentence (with the specification identifiers):
+- ÜZ-08 (new): the queue and the outbound messages are managed from the panel: the *Administration › System › Queues* page (settings permission) shows every worker queue with its heartbeat and job counts, the failed jobs with their error (run again or delete one, the selected ones, all, or the old ones), the waiting jobs (delete; a job in progress is protected), clears a queue with confirmation, and lists the outbound messages with bulk retry and cancel, "retry all failed" and "send queued now" without a worker (25 per click); the same bulk actions are on the Content › Outbound messages list; every action is audited.
+- ÜZ-03: the System status page is split into two blocks (system operation on top, modes and settings below); new "Information" (blue) status: a live package override, a shared phone number and the premium-only mode are no longer warnings; ADFS debugging got a tile of its own; a tile that is not green links to the page that handles it.
+- ÜZ-03.1: `/health` may report an `info` status (it does not degrade the response); `hdid:health --strict` does not fail on information.
+- ÜZ-04: the scheduler sends a separate heartbeat to every configured queue (`default` and `EMD_SYNC_QUEUE`), and heartbeats do not pile up on a queue without a worker; the "Queue worker" tile turns yellow when the `sync-worker` gives no heartbeat.
+- ÜZ-05: failed jobs older than 30 days are deleted by the daily prune task.
+
+**Before upgrading:** no migration, no new deployment key.
+
+Details:
+- The daily check, the message and heartbeat situations and the command reference of the operations manual point to the new page; the user manual gets a "Queues" section and screenshot.
+- Platform: Node 24.22.1 (frontend build only; previously 24.22.0); refreshed digests of the PHP 8.5.12, Composer 2.10.3 and Alpine 3.24 images.
+- The frontend build of the image also succeeds on a slow link: Node's address-selection attempt timeout is 10 s while the web font is downloaded (the default 250 ms stopped the build with `ETIMEDOUT` on release day); the release workflow uses the same value.
+- The documents carry version 1.9.0.
+
 ## [1.8.1] – 2026-10-22
 
 ### Magyar
