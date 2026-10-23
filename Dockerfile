@@ -136,9 +136,12 @@ FROM ${PHP_IMAGE} AS php
 ARG PHPREDIS_VERSION
 ARG PHPREDIS_SHA256
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+# The base image's own Alpine packages are brought up to the repository's fixed versions
+# first, so a security fix does not wait for the official image to be rebuilt.
 # The run-time libraries of the new extensions are listed one per word on purpose.
 # hadolint ignore=SC2086
 RUN set -eux; \
+    apk upgrade --no-cache; \
     apk add --no-cache icu-data-full; \
     apk add --no-cache --virtual .build-deps $PHPIZE_DEPS icu-dev libxml2-dev libzip-dev linux-headers; \
     wget -q -O /tmp/redis.tgz "https://pecl.php.net/get/redis-${PHPREDIS_VERSION}.tgz"; \

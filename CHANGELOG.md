@@ -4,6 +4,22 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.13.1] – 2026-10-24
+
+### Magyar
+- Az 1.13.0 kiadás image-e a kiadási workflow-ban nem került ki: a CI sérülékenység-kapuja az alapimage egy aznap közzétett, magas súlyosságú Alpine-hibáján megállt (`brotli-libs` 1.2.0-r1, CVE-2026-111497, javítva 1.2.1-r0-ban), mert a hivatalos PHP-image még a javítás előtti csomaggal állt. Ezért az 1.13.0 a GitHubon kiadásként nem jelent meg (a `v1.13.0` címke létezik, melléklete és image-e nincs). Ez a kiadás az 1.13.0 teljes tartalmát hozza.
+- Platform: az image-build a digesttel rögzített PHP-alapimage Alpine-csomagjait a tároló javított változatára frissíti (`apk upgrade`), így egy Alpine-biztonsági javítás nem várja meg a hivatalos image újraépítését; a rögzített verziók változatlanok.
+- A dokumentumok verziója 1.13.1.
+
+**Frissítés előtt:** mint az 1.13.0-nál: migráció nincs, új telepítési kulcs nincs; az 1.12.0-ról közvetlenül erre a verzióra kell frissíteni.
+
+### English
+- The image of release 1.13.0 was not published by the release workflow: the CI vulnerability gate stopped on a high-severity Alpine flaw in the base image published that day (`brotli-libs` 1.2.0-r1, CVE-2026-111497, fixed in 1.2.1-r0), because the official PHP image still carried the unfixed package. So 1.13.0 never appeared as a GitHub release (the `v1.13.0` tag exists, without assets or image). This release carries the full content of 1.13.0.
+- Platform: the image build brings the Alpine packages of the digest-pinned PHP base image up to the repository's fixed versions (`apk upgrade`), so an Alpine security fix does not wait for the official image to be rebuilt; the pinned versions are unchanged.
+- The documents carry version 1.13.1.
+
+**Before upgrading:** as for 1.13.0: no migration, no new deployment key; upgrade from 1.12.0 straight to this version.
+
 ## [1.13.0] – 2026-10-24
 
 ### Magyar
