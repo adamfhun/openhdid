@@ -4,6 +4,20 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.11.1] – 2026-10-23
+
+### Magyar
+- Az 1.11.0 kiadás image-e a kiadási workflow-ban nem készült el: a libcurl forrásának kibontása (`tar -xJf`) a GitHub-futókon kétszer egymás után üzenet nélkül, 1-es kóddal megállt, ezért az 1.11.0 a GitHubon kiadásként nem jelent meg (a `v1.11.0` címke létezik, melléklete és image-e nincs). Ez a kiadás az 1.11.0 teljes tartalmát hozza, és az image-build a tömörített forrást két lépésben bontja ki (`xz -d`, majd `tar -xf`, csővezeték nélkül).
+- Platform: csak az `xz` csomag került a libcurl-fordító lépésbe; a rögzített verziók változatlanok.
+
+**Frissítés előtt:** mint az 1.11.0-nál: egy migráció (az `outbound_messages` kézbesítési oszlopai), négy új, választható telepítési kulcs alapértékkel; az 1.10.0-ról közvetlenül erre a verzióra kell frissíteni.
+
+### English
+- The image of release 1.11.0 was not built by the release workflow: extracting the libcurl source (`tar -xJf`) stopped twice in a row on the GitHub runners with exit code 1 and no message, so 1.11.0 never appeared as a GitHub release (the `v1.11.0` tag exists, without assets or image). This release carries the full content of 1.11.0, and the image build now extracts the compressed source in two steps (`xz -d`, then `tar -xf`, without a pipe).
+- Platform: only the `xz` package was added to the libcurl build step; the pinned versions are unchanged.
+
+**Before upgrading:** as for 1.11.0: one migration (delivery columns of `outbound_messages`), four new optional deployment keys with defaults; upgrade from 1.10.0 straight to this version.
+
 ## [1.11.0] – 2026-10-23
 
 ### Magyar

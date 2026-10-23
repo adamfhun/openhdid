@@ -93,8 +93,12 @@ ARG CURL_SHA256
 ARG CURL_PGP_FINGERPRINT
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 WORKDIR /src
+# The archive is decompressed to a file and untarred in a second step: busybox's
+# built-in xz path (tar -J) runs the decompressor as a piped child, which now and
+# then died with a silent exit code 1 on the GitHub runners (two of four release
+# builds on 2026-10-23); two plain steps have no pipe to race on.
 RUN set -eux; \
-    apk add --no-cache build-base gnupg nghttp2-dev openssl-dev zlib-dev; \
+    apk add --no-cache build-base gnupg nghttp2-dev openssl-dev xz zlib-dev; \
     wget -q -O curl.tar.xz "https://curl.se/download/curl-${CURL_VERSION}.tar.xz"; \
     wget -q -O curl.tar.xz.asc "https://curl.se/download/curl-${CURL_VERSION}.tar.xz.asc"; \
     wget -q -O mykey.asc https://daniel.haxx.se/mykey.asc; \
@@ -104,7 +108,10 @@ RUN set -eux; \
     gpg --batch --with-colons --fingerprint | grep -q "^fpr:::::::::${CURL_PGP_FINGERPRINT}:"; \
     gpg --batch --verify curl.tar.xz.asc curl.tar.xz; \
     gpgconf --kill all; rm -rf "$GNUPGHOME"; \
-    tar -xJf curl.tar.xz
+    xz -d curl.tar.xz; \
+    tar -xf curl.tar; \
+    rm -f curl.tar; \
+    test -d "curl-${CURL_VERSION}"
 WORKDIR /src/curl-${CURL_VERSION}
 RUN set -eux; \
     ./configure \

@@ -102,7 +102,7 @@ Nem privilegizált felhasználóként (uid 82) fut, csak olvasható gyökér-fá
 Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz. A `v` a telepített verzió (a `.env` `OPENHDID_VERSION` értéke):
 
 ```sh
-v=1.11.0
+v=1.11.1
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
