@@ -259,7 +259,7 @@ class HealthChecks
             'shared_numbers' => __('A number on file for more than one client recognises nobody in the phone menu, so those callers are not asked for their PIN. Open Shared phone numbers, decide whose number it is and remove it from the others; a number EMD lists for several people has to be corrected in the directory.'),
             'proxy' => __('Red: HDID_HTTP_PROXY is not a usable address; write it as http://host:port, with a password as http://user:password@host:port (special characters percent-encoded, @ as %40). Proxies with Windows (NTLM) sign-in are not supported. Internal servers reached without the proxy (master data, ADFS, Exchange, SMS gateway) go into HDID_NO_PROXY, comma-separated. After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM and php artisan queue:restart.'),
             'sso_bindings' => __('Yellow: a company sign-in arrived under an account\'s e-mail address (or employee id) from a directory identity other than the one the account is bound to, or from an identity already bound to another account; that person cannot sign in until you act. Check the audit log (login.rejected with sso_subject_mismatch or sso_subject_taken) and the account; if the identity change is legitimate (re-created directory account, replaced registration), "Clear sign-in binding" on the account, or php artisan hdid:sso-unbind <e-mail> (in the container: docker compose exec web php artisan hdid:sso-unbind <e-mail>). The binding itself is set by the first company sign-in of each account.'),
-            'oidc' => __('Red: a provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*), or USER_/CLIENT_SSO_MATCH holds a value other than email or employee_id. Either fill in the configuration or switch the provider off, otherwise the login button leads to an error. The ADFS claims compared with the account e-mail address come from USER_/CLIENT_ADFS_EMAIL_CLAIM; why a sign-in was refused is in the audit log (login.rejected). After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM.'),
+            'oidc' => __('Red: a provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*), the Entra tenant list has a problem (the tile names it: a shared endpoint such as common or organizations, an id that is not a GUID, a malformed domain), or USER_/CLIENT_SSO_MATCH holds a value other than email or employee_id. Yellow: CLIENT_ENTRA_TENANT and CLIENT_ENTRA_TENANTS are both set (keep the list only), or the same domain is listed under several tenants (check which tenant may sign in those accounts). Either fill in the configuration or switch the provider off, otherwise the login button leads to an error. The ADFS claims compared with the account e-mail address come from USER_/CLIENT_ADFS_EMAIL_CLAIM; why a sign-in was refused is in the audit log (login.rejected). After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM.'),
             'adfs_debug' => __('Yellow: HDID_ADFS_DEBUG is on, so every ADFS sign-in writes its decoded tokens, personal data included, to the application log. Meant for setting up the ADFS claims only; set it to false afterwards and restart the services (docker compose up -d, or php artisan config:cache and PHP-FPM on a classic installation).'),
             'storage' => __('Red: the public disk is not writable, fix the permissions of storage/app/public. Yellow: run "php artisan storage:link" on the server, otherwise uploaded logos and images do not show.'),
             'retention' => __('The daily "hdid:prune" task has not run for days. It runs through the scheduler, so check that tile first; run "php artisan hdid:prune" by hand to catch up.'),
@@ -633,6 +633,7 @@ class HealthChecks
         $label = __('Login providers');
         $parts = [];
         $broken = false;
+        $noted = false;
 
         foreach (PrincipalType::cases() as $principal) {
             foreach (OidcProvider::cases() as $provider) {
@@ -647,13 +648,31 @@ class HealthChecks
                     $state .= ' ('.__('e-mail claim: :claims', ['claims' => implode(', ', $config->emailClaims)]).')';
                 }
 
+                // Which tenants may sign in, and what is wrong with the list, where it acts.
+                if ($provider === OidcProvider::Entra && $enabled) {
+                    if ($config->tenantProblem !== null) {
+                        $state .= ' ('.__('tenant list: :problem', ['problem' => $config->tenantProblem]).')';
+                    } elseif ($configured) {
+                        $state .= ' ('.__(':n tenant(s): :list', ['n' => count($config->tenants), 'list' => implode(', ', array_map(fn ($tenant): string => $tenant->describe(), $config->tenants))]).')';
+                    }
+
+                    if ($config->tenantNote !== null) {
+                        $state .= ' · '.$config->tenantNote;
+                        $noted = true;
+                    }
+                }
+
                 $parts[] = __($principal->value).'/'.$provider->value.': '.$state;
             }
         }
 
         $detail = implode(' · ', $parts);
 
-        return $broken ? Check::fail('oidc', $label, $detail) : Check::ok('oidc', $label, $detail);
+        return match (true) {
+            $broken => Check::fail('oidc', $label, $detail),
+            $noted => Check::warn('oidc', $label, $detail),
+            default => Check::ok('oidc', $label, $detail),
+        };
     }
 
     /**

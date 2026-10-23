@@ -53,6 +53,19 @@ class SsoIdentity extends Model
     }
 
     /**
+     * The Entra tenant the binding's issuer belongs to (the id in the
+     * issuer URL), null for other providers or an unexpected issuer form.
+     */
+    public function tenantId(): ?string
+    {
+        if ($this->provider !== OidcProvider::Entra) {
+            return null;
+        }
+
+        return preg_match('#^https://(?:login\.microsoftonline\.com|sts\.windows\.net)/([^/]+)/#i', $this->issuer, $match) === 1 ? $match[1] : null;
+    }
+
+    /**
      * Whether this binding was made for the registration the sign-in now
      * comes from (see SsoSubject::isSameRegistration). An ADFS subject is
      * pairwise per client registration, so a binding of a replaced

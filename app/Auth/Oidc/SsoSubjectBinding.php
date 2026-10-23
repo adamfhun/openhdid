@@ -92,6 +92,14 @@ class SsoSubjectBinding
             $this->reject($account, $method, LoginRejection::SsoSubjectMismatch, $context + ['provider' => $config->provider->value, 'subject_claim' => $subject->claim]);
         }
 
+        // Bound to another Entra tenant that is still allowed: the same
+        // address from another directory is another identity, not a renewal.
+        // Only a tenant that left the list (a migration) is renewed below.
+        if ($current !== null && $config->provider === OidcProvider::Entra && $config->allowsTenant($current->tenantId())) {
+            $this->markMismatch($current);
+            $this->reject($account, $method, LoginRejection::SsoSubjectMismatch, $context + ['provider' => $config->provider->value, 'subject_claim' => $subject->claim, 'detail' => 'other_tenant']);
+        }
+
         // No binding for this registration yet (a binding of a replaced
         // registration cannot match again and is renewed below). The
         // subject may still belong to another account of this kind: an open

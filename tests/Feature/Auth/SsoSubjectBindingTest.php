@@ -28,7 +28,7 @@ use Illuminate\Testing\TestResponse;
 use Livewire\Livewire;
 use Tests\Support\FakeOidc;
 
-const BINDING_ENTRA_ISSUER = 'https://login.microsoftonline.com/tenant-1/v2.0';
+const BINDING_ENTRA_ISSUER = 'https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0';
 
 const BINDING_ENTRA_DISCOVERY = BINDING_ENTRA_ISSUER.'/.well-known/openid-configuration';
 
@@ -37,7 +37,7 @@ beforeEach(function (): void {
     FakeOidc::reset();
 
     foreach (PrincipalType::cases() as $principal) {
-        config()->set("hdid.oidc.{$principal->value}.entra", ['tenant' => 'tenant-1', 'client_id' => "{$principal->value}-app", 'client_secret' => 's', 'mobile_client_id' => 'mobile-app']);
+        config()->set("hdid.oidc.{$principal->value}.entra", ['tenant' => '11111111-1111-4111-8111-111111111111', 'client_id' => "{$principal->value}-app", 'client_secret' => 's', 'mobile_client_id' => 'mobile-app']);
         config()->set("hdid.oidc.{$principal->value}.adfs", ['issuer' => FakeOidc::ISSUER, 'client_id' => "{$principal->value}-app", 'client_secret' => 's']);
         app(Settings::class)->set(OidcProvider::Entra->enabledSetting($principal), true);
         app(Settings::class)->set(OidcProvider::Adfs->enabledSetting($principal), true);
@@ -58,7 +58,7 @@ function signInWith(PrincipalType $principal, OidcProvider $provider, array $cla
 {
     $claims += ['aud' => "{$principal->value}-app"];
     if ($provider === OidcProvider::Entra) {
-        $claims += ['tid' => 'tenant-1', 'email_verified' => true];
+        $claims += ['tid' => '11111111-1111-4111-8111-111111111111', 'email_verified' => true];
     }
 
     FakeOidc::fake($claims, FakeOidc::ISSUER, $provider->configFor($principal)->discoveryUrl);
@@ -376,7 +376,7 @@ it('keeps an Entra binding across a client registration change and still refuses
 
     // Another tenant's issuer is another registration: the binding does not carry over.
     $other = portalClient('tenant2@x.hu');
-    SsoIdentity::factory()->forAccount($other, OidcProvider::Entra, 'https://login.microsoftonline.com/tenant-2/v2.0', 'client-app', 'oid-agent')->create();
+    SsoIdentity::factory()->forAccount($other, OidcProvider::Entra, 'https://login.microsoftonline.com/22222222-2222-4222-8222-222222222222/v2.0', 'client-app', 'oid-agent')->create();
     expect(SsoIdentity::query()->count())->toBe(2);
 });
 
@@ -420,16 +420,16 @@ it('binds the mobile token exchange to the same identity as the browser sign-in'
     $client = portalClient();
     FakeOidc::fake([], BINDING_ENTRA_ISSUER, BINDING_ENTRA_DISCOVERY);
 
-    $first = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu', 'oid' => 'oid-phone'], BINDING_ENTRA_ISSUER);
+    $first = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => '11111111-1111-4111-8111-111111111111', 'preferred_username' => 'c@x.hu', 'oid' => 'oid-phone'], BINDING_ENTRA_ISSUER);
     $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $first, 'device_name' => 'iPhone'])->assertOk();
     $identity = $client->ssoIdentities()->sole();
     expect($identity->subject)->toBe('oid-phone')->and($identity->client_id)->toBe('client-app')
         ->and(AuditLog::query()->where('event', 'login.succeeded')->sole()->context)->toMatchArray(['method' => 'sso.entra.mobile', 'sso_subject' => 'bound', 'device' => 'iPhone']);
 
-    $again = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu', 'oid' => 'oid-phone', 'iat' => time() + 1], BINDING_ENTRA_ISSUER);
+    $again = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => '11111111-1111-4111-8111-111111111111', 'preferred_username' => 'c@x.hu', 'oid' => 'oid-phone', 'iat' => time() + 1], BINDING_ENTRA_ISSUER);
     $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $again, 'device_name' => 'iPad'])->assertOk();
 
-    $foreign = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => 'tenant-1', 'preferred_username' => 'c@x.hu', 'oid' => 'oid-other', 'iat' => time() + 2], BINDING_ENTRA_ISSUER);
+    $foreign = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => '11111111-1111-4111-8111-111111111111', 'preferred_username' => 'c@x.hu', 'oid' => 'oid-other', 'iat' => time() + 2], BINDING_ENTRA_ISSUER);
     $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $foreign, 'device_name' => 'x'])
         ->assertForbidden()->assertJsonPath('reason', 'sso_subject_mismatch');
     expect($client->ssoIdentities()->sole()->mismatch_count)->toBe(1);

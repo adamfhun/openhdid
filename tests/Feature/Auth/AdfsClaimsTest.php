@@ -266,7 +266,7 @@ it('takes a multi-valued claim holding one address', function (): void {
 });
 
 it('records an unverified Entra e-mail claim as passed over', function (): void {
-    config()->set('hdid.oidc.user.entra', ['tenant' => 'tenant-1', 'client_id' => 'web-app', 'client_secret' => 's']);
+    config()->set('hdid.oidc.user.entra', ['tenant' => '11111111-1111-4111-8111-111111111111', 'client_id' => 'web-app', 'client_secret' => 's']);
 
     $match = EmailClaimMatch::resolve(
         new OidcTokens(['email' => 'boss@corp.hu', 'preferred_username' => 'agent@corp.hu']),

@@ -20,6 +20,7 @@ enum LoginRejection: string
     case NoSubjectClaim = 'no_subject_claim';
     case SsoSubjectMismatch = 'sso_subject_mismatch';
     case SsoSubjectTaken = 'sso_subject_taken';
+    case TenantDomainNotAllowed = 'tenant_domain_not_allowed';
 
     public function message(): string
     {
@@ -39,6 +40,7 @@ enum LoginRejection: string
             self::NoSubjectClaim => 'The sign-in service did not send a stable user identifier, so the sign-in cannot be bound to the account. Please report this to the operator of the system.',
             self::SsoSubjectMismatch => 'This sign-in comes from a different directory identity than the one bound to the account. Ask an administrator to check the account and clear its sign-in binding.',
             self::SsoSubjectTaken => 'This directory identity is already bound to another account. Ask an administrator to check the accounts.',
+            self::TenantDomainNotAllowed => 'The organisation you signed in with may not sign in this account. Please report this to the operator of the system.',
         };
     }
 

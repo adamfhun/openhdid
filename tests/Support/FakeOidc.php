@@ -39,14 +39,28 @@ class FakeOidc
     /**
      * @param  array<string, mixed>  $claims
      */
-    public static function fake(array $claims = [], string $issuer = self::ISSUER, string $discoveryUrl = self::DISCOVERY): void
+    /** Issuer the fake token endpoint signs into the ID token. */
+    public static string $issuer = self::ISSUER;
+
+    /** Issuer the fake discovery document publishes (Entra's shared endpoints template the tenant id). */
+    public static ?string $discoveryIssuer = null;
+
+    /**
+     * The stubs read the statics at request time: Http::fake keeps the
+     * first stub registered for a URL, so a test that signs in several
+     * times (even from several tenants) still gets the latest claims and
+     * issuer.
+     */
+    public static function fake(array $claims = [], string $issuer = self::ISSUER, string $discoveryUrl = self::DISCOVERY, ?string $discoveryIssuer = null): void
     {
         self::ensureKeys();
         self::$claims = $claims;
+        self::$issuer = $issuer;
+        self::$discoveryIssuer = $discoveryIssuer;
 
         Http::fake([
-            $discoveryUrl => Http::response([
-                'issuer' => $issuer,
+            $discoveryUrl => fn ($request) => Http::response([
+                'issuer' => self::$discoveryIssuer ?? self::$issuer,
                 'access_token_issuer' => self::ACCESS_TOKEN_ISSUER,
                 'authorization_endpoint' => 'https://idp.test/authorize',
                 'token_endpoint' => 'https://idp.test/token',
@@ -54,7 +68,7 @@ class FakeOidc
             ]),
             'https://idp.test/jwks' => Http::response(['keys' => [self::$jwk]]),
             'https://idp.test/token' => fn ($request) => Http::response(self::$tokenResponse + [
-                'id_token' => self::idToken(self::$claims + ['nonce' => self::$nonce], $issuer),
+                'id_token' => self::idToken(self::$claims + ['nonce' => self::$nonce], self::$issuer),
                 'access_token' => self::$accessClaims === null ? 'x' : self::idToken(self::$accessClaims, self::ACCESS_TOKEN_ISSUER, withSubject: false),
             ]),
         ]);
@@ -68,6 +82,8 @@ class FakeOidc
         self::$accessClaims = null;
         self::$tokenResponse = [];
         self::$withoutSubject = false;
+        self::$issuer = self::ISSUER;
+        self::$discoveryIssuer = null;
     }
 
     /**

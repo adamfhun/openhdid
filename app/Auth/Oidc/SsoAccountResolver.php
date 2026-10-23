@@ -62,6 +62,21 @@ class SsoAccountResolver
 
         $this->access->assertEnabled($principal, $config->provider, $method, $account);
 
+        // A tenant listed with domains may only sign in accounts of those
+        // domains; a tenant without is trusted for any address the EMD knows.
+        if ($config->provider === OidcProvider::Entra) {
+            $tenantId = (string) ($tokens->idClaims['tid'] ?? '');
+            $tenant = $config->tenantFor($tenantId);
+            // Which directory the person came from, for the operator (a configured id, not a secret).
+            $context['tenant'] = $tenantId;
+
+            if ($tenant !== null && ! $tenant->allowsAddress($account->getEmail())) {
+                $this->login->recordRejection($principal, $method, LoginRejection::TenantDomainNotAllowed, $context + ['email' => $account->getEmail(), 'tenant' => $tenant->id, 'allowed_domains' => $tenant->domains], $account);
+
+                throw new LoginRejectedException(LoginRejection::TenantDomainNotAllowed);
+            }
+        }
+
         $identity = $this->binding->assert($account, SsoSubject::fromClaims($tokens->idClaims, $config), $config, $method, $context);
 
         return ['account' => $account, 'context' => $context + SsoSubjectBinding::loginContext($identity)];

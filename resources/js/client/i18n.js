@@ -57,6 +57,7 @@ const dictionaries = {
         'The sign-in service did not send a stable user identifier, so the sign-in cannot be bound to the account. Please report this to the operator of the system.': 'A bejelentkezési szolgáltatás nem küldött állandó felhasználó-azonosítót, ezért a belépés nem köthető a fiókhoz. Kérjük, jelezze a rendszer üzemeltetőjének.',
         'This sign-in comes from a different directory identity than the one bound to the account. Ask an administrator to check the account and clear its sign-in binding.': 'Ez a belépés más címtár-azonosítótól érkezik, mint amelyhez a fiók kötve van. Kérje meg a rendszergazdát, hogy ellenőrizze a fiókot, és oldja fel a belépés kötését.',
         'This directory identity is already bound to another account. Ask an administrator to check the accounts.': 'Ez a címtár-azonosító már egy másik fiókhoz van kötve. Kérje meg a rendszergazdát, hogy ellenőrizze a fiókokat.',
+        'The organisation you signed in with may not sign in this account. Please report this to the operator of the system.': 'A szervezet, amellyel bejelentkezett, ezzel a fiókkal nem léphet be. Kérjük, jelezze a rendszer üzemeltetőjének.',
         'This account has no access.': 'Ennek a fióknak nincs hozzáférése.',
         'The login link or code is not valid or has expired.': 'A belépési link vagy kód érvénytelen vagy lejárt.',
         'Login failed.': 'A belépés nem sikerült.',

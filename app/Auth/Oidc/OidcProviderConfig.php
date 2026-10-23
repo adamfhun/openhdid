@@ -32,6 +32,9 @@ final readonly class OidcProviderConfig
      * @param  SsoMatchMode|null  $matchMode  which claim finds the account; null for an unknown configured value
      * @param  string  $employeeIdClaim  the claim compared with the EMD record's external id in employee-id mode
      * @param  bool  $requireSubject  refuse a token without a stable subject (oid, sub) instead of signing in unbound
+     * @param  list<EntraTenant>  $tenants  Entra: the tenants a sign-in may come from (one for a dedicated tenant, several for the client portal)
+     * @param  string|null  $tenantProblem  Entra: why the tenant configuration cannot be used
+     * @param  string|null  $tenantNote  Entra: a configuration oddity worth fixing that does not stop sign-ins
      */
     public function __construct(
         public OidcProvider $provider,
@@ -48,6 +51,9 @@ final readonly class OidcProviderConfig
         public ?SsoMatchMode $matchMode = SsoMatchMode::Email,
         public string $employeeIdClaim = self::DEFAULT_EMPLOYEE_ID_CLAIM,
         public bool $requireSubject = true,
+        public array $tenants = [],
+        public ?string $tenantProblem = null,
+        public ?string $tenantNote = null,
     ) {}
 
     public function isConfigured(): bool
@@ -62,11 +68,42 @@ final readonly class OidcProviderConfig
         };
     }
 
+    /**
+     * At least one usable tenant and no problem in the list: the shared
+     * endpoints never count, since a token from any tenant would validate.
+     */
     public function hasDedicatedTenant(): bool
     {
-        return $this->tenant !== null
-            && trim($this->tenant) !== ''
-            && ! in_array(strtolower(trim($this->tenant)), self::ENTRA_SHARED_TENANTS, true);
+        return $this->tenants !== [] && $this->tenantProblem === null;
+    }
+
+    /**
+     * Several tenants: the shared "organizations" endpoint issues the
+     * tokens, and the tenant claim is checked against the list.
+     */
+    public function isMultiTenant(): bool
+    {
+        return count($this->tenants) > 1;
+    }
+
+    public function allowsTenant(?string $tenantId): bool
+    {
+        return $this->tenantFor($tenantId) !== null;
+    }
+
+    public function tenantFor(?string $tenantId): ?EntraTenant
+    {
+        if ($tenantId === null || trim($tenantId) === '') {
+            return null;
+        }
+
+        foreach ($this->tenants as $tenant) {
+            if (strcasecmp($tenant->id, trim($tenantId)) === 0) {
+                return $tenant;
+            }
+        }
+
+        return null;
     }
 
     /**

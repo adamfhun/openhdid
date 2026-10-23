@@ -4,6 +4,28 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.12.0] – 2026-10-23
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- BEL-00.4 (új): az ügyfélportál több Entra-bérlőből fogadhat belépést a `CLIENT_ENTRA_TENANTS` listából (GUID-ok vesszővel, bérlőnként választható `:domain|domain` e-mail-szűrővel; domain nélkül a bérlő megbízható); több bérlőnél a közös `organizations` végpont, a token bérlője a listához, a kibocsátó a token saját bérlőjéhez kötve, a listán kívüli bérlő tokenje érvénytelen; a domain-szűrőn elutasított cím `tenant_domain_not_allowed`; a kötés bérlőnként él (másik engedélyezett bérlőből érkező azonos cím „más címtár-azonosító”, újrakötés csak a listáról lekerült bérlő után); a mobil tokencsere ugyanezt követi; a `CLIENT_ENTRA_TENANT` és a `CLIENT_ENTRA_TENANTS` együttes kitöltését és az egy domain több bérlőnél esetet a rendszer eltűri és a Rendszerállapot sárgán jelzi; a bérlőazonosító csak GUID lehet (elgépelésnél a szolgáltató „nincs beállítva”, a kártya megnevezi); a munkatársi belépés egy bérlős marad.
+
+**Frissítés előtt:** migráció nincs; egy új, választható telepítési kulcs (`CLIENT_ENTRA_TENANTS`); egy bérlővel minden a korábbiak szerint működik.
+
+Részletek:
+- A telepítési útmutató lépésenként írja le az Entra regisztrációt egy és több bérlőre (regisztráció típusa, azonosítók, titok, `xms_edov` igény, engedélyek, hozzájárulás a partner oldalán, mobil); a sikeres Entra-belépés auditbejegyzése a `tenant` mezőben mutatja a bérlőt.
+- A dokumentumok verziója 1.12.0.
+
+### English
+Rule changes in one sentence (with the specification identifiers):
+- BEL-00.4 (new): the client portal accepts Entra sign-ins from the tenants listed in `CLIENT_ENTRA_TENANTS` (GUIDs, comma-separated, each with an optional `:domain|domain` e-mail filter; without domains the tenant is trusted); with several tenants the shared `organizations` endpoint is used, the token's tenant is checked against the list and the issuer against the token's own tenant, a token of an unlisted tenant is invalid; an address refused by a tenant's domain filter is `tenant_domain_not_allowed`; bindings are per tenant (the same address from another allowed tenant is a "different directory identity", renewal only after the bound tenant left the list); the mobile token exchange follows the same rules; `CLIENT_ENTRA_TENANT` and `CLIENT_ENTRA_TENANTS` both set, or one domain under several tenants, is tolerated and shown yellow on the status page; a tenant id must be a GUID (a typo leaves the provider "not configured", named on the tile); staff sign-in stays single-tenant.
+
+**Before upgrading:** no migration; one new optional deployment key (`CLIENT_ENTRA_TENANTS`); with one tenant everything works as before.
+
+Details:
+- The install guide describes the Entra registration step by step for one and for several tenants (registration type, ids, secret, `xms_edov` claim, permissions, consent on the partner's side, mobile); the audit entry of a successful Entra sign-in carries the tenant in its `tenant` field.
+- The documents carry version 1.12.0.
+
 ## [1.11.1] – 2026-10-23
 
 ### Magyar

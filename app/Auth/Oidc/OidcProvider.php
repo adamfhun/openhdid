@@ -51,13 +51,16 @@ enum OidcProvider: string
         /** @var array<string, mixed> $principalCfg */
         $principalCfg = config("hdid.oidc.{$principal->value}", []);
 
-        // Entra is always addressed by the dedicated tenant's directory id (GUID,
-        // the token's tid claim); without one the provider is not configured at all.
-        $tenant = isset($cfg['tenant']) && trim((string) $cfg['tenant']) !== '' ? trim((string) $cfg['tenant']) : null;
+        // Entra is addressed by the dedicated tenant's directory id (the token's
+        // tid claim); the client portal may list several tenants, which the
+        // shared "organizations" endpoint serves while the list decides who may
+        // sign in. Without a usable tenant the provider is not configured at all.
+        $tenants = EntraTenants::parse($cfg['tenant'] ?? null, $principal === PrincipalType::Client ? ($cfg['tenants'] ?? null) : null);
+        $tenant = $tenants->tenants[0]->id ?? null;
 
         $discoveryUrl = match ($this) {
             self::Adfs => rtrim((string) ($cfg['issuer'] ?? ''), '/').'/.well-known/openid-configuration',
-            self::Entra => 'https://login.microsoftonline.com/'.($tenant ?? 'unconfigured').'/v2.0/.well-known/openid-configuration',
+            self::Entra => 'https://login.microsoftonline.com/'.(count($tenants->tenants) > 1 ? 'organizations' : ($tenant ?? 'unconfigured')).'/v2.0/.well-known/openid-configuration',
         };
 
         return new OidcProviderConfig(
@@ -75,6 +78,9 @@ enum OidcProvider: string
             matchMode: SsoMatchMode::fromConfig($principalCfg['match'] ?? null),
             employeeIdClaim: trim((string) ($principalCfg['employee_id_claim'] ?? '')) ?: OidcProviderConfig::DEFAULT_EMPLOYEE_ID_CLAIM,
             requireSubject: (bool) config('hdid.oidc.require_subject', true),
+            tenants: $this === self::Entra ? $tenants->tenants : [],
+            tenantProblem: $this === self::Entra ? $tenants->problem : null,
+            tenantNote: $this === self::Entra ? $tenants->note : null,
         );
     }
 }

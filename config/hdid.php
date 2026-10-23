@@ -196,6 +196,8 @@ return [
             ],
             'entra' => [
                 'tenant' => env('CLIENT_ENTRA_TENANT'),
+                // Several tenants, comma-separated; a tenant followed by ":domain|domain" may only present those addresses.
+                'tenants' => env('CLIENT_ENTRA_TENANTS'),
                 'client_id' => env('CLIENT_ENTRA_CLIENT_ID'),
                 'client_secret' => env('CLIENT_ENTRA_CLIENT_SECRET'),
                 'mobile_client_id' => env('CLIENT_ENTRA_MOBILE_CLIENT_ID'),

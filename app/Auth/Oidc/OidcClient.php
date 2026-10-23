@@ -184,18 +184,20 @@ class OidcClient
             throw new OidcException('ID token authorized party mismatch.');
         }
 
-        if (! $this->issuerMatches($discovery['issuer'], (string) ($claims['iss'] ?? ''), $config)) {
-            throw new OidcException('ID token issuer mismatch.');
-        }
-
         // The signature and audience prove the token came from Microsoft for
-        // our app; only the tenant claim proves it came from OUR directory.
+        // our app; only the tenant claim proves it came from one of OUR
+        // directories, so it is checked before the (tenant-templated) issuer.
+        $tenantId = null;
         if ($config->provider === OidcProvider::Entra) {
             $tenantId = $claims['tid'] ?? null;
 
-            if (! is_string($tenantId) || strcasecmp($tenantId, (string) $config->tenant) !== 0) {
-                throw new OidcException('ID token tenant mismatch.');
+            if (! is_string($tenantId) || ! $config->allowsTenant($tenantId)) {
+                throw new OidcException('ID token tenant not allowed.');
             }
+        }
+
+        if (! $this->issuerMatches($discovery['issuer'], (string) ($claims['iss'] ?? ''), $config, $tenantId)) {
+            throw new OidcException('ID token issuer mismatch.');
         }
 
         return $claims;
@@ -360,16 +362,17 @@ class OidcClient
         }
     }
 
-    private function issuerMatches(string $expected, string $actual, OidcProviderConfig $config): bool
+    private function issuerMatches(string $expected, string $actual, OidcProviderConfig $config, ?string $tenantId = null): bool
     {
         if ($actual === $expected) {
             return true;
         }
 
-        // A discovery document that templates the tenant id into the issuer is
-        // only accepted for the configured tenant, never as a wildcard.
-        if ($config->provider === OidcProvider::Entra && str_contains($expected, '{tenantid}')) {
-            return strcasecmp(str_replace('{tenantid}', (string) $config->tenant, $expected), $actual) === 0;
+        // A discovery document that templates the tenant id into the issuer
+        // (the shared endpoints do) is only accepted for the token's own,
+        // already allowed tenant, never as a wildcard.
+        if ($config->provider === OidcProvider::Entra && str_contains($expected, '{tenantid}') && $tenantId !== null) {
+            return strcasecmp(str_replace('{tenantid}', $tenantId, $expected), $actual) === 0;
         }
 
         return false;

@@ -119,7 +119,7 @@ it('refuses a disabled provider', function (): void {
 function startConfiguredSso(PrincipalType $principal, OidcProvider $provider): array
 {
     config()->set("hdid.oidc.{$principal->value}.{$provider->value}", [
-        'issuer' => FakeOidc::ISSUER, 'tenant' => 'tenant-1',
+        'issuer' => FakeOidc::ISSUER, 'tenant' => '11111111-1111-4111-8111-111111111111',
         'client_id' => $principal->value.'-app', 'client_secret' => 's',
     ]);
     app(Settings::class)->set($provider->enabledSetting($principal), true);
@@ -128,7 +128,7 @@ function startConfiguredSso(PrincipalType $principal, OidcProvider $provider): a
         $account->assignRole(Role::Agent->value);
     }
     FakeOidc::fake([
-        'aud' => $principal->value.'-app', 'tid' => 'tenant-1',
+        'aud' => $principal->value.'-app', 'tid' => '11111111-1111-4111-8111-111111111111',
         'email' => $account->email, 'email_verified' => true,
     ], FakeOidc::ISSUER, $provider->configFor($principal)->discoveryUrl);
     Http::preventStrayRequests();
