@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Resources\Clients\Pages;
 use App\Audit\Auditor;
 use App\Filament\Actions\SendMagicLinkAction;
 use App\Filament\Actions\SetPinAction;
+use App\Filament\Actions\UnbindSsoAction;
 use App\Filament\Actions\UnlockLoginAction;
 use App\Filament\Actions\WrapUpNoteAction;
 use App\Filament\Admin\Resources\Clients\ClientResource;
@@ -81,6 +82,7 @@ class ViewClient extends ViewRecord
             SetPinAction::make(),
             SendMagicLinkAction::make(),
             UnlockLoginAction::make(),
+            UnbindSsoAction::make(),
             ClientResource::overrideAction(),
             ClientResource::endOverrideAction(),
             EditAction::make(),

@@ -8,9 +8,9 @@ namespace App\Auth\Oidc;
  */
 final readonly class EmailClaimMatch
 {
-    public const ID_TOKEN = 'id_token';
+    public const ID_TOKEN = OidcTokens::ID_TOKEN;
 
-    public const ACCESS_TOKEN = 'access_token';
+    public const ACCESS_TOKEN = OidcTokens::ACCESS_TOKEN;
 
     /**
      * @param  list<string>  $checked  claim names in the order they were tried
@@ -48,13 +48,11 @@ final readonly class EmailClaimMatch
             }
         }
 
-        $sources = array_filter([self::ID_TOKEN => $tokens->idClaims, self::ACCESS_TOKEN => $tokens->accessClaims], fn (?array $claims): bool => $claims !== null);
-
         foreach ($order as $name) {
             $verdict = 'missing';
 
-            foreach ($sources as $token => $claims) {
-                $key = self::keyOf($claims, $name);
+            foreach ($tokens->sources() as $token => $claims) {
+                $key = OidcTokens::claimKey($claims, $name);
                 if ($key === null) {
                     continue;
                 }
@@ -109,31 +107,6 @@ final readonly class EmailClaimMatch
     private function accessStatus(): ?string
     {
         return $this->tokens->accessStatus === OidcTokens::ACCESS_NOT_READ ? null : $this->tokens->accessStatus;
-    }
-
-    /**
-     * The claim key for a configured name: the name itself, or a claim-type
-     * URI ending in it (".../claims/emailaddress" for "emailaddress").
-     *
-     * @param  array<string, mixed>  $claims
-     */
-    private static function keyOf(array $claims, string $name): ?string
-    {
-        if (array_key_exists($name, $claims)) {
-            return $name;
-        }
-
-        if (str_contains($name, '/')) {
-            return null;
-        }
-
-        foreach (array_keys($claims) as $key) {
-            if (str_contains((string) $key, '/') && strcasecmp(substr((string) $key, strrpos((string) $key, '/') + 1), $name) === 0) {
-                return (string) $key;
-            }
-        }
-
-        return null;
     }
 
     /**

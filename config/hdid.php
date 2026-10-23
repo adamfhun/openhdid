@@ -148,7 +148,13 @@ return [
     ],
 
     'oidc' => [
+        // A company sign-in without a stable subject (Entra oid, ADFS sub) is refused; false signs it in unbound.
+        'require_subject' => filter_var(env('HDID_SSO_REQUIRE_SUBJECT', true), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true,
         'user' => [
+            // Which claim finds the account: "email" (default) or "employee_id" (compared with the EMD external id).
+            'match' => env('USER_SSO_MATCH'),
+            // The claim carrying the employee id in employee_id mode; empty: employeeId.
+            'employee_id_claim' => env('USER_SSO_EMPLOYEE_ID_CLAIM'),
             'adfs' => [
                 'issuer' => env('USER_ADFS_ISSUER'),
                 'client_id' => env('USER_ADFS_CLIENT_ID'),
@@ -168,6 +174,8 @@ return [
             ],
         ],
         'client' => [
+            'match' => env('CLIENT_SSO_MATCH'),
+            'employee_id_claim' => env('CLIENT_SSO_EMPLOYEE_ID_CLAIM'),
             'adfs' => [
                 'issuer' => env('CLIENT_ADFS_ISSUER'),
                 'client_id' => env('CLIENT_ADFS_CLIENT_ID'),

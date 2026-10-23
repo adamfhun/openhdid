@@ -16,6 +16,10 @@ enum LoginRejection: string
     case InvalidCredentials = 'invalid_credentials';
     case ProviderUnavailable = 'provider_unavailable';
     case NoEmailClaim = 'no_email_claim';
+    case NoEmployeeIdClaim = 'no_employee_id_claim';
+    case NoSubjectClaim = 'no_subject_claim';
+    case SsoSubjectMismatch = 'sso_subject_mismatch';
+    case SsoSubjectTaken = 'sso_subject_taken';
 
     public function message(): string
     {
@@ -31,6 +35,10 @@ enum LoginRejection: string
             self::InvalidCredentials => 'The credentials are not valid.',
             self::ProviderUnavailable => 'The sign-in service is not available right now. Please try again later.',
             self::NoEmailClaim => 'The sign-in service did not send a usable e-mail address, so the account cannot be identified. Please report this to the operator of the system.',
+            self::NoEmployeeIdClaim => 'The sign-in service did not send a usable employee id, so the account cannot be identified. Please report this to the operator of the system.',
+            self::NoSubjectClaim => 'The sign-in service did not send a stable user identifier, so the sign-in cannot be bound to the account. Please report this to the operator of the system.',
+            self::SsoSubjectMismatch => 'This sign-in comes from a different directory identity than the one bound to the account. Ask an administrator to check the account and clear its sign-in binding.',
+            self::SsoSubjectTaken => 'This directory identity is already bound to another account. Ask an administrator to check the accounts.',
         };
     }
 

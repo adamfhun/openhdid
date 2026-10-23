@@ -92,7 +92,7 @@ class SystemStatus extends Page
             'messages' => ['url' => OutboundMessageResource::getUrl(), 'label' => OutboundMessageResource::getNavigationLabel()],
             'sync', 'sync_auth' => ['url' => SyncRunResource::getUrl(), 'label' => SyncRunResource::getNavigationLabel()],
             'api_keys' => ['url' => ApiKeyResource::getUrl(), 'label' => ApiKeyResource::getNavigationLabel()],
-            'mfa' => ['url' => UserResource::getUrl(), 'label' => UserResource::getNavigationLabel()],
+            'mfa', 'sso_bindings' => ['url' => UserResource::getUrl(), 'label' => UserResource::getNavigationLabel()],
             'audit' => ['url' => AuditArchives::getUrl(), 'label' => AuditArchives::getNavigationLabel()],
             'package_overrides' => ['url' => ClientResource::getUrl(), 'label' => ClientResource::getNavigationLabel()],
             'shared_numbers' => ['url' => SharedPhoneNumbers::getUrl(), 'label' => SharedPhoneNumbers::getNavigationLabel()],

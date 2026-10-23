@@ -55,7 +55,7 @@ class FakeOidc
             'https://idp.test/jwks' => Http::response(['keys' => [self::$jwk]]),
             'https://idp.test/token' => fn ($request) => Http::response(self::$tokenResponse + [
                 'id_token' => self::idToken(self::$claims + ['nonce' => self::$nonce], $issuer),
-                'access_token' => self::$accessClaims === null ? 'x' : self::idToken(self::$accessClaims, self::ACCESS_TOKEN_ISSUER),
+                'access_token' => self::$accessClaims === null ? 'x' : self::idToken(self::$accessClaims, self::ACCESS_TOKEN_ISSUER, withSubject: false),
             ]),
         ]);
     }
@@ -67,21 +67,55 @@ class FakeOidc
     {
         self::$accessClaims = null;
         self::$tokenResponse = [];
+        self::$withoutSubject = false;
     }
 
     /**
      * @param  array<string, mixed>  $claims
      */
-    public static function idToken(array $claims, string $issuer = self::ISSUER): string
+    public static function idToken(array $claims, string $issuer = self::ISSUER, bool $withSubject = true): string
     {
         self::ensureKeys();
 
-        return JWT::encode($claims + [
+        return JWT::encode($claims + ($withSubject ? self::defaultSubject($claims) : []) + [
             'iss' => $issuer,
             'iat' => time(),
             'exp' => time() + 300,
         ], self::$privateKey, 'RS256', 'test-kid');
     }
+
+    /**
+     * A stable subject per person, derived from the address-like claim, so
+     * that the binding check (SsoSubjectBinding) sees the same identity on
+     * every sign-in of the same person; a test about the subject itself
+     * passes `oid` or `sub` explicitly. `FakeOidc::$withoutSubject` leaves
+     * both out.
+     *
+     * @param  array<string, mixed>  $claims
+     * @return array<string, string>
+     */
+    public static function defaultSubject(array $claims): array
+    {
+        if (self::$withoutSubject) {
+            return [];
+        }
+
+        $person = '';
+        foreach (['email', 'preferred_username', 'upn', 'emailaddress', 'unique_name'] as $name) {
+            $value = $claims[$name] ?? null;
+            if (is_string($value) && $value !== '') {
+                $person = mb_strtolower($value);
+                break;
+            }
+        }
+
+        $hash = substr(hash('sha256', $person), 0, 16);
+
+        return ['sub' => 'sub-'.$hash, 'oid' => 'oid-'.$hash];
+    }
+
+    /** Sign tokens without any subject claim (oid, sub). */
+    public static bool $withoutSubject = false;
 
     private static function ensureKeys(): void
     {

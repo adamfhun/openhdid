@@ -23,9 +23,15 @@ final readonly class OidcProviderConfig
      */
     public const ADFS_DEFAULT_EMAIL_CLAIMS = ['emailaddress', 'email', 'upn', 'preferred_username', 'unique_name'];
 
+    /** The claim the employee id is read from when the match mode asks for it. */
+    public const DEFAULT_EMPLOYEE_ID_CLAIM = 'employeeId';
+
     /**
      * @param  list<string>  $emailClaims  ADFS: the claims compared with the account's address, in order
      * @param  bool  $debug  ADFS: write the decoded tokens to the application log
+     * @param  SsoMatchMode|null  $matchMode  which claim finds the account; null for an unknown configured value
+     * @param  string  $employeeIdClaim  the claim compared with the EMD record's external id in employee-id mode
+     * @param  bool  $requireSubject  refuse a token without a stable subject (oid, sub) instead of signing in unbound
      */
     public function __construct(
         public OidcProvider $provider,
@@ -39,11 +45,14 @@ final readonly class OidcProviderConfig
         public array $emailClaims = self::ADFS_DEFAULT_EMAIL_CLAIMS,
         public ?string $resource = null,
         public bool $debug = false,
+        public ?SsoMatchMode $matchMode = SsoMatchMode::Email,
+        public string $employeeIdClaim = self::DEFAULT_EMPLOYEE_ID_CLAIM,
+        public bool $requireSubject = true,
     ) {}
 
     public function isConfigured(): bool
     {
-        if ($this->clientId === '') {
+        if ($this->clientId === '' || $this->matchMode === null) {
             return false;
         }
 

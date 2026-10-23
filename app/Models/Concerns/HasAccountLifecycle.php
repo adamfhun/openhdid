@@ -6,8 +6,10 @@ use App\Auth\Passwordless\OneTimeCodes;
 use App\Identification\QaSessionEngine;
 use App\Models\Client;
 use App\Models\ExternalRecord;
+use App\Models\SsoIdentity;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -20,6 +22,17 @@ trait HasAccountLifecycle
     public function externalRecord(): BelongsTo
     {
         return $this->belongsTo(ExternalRecord::class);
+    }
+
+    /**
+     * The directory identities the account's company sign-in is bound to,
+     * one per provider (SsoSubjectBinding).
+     *
+     * @return HasMany<SsoIdentity, $this>
+     */
+    public function ssoIdentities(): HasMany
+    {
+        return $this->hasMany(SsoIdentity::class, 'principal_id')->where('principal_type', $this->principalType()->value);
     }
 
     public function getEmail(): string

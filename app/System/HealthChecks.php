@@ -6,6 +6,7 @@ use App\Audit\AuditArchive;
 use App\Auth\AccountLogin;
 use App\Auth\Mfa\StaffMfa;
 use App\Auth\Oidc\OidcProvider;
+use App\Auth\Oidc\SsoSubjectBinding;
 use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
 use App\Enums\ApiKeyScope;
@@ -48,6 +49,8 @@ class HealthChecks
     private const HEARTBEAT_MAX_AGE_MINUTES = 3;
 
     private const SYNC_QUEUE_MAX_WAIT_MINUTES = 5;
+
+    public const SSO_MISMATCH_WINDOW_DAYS = 7;
 
     public function __construct(
         private readonly Cache $cache,
@@ -115,6 +118,25 @@ class HealthChecks
         return ($without > 0 && ! $trustsProvider) || $locked > 0 || $smsMissing ? Check::warn('mfa', $label, $message) : Check::ok('mfa', $label, $message);
     }
 
+    /**
+     * Accounts refused in the last week because their company sign-in came
+     * from another directory identity than the bound one: each of them
+     * cannot sign in until an administrator checks the account.
+     */
+    public function ssoBindings(): Check
+    {
+        $label = __('Sign-in bindings');
+        $binding = app(SsoSubjectBinding::class);
+        $bound = $binding->boundCount();
+        $refused = $binding->mismatchesSince(now()->subDays(self::SSO_MISMATCH_WINDOW_DAYS));
+
+        if ($refused > 0) {
+            return Check::warn('sso_bindings', $label, __(':bound account(s) bound to a sign-in identity; :refused refused in the last :days days because the sign-in came from another identity.', ['bound' => $bound, 'refused' => $refused, 'days' => self::SSO_MISMATCH_WINDOW_DAYS]));
+        }
+
+        return Check::ok('sso_bindings', $label, __(':bound account(s) bound to a sign-in identity; no refusal from another identity in the last :days days.', ['bound' => $bound, 'days' => self::SSO_MISMATCH_WINDOW_DAYS]));
+    }
+
     public function clientLoginEmd(): Check
     {
         $label = __('Client login and EMD');
@@ -166,6 +188,7 @@ class HealthChecks
             'oidc' => [__('Single sign-on'), $this->oidc(...)],
             'proxy' => [__('Outbound proxy'), $this->outboundProxy(...)],
             'mfa' => [__('Two-factor sign-in'), $this->staffMfa(...)],
+            'sso_bindings' => [__('Sign-in bindings'), $this->ssoBindings(...)],
             'storage' => [__('Storage'), $this->storage(...)],
             'retention' => [__('Data retention'), $this->retention(...)],
             'audit' => [__('Audit log'), $this->auditLog(...)],
@@ -234,7 +257,8 @@ class HealthChecks
             'package_overrides' => __('Informational: these clients carry a temporary manual package. Nothing to fix, but review the list now and then and end an override EMD has caught up with.'),
             'shared_numbers' => __('A number on file for more than one client recognises nobody in the phone menu, so those callers are not asked for their PIN. Open Shared phone numbers, decide whose number it is and remove it from the others; a number EMD lists for several people has to be corrected in the directory.'),
             'proxy' => __('Red: HDID_HTTP_PROXY is not a usable address; write it as http://host:port, with a password as http://user:password@host:port (special characters percent-encoded, @ as %40). Proxies with Windows (NTLM) sign-in are not supported. Internal servers reached without the proxy (master data, ADFS, Exchange, SMS gateway) go into HDID_NO_PROXY, comma-separated. After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM and php artisan queue:restart.'),
-            'oidc' => __('Red: a provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*). Either fill in the configuration or switch the provider off, otherwise the login button leads to an error. The ADFS claims compared with the account e-mail address come from USER_/CLIENT_ADFS_EMAIL_CLAIM; why a sign-in was refused is in the audit log (login.rejected). After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM.'),
+            'sso_bindings' => __('Yellow: a company sign-in arrived under an account\'s e-mail address (or employee id) from a directory identity other than the one the account is bound to, or from an identity already bound to another account; that person cannot sign in until you act. Check the audit log (login.rejected with sso_subject_mismatch or sso_subject_taken) and the account; if the identity change is legitimate (re-created directory account, replaced registration), "Clear sign-in binding" on the account, or php artisan hdid:sso-unbind <e-mail> (in the container: docker compose exec web php artisan hdid:sso-unbind <e-mail>). The binding itself is set by the first company sign-in of each account.'),
+            'oidc' => __('Red: a provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*), or USER_/CLIENT_SSO_MATCH holds a value other than email or employee_id. Either fill in the configuration or switch the provider off, otherwise the login button leads to an error. The ADFS claims compared with the account e-mail address come from USER_/CLIENT_ADFS_EMAIL_CLAIM; why a sign-in was refused is in the audit log (login.rejected). After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM.'),
             'adfs_debug' => __('Yellow: HDID_ADFS_DEBUG is on, so every ADFS sign-in writes its decoded tokens, personal data included, to the application log. Meant for setting up the ADFS claims only; set it to false afterwards and restart the services (docker compose up -d, or php artisan config:cache and PHP-FPM on a classic installation).'),
             'storage' => __('Red: the public disk is not writable, fix the permissions of storage/app/public. Yellow: run "php artisan storage:link" on the server, otherwise uploaded logos and images do not show.'),
             'retention' => __('The daily "hdid:prune" task has not run for days. It runs through the scheduler, so check that tile first; run "php artisan hdid:prune" by hand to catch up.'),

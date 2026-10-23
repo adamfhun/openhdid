@@ -6,12 +6,13 @@ use App\Auth\AccountLogin;
 use App\Auth\LoginRejectedException;
 use App\Auth\LoginRejection;
 use App\Auth\Mfa\StaffMfa;
-use App\Auth\Oidc\EmailClaimMatch;
 use App\Auth\Oidc\OidcClient;
 use App\Auth\Oidc\OidcException;
 use App\Auth\Oidc\OidcProvider;
 use App\Auth\Oidc\OidcUnavailableException;
 use App\Auth\Oidc\SsoAccess;
+use App\Auth\Oidc\SsoAccountResolver;
+use App\Auth\Oidc\SsoClaimMissingException;
 use App\Enums\PrincipalType;
 use App\Http\Controllers\Controller;
 use App\Models\User;
@@ -29,6 +30,7 @@ class SsoController extends Controller
         private readonly OidcClient $oidc,
         private readonly AccountLogin $login,
         private readonly SsoAccess $access,
+        private readonly SsoAccountResolver $resolver,
         private readonly StaffMfa $mfa,
     ) {}
 
@@ -83,23 +85,17 @@ class SsoController extends Controller
             $this->access->assertEnabled($principal, $provider, 'sso.'.$provider->value);
             $config = $provider->configFor($principal);
             $tokens = $this->oidc->exchangeCode($config, $request->query('code'), $this->callbackUrl($principal, $provider), $pending['verifier'], $pending['nonce']);
-            $match = EmailClaimMatch::resolve($tokens, $config);
-            $this->oidc->debug($config, 'e-mail claim', ['email' => $match->email] + $match->auditContext() + $match->diagnosis());
-
-            if ($match->email === null) {
-                $this->login->recordRejection($principal, 'sso.'.$provider->value, LoginRejection::NoEmailClaim, $match->diagnosis());
-
-                return $this->failed($principal, LoginRejection::NoEmailClaim);
-            }
-
-            $account = $this->login->resolveByEmail($principal, $match->email, 'sso.'.$provider->value, $match->auditContext());
-            $this->access->assertEnabled($principal, $provider, 'sso.'.$provider->value, $account);
-            $this->login->loginToSession($account, 'sso.'.$provider->value, allowRemember: true, context: $match->auditContext());
+            ['account' => $account, 'context' => $context] = $this->resolver->resolve($tokens, $config, 'sso.'.$provider->value);
+            $this->login->loginToSession($account, 'sso.'.$provider->value, allowRemember: true, context: $context);
 
             // The provider's own MFA, proven by the verified token (amr), counts as the second factor.
             if ($account instanceof User) {
                 $this->mfa->satisfyByProvider($account, $tokens, $provider);
             }
+        } catch (SsoClaimMissingException $e) {
+            $this->login->recordRejection($principal, 'sso.'.$provider->value, $e->reason, $e->diagnosis);
+
+            return $this->failed($principal, $e->reason);
         } catch (LoginRejectedException $e) {
             return $this->failed($principal, $e->reason);
         } catch (OidcUnavailableException $e) {

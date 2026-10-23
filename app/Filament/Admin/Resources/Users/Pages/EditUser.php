@@ -2,6 +2,7 @@
 
 namespace App\Filament\Admin\Resources\Users\Pages;
 
+use App\Filament\Actions\UnbindSsoAction;
 use App\Filament\Actions\UnlockLoginAction;
 use App\Filament\Admin\Resources\Users\UserResource;
 use App\Filament\Concerns\GuardsUnsavedChanges;
@@ -23,6 +24,7 @@ class EditUser extends EditRecord
     {
         return [
             UnlockLoginAction::make(),
+            UnbindSsoAction::make(),
             DeleteAction::make(),
             ForceDeleteAction::make(),
             RestoreAction::make(),

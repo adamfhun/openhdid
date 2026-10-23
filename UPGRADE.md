@@ -11,7 +11,7 @@ The commands run in the installation folder (`/opt/openhdid` in the examples), a
 ### 1. Előkészítés
 
 ```sh
-v=1.9.0
+v=1.10.0
 cd /opt/openhdid
 base=https://github.com/adamfhun/openhdid/releases/download/v$v
 ```
@@ -112,7 +112,7 @@ Migrációval a frissítés előtti mentés kell; ez a régi verziót is vissza�
 ### 1. Preparation
 
 ```sh
-v=1.9.0
+v=1.10.0
 cd /opt/openhdid
 base=https://github.com/adamfhun/openhdid/releases/download/v$v
 ```

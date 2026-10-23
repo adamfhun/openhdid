@@ -27,6 +27,7 @@ class MobileTokenExchange
         private readonly OidcClient $oidc,
         private readonly AccountLogin $login,
         private readonly SsoAccess $access,
+        private readonly SsoAccountResolver $resolver,
         private readonly Settings $settings,
     ) {}
 
@@ -67,16 +68,16 @@ class MobileTokenExchange
             $this->reject('token_replayed', ['email' => $this->oidc->email($claims, $config)]);
         }
 
-        $match = EmailClaimMatch::resolve(new OidcTokens($claims), $config);
-        if ($match->email === null) {
-            $this->reject('no_email_claim', $match->diagnosis());
+        // The same account rule and identity binding as the browser sign-in;
+        // only a token without a usable claim stays neutral towards the app.
+        try {
+            ['account' => $account, 'context' => $context] = $this->resolver->resolve(new OidcTokens($claims), $config, self::METHOD);
+        } catch (SsoClaimMissingException $e) {
+            $this->reject($e->reason->value, $e->diagnosis);
         }
 
         /** @var Client $account */
-        $account = $this->login->resolveByEmail($principal, $match->email, self::METHOD, $match->auditContext());
-        $this->access->assertEnabled($principal, OidcProvider::Entra, self::METHOD, $account);
-
-        return ['token' => $this->login->issueToken($account, self::METHOD, $deviceName), 'account' => $account];
+        return ['token' => $this->login->issueToken($account, self::METHOD, $deviceName, $context), 'account' => $account];
     }
 
     /**

@@ -4,6 +4,36 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.10.0] – 2026-10-23
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- BEL-00.2 (új): a céges bejelentkezés (Microsoft Entra ID, ADFS) az első belépéstől a szolgáltató állandó azonosítójához köti a fiókot (Entra objektumazonosító a bérlővel, ADFS alany a kliensregisztrációval); az e-mail-cím csak megtalálja a fiókot, az ügyféltörzs szabálya változatlanul fut; a fiók címére más azonosítóval érkező belépés „más címtár-azonosító”, a már másik nyitott fiókhoz kötött azonosító „már kötött” okkal elutasul, a fiók nem zárolódik (lezárt vagy törölt fiók kötése magától átadódik, auditálva); a kötést a rendszergazda törli a munkatárs szerkesztő oldalán vagy az ügyfél adatlapján, a listák sormenüjében (<kbd>Belépési kötés törlése</kbd>) vagy a `hdid:sso-unbind` paranccsal; az ADFS lecserélt regisztrációját a következő belépés magától megújítja; a mobil tokencsere ugyanazt a kötést használja; új „Belépési kötések” kártya a Rendszerállapoton (sárga, ha 7 napon belül más azonosító miatt elutasítás volt); új auditesemények `sso.subject_bound`, `sso.subject_unbound`.
+- BEL-00.3 (új): a fiókot megtaláló igény fióktípusonként választható: e-mail-cím (alapérték) vagy dolgozói azonosító, az ügyféltörzstétel külső azonosítójával összevetve (`USER_/CLIENT_SSO_MATCH`, `USER_/CLIENT_SSO_EMPLOYEE_ID_CLAIM`); ismeretlen érték mellett a szolgáltató „nincs beállítva”.
+- BEL-00: az állandó azonosító nélkül érkező token elutasul (`HDID_SSO_REQUIRE_SUBJECT=true`); `false` kötés nélküli belépést enged, az auditnapló jelzi.
+- Kilépés: az alkalmazás csak a saját munkamenetét, sütijét és tokenjét szünteti meg, a céges szolgáltató munkamenetét nem (megrendelői döntés); a dokumentumok kimondják a következményt.
+- BIZ-00: a kimeneti escape két rétegben tesztelve (a nyers HTML-t kiadó helyek ellenőrzött listája és egy szkript-próbaszöveg minden szabad szöveges mezőben a panel minden oldalán és a portálon).
+
+**Frissítés előtt:** egy migráció (`sso_identities` tábla; a `migrate` szolgáltatás lefuttatja). Három új telepítési kulcs alapértékkel (`USER_/CLIENT_SSO_MATCH`, `USER_/CLIENT_SSO_EMPLOYEE_ID_CLAIM`, `HDID_SSO_REQUIRE_SUBJECT`); felvételük nem kötelező, a korábbi működést adják. Frissítés után minden fiók az első céges belépésekor kötődik az azonosítójához.
+
+Részletek:
+- Új `hdid:sso-unbind` parancs; a `login.succeeded` bejegyzés `sso_subject` mezője (`bound`, `matched`, `missing`); a Rendszerállapot „Belépési szolgáltatók” tanácsa az ismeretlen `SSO_MATCH` értéket is megnevezi.
+- A dokumentumok verziója 1.10.0.
+
+### English
+Rule changes in one sentence (with the specification identifiers):
+- BEL-00.2 (new): company sign-on (Microsoft Entra ID, ADFS) binds the account to the provider's stable identity at the first sign-in (Entra object id with the tenant, ADFS subject with the client registration); the e-mail address only finds the account and the EMD rule runs unchanged; a sign-in under the account's address from another identity is refused as "different directory identity", an identity already bound to another open account as "already bound", without locking the account (a binding held by a closed or deleted account yields automatically, audited); an administrator clears the binding on the staff edit page or the client record, in the row menu of the lists ("Clear sign-in binding") or with `hdid:sso-unbind`; a replaced ADFS registration is renewed by the next sign-in; the mobile token exchange uses the same binding; new "Sign-in bindings" tile on the status page (yellow when a refusal from another identity happened within 7 days); new audit events `sso.subject_bound`, `sso.subject_unbound`.
+- BEL-00.3 (new): the claim that finds the account is chosen per account kind: the e-mail address (default) or the employee id compared with the EMD record's external id (`USER_/CLIENT_SSO_MATCH`, `USER_/CLIENT_SSO_EMPLOYEE_ID_CLAIM`); an unknown value leaves the provider "not configured".
+- BEL-00: a token without the stable identity is refused (`HDID_SSO_REQUIRE_SUBJECT=true`); `false` allows an unbound sign-in, which the audit log marks.
+- Sign-out: the application ends only its own session, cookie and token, never the company provider's session (owner decision); the documents state the consequence.
+- BIZ-00: output escaping is tested in two layers (a reviewed allowlist of every raw-HTML output site, and a script canary in every free-text field on every panel page and on the portal).
+
+**Before upgrading:** one migration (`sso_identities` table; the `migrate` service runs it). Three new deployment keys with defaults (`USER_/CLIENT_SSO_MATCH`, `USER_/CLIENT_SSO_EMPLOYEE_ID_CLAIM`, `HDID_SSO_REQUIRE_SUBJECT`); adding them is optional, the defaults keep the previous behaviour. After the upgrade every account is bound to its identity at its first company sign-in.
+
+Details:
+- New `hdid:sso-unbind` command; the `sso_subject` field of the `login.succeeded` entry (`bound`, `matched`, `missing`); the advice of the "Login providers" status tile also names an unknown `SSO_MATCH` value.
+- The documents carry version 1.10.0.
+
 ## [1.9.0] – 2026-10-22
 
 ### Magyar

@@ -48,6 +48,8 @@ enum OidcProvider: string
     {
         /** @var array<string, mixed> $cfg */
         $cfg = config("hdid.oidc.{$principal->value}.{$this->value}", []);
+        /** @var array<string, mixed> $principalCfg */
+        $principalCfg = config("hdid.oidc.{$principal->value}", []);
 
         // Entra is always addressed by the dedicated tenant's directory id (GUID,
         // the token's tid claim); without one the provider is not configured at all.
@@ -70,6 +72,9 @@ enum OidcProvider: string
             emailClaims: OidcProviderConfig::listOf((string) ($cfg['email_claims'] ?? '')) ?: OidcProviderConfig::ADFS_DEFAULT_EMAIL_CLAIMS,
             resource: $this === self::Adfs && trim((string) ($cfg['resource'] ?? '')) !== '' ? trim((string) $cfg['resource']) : null,
             debug: $this === self::Adfs && ($cfg['debug'] ?? false) === true,
+            matchMode: SsoMatchMode::fromConfig($principalCfg['match'] ?? null),
+            employeeIdClaim: trim((string) ($principalCfg['employee_id_claim'] ?? '')) ?: OidcProviderConfig::DEFAULT_EMPLOYEE_ID_CLAIM,
+            requireSubject: (bool) config('hdid.oidc.require_subject', true),
         );
     }
 }

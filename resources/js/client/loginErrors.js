@@ -15,5 +15,9 @@ export const loginErrorMessages = {
     invalid_credentials: 'The login link or code is not valid or has expired.',
     provider_unavailable: 'The sign-in service is not available right now. Please try again later.',
     no_email_claim: 'The sign-in service did not send a usable e-mail address, so the account cannot be identified. Please report this to the operator of the system.',
+    no_employee_id_claim: 'The sign-in service did not send a usable employee id, so the account cannot be identified. Please report this to the operator of the system.',
+    no_subject_claim: 'The sign-in service did not send a stable user identifier, so the sign-in cannot be bound to the account. Please report this to the operator of the system.',
+    sso_subject_mismatch: 'This sign-in comes from a different directory identity than the one bound to the account. Ask an administrator to check the account and clear its sign-in binding.',
+    sso_subject_taken: 'This directory identity is already bound to another account. Ask an administrator to check the accounts.',
     session_expired: 'Your session has expired. Please sign in again.',
 };

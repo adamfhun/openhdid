@@ -7,6 +7,7 @@ use App\Auth\Contracts\Principal;
 use App\Clients\ClientTiers;
 use App\Enums\PrincipalType;
 use App\Models\Client;
+use App\Models\ExternalRecord;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
@@ -61,6 +62,40 @@ class AccountLogin
         $principal = $type->modelClass()::query()->where('email', $email)->first();
 
         return $principal !== null && mb_strtolower(trim($principal->getEmail())) === $email ? $principal : null;
+    }
+
+    /**
+     * The account whose EMD record carries this external id (employee-id
+     * mode of the company sign-in): the record found by its id, then the
+     * account of the asked kind linked to it. Locally created records (ids
+     * from ExternalRecord::LOCAL_ID_BASE up) never come from the directory,
+     * so they cannot be found this way.
+     *
+     * @param  array<string, mixed>  $context  what a refusal's audit entry records besides the id
+     *
+     * @throws LoginRejectedException
+     */
+    public function resolveByExternalId(PrincipalType $type, int $externalId, string $method, array $context = []): Principal
+    {
+        return $this->assertEligible($this->findByExternalId($type, $externalId), $type, $method, ['external_id' => $externalId] + $context);
+    }
+
+    public function findByExternalId(PrincipalType $type, int $externalId): ?Principal
+    {
+        if ($externalId <= 0 || $externalId >= ExternalRecord::LOCAL_ID_BASE) {
+            return null;
+        }
+
+        $record = ExternalRecord::query()->where('external_id', $externalId)->first();
+
+        if ($record === null) {
+            return null;
+        }
+
+        /** @var Principal|null $principal */
+        $principal = $type->modelClass()::query()->where('external_record_id', $record->getKey())->first();
+
+        return $principal;
     }
 
     /**
@@ -155,12 +190,14 @@ class AccountLogin
     /**
      * A personal access token scoped to the principal's own surface; it
      * expires after the configured Sanctum lifetime (30 days by default).
+     *
+     * @param  array<string, mixed>  $context  extra facts for the login.succeeded audit entry
      */
-    public function issueToken(Principal $principal, string $method, string $deviceName): string
+    public function issueToken(Principal $principal, string $method, string $deviceName, array $context = []): string
     {
         $abilities = $principal instanceof Client ? [self::ABILITY_CLIENT_PORTAL] : [self::ABILITY_STAFF];
         $token = $principal->createToken($deviceName, $abilities)->plainTextToken;
-        $this->recordSuccess($principal, $method, ['device' => $deviceName]);
+        $this->recordSuccess($principal, $method, $context + ['device' => $deviceName]);
 
         return $token;
     }

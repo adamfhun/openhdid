@@ -9,6 +9,7 @@ use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
 use App\Enums\MfaMethod;
 use App\Enums\PrincipalType;
+use App\Filament\Actions\UnbindSsoAction;
 use App\Filament\Admin\Clusters\Accounts;
 use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\Users\Pages\CreateUser;
@@ -111,6 +112,14 @@ class UserResource extends BaseResource
                     TextEntry::make('directory_room')->label(__('Room'))->state(fn (?User $record) => $record?->externalRecord?->room)->visible(fn (?User $record) => filled($record?->externalRecord?->room)),
                     TextEntry::make('directory_employment_status')->label(__('Employment status'))->state(fn (?User $record) => $record?->externalRecord?->employment_status)->visible(fn (?User $record) => filled($record?->externalRecord?->employment_status)),
                 ]),
+            Section::make(__('Company sign-in binding'))
+                ->description(__('The directory identity (Entra object id, ADFS subject) the account\'s company sign-in is bound to. The first eligible sign-in binds it; afterwards a sign-in under the same e-mail address from another identity is refused. "Clear sign-in binding" in the header lets the next sign-in bind anew.'))
+                ->visible(fn (?User $record) => $record !== null)
+                ->schema([
+                    TextEntry::make('sso_bindings')->hiddenLabel()->listWithLineBreaks()
+                        ->state(fn (?User $record) => $record === null ? [] : UnbindSsoAction::lines($record))
+                        ->placeholder(__('Not bound yet: the first company sign-in binds the account.')),
+                ]),
         ]);
     }
 
@@ -141,7 +150,7 @@ class UserResource extends BaseResource
     public static function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn (Builder $query) => $query->with(['roles', 'externalRecord']))
+            ->modifyQueryUsing(fn (Builder $query) => $query->with(['roles', 'externalRecord', 'ssoIdentities']))
             // One search over everything the list shows; the words are split below.
             ->splitSearchTerms(false)
             ->columns([
@@ -162,6 +171,9 @@ class UserResource extends BaseResource
                         app(StaffMfa::class)->enrolledMethods($record) !== [] => 'success',
                         default => app(StaffMfa::class)->isEnabled() ? 'warning' : 'gray',
                     }),
+                TextColumn::make('sso_binding')->label(__('Sign-in binding'))->badge()->toggleable(isToggledHiddenByDefault: true)
+                    ->state(fn (User $record): string => UnbindSsoAction::summary($record))
+                    ->color(fn (User $record): string => $record->ssoIdentities->isNotEmpty() ? 'success' : 'gray'),
                 TextColumn::make('closed_at')->label(__('Closed'))->since()->placeholder(__('open'))->badge()->color('danger'),
                 TextColumn::make('last_login_at')->label(__('Last login'))->since()->placeholder('-'),
             ])
@@ -197,6 +209,7 @@ class UserResource extends BaseResource
                             app(StaffMfa::class)->reset($record, auth()->user());
                             Notification::make()->title(__('Second factor reset'))->success()->send();
                         }),
+                    UnbindSsoAction::make(),
                     DeleteAction::make(),
                     RestoreAction::make(),
                 ])->icon('heroicon-m-ellipsis-vertical')->color('gray')->tooltip(__('More')),

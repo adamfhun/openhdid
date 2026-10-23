@@ -11,6 +11,7 @@ use App\Clients\PackageOverrides;
 use App\Enums\ClientTier;
 use App\Filament\Actions\SendMagicLinkAction;
 use App\Filament\Actions\SetPinAction;
+use App\Filament\Actions\UnbindSsoAction;
 use App\Filament\Admin\NavigationGroup;
 use App\Filament\Admin\Pages\Identify;
 use App\Filament\Admin\Resources\BaseResource;
@@ -554,6 +555,10 @@ class ClientResource extends BaseResource
                     ->helperText(__('Also on file for another client: the phone menu cannot recognise the caller from these numbers, so no PIN is asked there. See the Shared phone numbers page.')),
                 TextEntry::make('pin_locked_until')->label(__('PIN locked until'))->dateTime()->placeholder('-'),
                 TextEntry::make('last_login_at')->label(__('Last login'))->since()->placeholder('-'),
+                TextEntry::make('sso_bindings')->label(__('Sign-in binding'))->listWithLineBreaks()
+                    ->state(fn (Client $record) => UnbindSsoAction::lines($record))
+                    ->placeholder(__('Not bound yet: the first company sign-in binds the account.'))
+                    ->helperText(__('The directory identity the account\'s company sign-in is bound to; a sign-in under the same e-mail address from another identity is refused until an administrator clears the binding.')),
                 TextEntry::make('sponsor')->label(__('Linked to'))->placeholder(__('not linked'))
                     ->state(fn (Client $record) => $record->sponsor()?->name)
                     ->url(fn (Client $record) => ($s = $record->sponsor()) ? static::getUrl('view', ['record' => $s]) : null)
@@ -577,7 +582,7 @@ class ClientResource extends BaseResource
         $answers = app(ClientAnswers::class);
 
         return $table
-            ->modifyQueryUsing(fn (Builder $query) => $query->with(['externalRecord', 'phoneNumbers', 'activeSponsorLink.sponsor', 'linkWarningMutedBy'])->withCount('answers'))
+            ->modifyQueryUsing(fn (Builder $query) => $query->with(['externalRecord', 'phoneNumbers', 'ssoIdentities', 'activeSponsorLink.sponsor', 'linkWarningMutedBy'])->withCount('answers'))
             // Phone numbers must reach the search whole ("06 30 123 4567"); names split into words below.
             ->splitSearchTerms(false)
             ->columns([
@@ -667,6 +672,7 @@ class ClientResource extends BaseResource
                         ->modalDescription(__('The client can no longer identify with the PIN until a new one is set; the clearing is recorded in the audit log.'))
                         ->visible(fn (Client $record) => $record->hasPin() && static::canEdit($record))
                         ->action(fn (Client $record) => app(PinService::class)->clearPin($record)),
+                    UnbindSsoAction::make(),
                     Action::make('close')->label(__('Close account'))->icon('heroicon-o-lock-closed')->color('danger')->requiresConfirmation()
                         ->modalHeading(fn (Client $record) => __('Close the account of :name?', ['name' => $record->name]))
                         ->modalDescription(fn (Client $record) => static::closeWarning($record))
