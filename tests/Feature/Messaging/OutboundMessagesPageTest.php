@@ -9,6 +9,7 @@ use App\Filament\Admin\Widgets\OutboundMessagesWidget;
 use App\Jobs\SendOutboundMessage;
 use App\Messaging\MessageKey;
 use App\Messaging\Messenger;
+use App\Messaging\SmsDeliveryChecks;
 use App\Models\AuditLog;
 use App\Models\OutboundMessage;
 use App\Models\User;
@@ -40,6 +41,27 @@ it('lists messages and lets an admin retry a failed one and cancel a queued one'
         ->and($queued->fresh()->status)->toBe(OutboundMessageStatus::Cancelled);
 });
 
+it('finds messages by a fragment of the queued or sent timestamp as it is shown', function (): void {
+    $october = OutboundMessage::factory()->sms()->sent()->create(['created_at' => '2026-10-23 09:54:00', 'sent_at' => '2026-10-23 09:55:10']);
+    $september = OutboundMessage::factory()->sms()->create(['created_at' => '2026-09-13 14:05:00']);
+
+    foreach (['2026. 10. 23.', '10. 23. 09:5', '09:55', '2026-10-23', '23. 09:54'] as $fragment) {
+        Livewire::test(ManageOutboundMessages::class)
+            ->searchTable($fragment)
+            ->assertCanSeeTableRecords([$october])
+            ->assertCanNotSeeTableRecords([$september]);
+    }
+
+    Livewire::test(OutboundMessagesWidget::class)
+        ->searchTable('09. 13.')
+        ->assertCanSeeTableRecords([$september])
+        ->assertCanNotSeeTableRecords([$october]);
+
+    Livewire::test(ManageOutboundMessages::class)
+        ->searchTable($october->recipient)
+        ->assertCanSeeTableRecords([$october]);
+});
+
 it('wipes the secret body and meta when a queued message is cancelled from the panel', function (): void {
     expect(MessageKey::PinSms->carriesSecret())->toBeTrue();
 
@@ -58,7 +80,7 @@ it('wipes the secret body and meta when a queued message is cancelled from the p
         ->and($cancelled->meta)->toBeNull()
         ->and($cancelled->redacted_at)->not->toBeNull();
 
-    (new SendOutboundMessage($queued->id))->handle(app('mailer'), $this->sms, app(Auditor::class), app(ClientTiers::class));
+    (new SendOutboundMessage($queued->id))->handle(app('mailer'), $this->sms, app(Auditor::class), app(ClientTiers::class), app(SmsDeliveryChecks::class));
 
     expect($queued->fresh()->status)->toBe(OutboundMessageStatus::Cancelled)
         ->and($this->sms->sent)->toBe([]);

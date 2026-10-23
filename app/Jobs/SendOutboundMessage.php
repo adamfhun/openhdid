@@ -9,6 +9,7 @@ use App\Mail\MagicLinkMail;
 use App\Mail\TemplatedMail;
 use App\Messaging\Channel;
 use App\Messaging\MessageKey;
+use App\Messaging\SmsDeliveryChecks;
 use App\Models\OutboundMessage;
 use App\Sms\SmsSender;
 use Illuminate\Contracts\Mail\Mailer;
@@ -52,7 +53,7 @@ class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
         return $this->messageId;
     }
 
-    public function handle(Mailer $mailer, SmsSender $sms, Auditor $auditor, ClientTiers $tiers): void
+    public function handle(Mailer $mailer, SmsSender $sms, Auditor $auditor, ClientTiers $tiers, SmsDeliveryChecks $deliveryChecks): void
     {
         Cache::put(self::HEARTBEAT_KEY, now()->toIso8601String(), now()->addHours(6));
 
@@ -74,7 +75,7 @@ class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
         }
 
         try {
-            $this->deliver($message, $mailer, $sms);
+            $gatewayMessageId = $this->deliver($message, $mailer, $sms);
         } catch (Throwable $e) {
             $exhausted = $message->attempts >= OutboundMessage::MAX_ATTEMPTS;
 
@@ -100,6 +101,11 @@ class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
         $message->forceFill(['status' => OutboundMessageStatus::Sent, 'sent_at' => now(), 'error' => null])->save();
         $message->redactSecret();
         $auditor->record('message.sent', $message->client, self::auditContext($message));
+
+        // An SMS the gateway gave an id to is followed up for its delivery report.
+        if ($gatewayMessageId !== null) {
+            $deliveryChecks->schedule($message, $gatewayMessageId);
+        }
     }
 
     /**
@@ -138,12 +144,14 @@ class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
         });
     }
 
-    private function deliver(OutboundMessage $message, Mailer $mailer, SmsSender $sms): void
+    /**
+     * Hands the message to its transport; the gateway's message id for an
+     * SMS, null for e-mail or a driver without ids.
+     */
+    private function deliver(OutboundMessage $message, Mailer $mailer, SmsSender $sms): ?string
     {
         if ($message->channel === Channel::Sms) {
-            $sms->send($message->recipient, $message->body);
-
-            return;
+            return $sms->send($message->recipient, $message->body);
         }
 
         $mailable = $message->template_key === MessageKey::MagicLink && $message->client !== null
@@ -151,5 +159,7 @@ class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
             : new TemplatedMail((string) $message->subject, $message->body);
 
         $mailer->to($message->recipient)->send($mailable);
+
+        return null;
     }
 }

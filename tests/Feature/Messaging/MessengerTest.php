@@ -17,6 +17,7 @@ use App\Settings\Settings;
 use App\Sms\FakeSmsSender;
 use App\Sms\LogSmsSender;
 use App\Sms\OzekiSmsSender;
+use App\Sms\SmsDeliveryReport;
 use App\Sms\SmsException;
 use App\Sms\SmsSender;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -57,9 +58,14 @@ it('sends the magic link as the MagicLinkMail rendered from the template', funct
 it('records a failure, retries and gives up after the maximum attempts', function (): void {
     app()->instance(SmsSender::class, new class implements SmsSender
     {
-        public function send(string $to, string $message): void
+        public function send(string $to, string $message): ?string
         {
             throw new SmsException('gateway down');
+        }
+
+        public function deliveryStatus(string $messageId): ?SmsDeliveryReport
+        {
+            return null;
         }
     });
     $client = Client::factory()->create();
@@ -87,9 +93,14 @@ it('records a failure, retries and gives up after the maximum attempts', functio
 it('retries a failed message that still has its body, but only from the failed state', function (): void {
     app()->instance(SmsSender::class, new class implements SmsSender
     {
-        public function send(string $to, string $message): void
+        public function send(string $to, string $message): ?string
         {
             throw new SmsException('gateway down');
+        }
+
+        public function deliveryStatus(string $messageId): ?SmsDeliveryReport
+        {
+            return null;
         }
     });
     $message = app(Messenger::class)->sendRaw(Channel::Sms, '+36301234567', null, 'plain test text');
@@ -167,9 +178,14 @@ it('wipes the secret body once a message is sent or given up on, but keeps the s
 
     app()->instance(SmsSender::class, new class implements SmsSender
     {
-        public function send(string $to, string $message): void
+        public function send(string $to, string $message): ?string
         {
             throw new SmsException('down');
+        }
+
+        public function deliveryStatus(string $messageId): ?SmsDeliveryReport
+        {
+            return null;
         }
     });
     $failed = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '999999'], '+36301234567');
@@ -224,9 +240,14 @@ it('audits the outcome of every message on the client: sent, or failed once the 
 
     app()->instance(SmsSender::class, new class implements SmsSender
     {
-        public function send(string $to, string $message): void
+        public function send(string $to, string $message): ?string
         {
             throw new SmsException('gateway down');
+        }
+
+        public function deliveryStatus(string $messageId): ?SmsDeliveryReport
+        {
+            return null;
         }
     });
     $failed = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '123456'], '+36301234567');

@@ -139,12 +139,18 @@ return [
 
     'sms' => [
         'driver' => env('SMS_DRIVER', 'log'), // ozeki | log
+        // Seconds after sending at which the gateway is asked for the delivery report, comma-separated, at most five.
+        'delivery_checks' => env('SMS_DELIVERY_CHECKS'),
     ],
 
     'ozeki' => [
         'url' => env('OZEKI_URL', 'http://127.0.0.1:9501/api'),
         'username' => env('OZEKI_USERNAME'),
         'password' => env('OZEKI_PASSWORD'),
+        // The HTTP API action that returns a message's status by its id, and the status words meaning delivered / undeliverable.
+        'status_action' => env('OZEKI_STATUS_ACTION'),
+        'delivered_statuses' => env('OZEKI_DELIVERED_STATUSES'),
+        'undelivered_statuses' => env('OZEKI_UNDELIVERED_STATUSES'),
     ],
 
     'oidc' => [

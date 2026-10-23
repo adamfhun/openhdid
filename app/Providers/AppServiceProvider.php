@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Auth\AuthSessions;
 use App\Auth\Mfa\StaffMfa;
+use App\Auth\Oidc\OidcProviderConfig;
 use App\Auth\Permission;
 use App\Enums\ApiKeyScope;
 use App\Http\Controllers\HealthController;
@@ -60,6 +61,9 @@ class AppServiceProvider extends ServiceProvider
                 (string) config('hdid.ozeki.url'),
                 (string) config('hdid.ozeki.username'),
                 (string) config('hdid.ozeki.password'),
+                trim((string) config('hdid.ozeki.status_action', '')) ?: OzekiSmsSender::DEFAULT_STATUS_ACTION,
+                OidcProviderConfig::listOf(mb_strtolower((string) config('hdid.ozeki.delivered_statuses', ''))) ?: OzekiSmsSender::DEFAULT_DELIVERED_STATUSES,
+                OidcProviderConfig::listOf(mb_strtolower((string) config('hdid.ozeki.undelivered_statuses', ''))) ?: OzekiSmsSender::DEFAULT_UNDELIVERED_STATUSES,
             ),
             default => new LogSmsSender,
         });

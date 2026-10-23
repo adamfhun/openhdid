@@ -4,6 +4,28 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.11.0] – 2026-10-23
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- KOM-02.2 (új): az SMS kézbesítési jelentését a rendszer az Ozeki átjárótól kérdezi le az átjáró üzenetazonosítójával, a küldés után beállítható időpontokban (`SMS_DELIVERY_CHECKS`, alapból 30 mp, 2, 5, 30 és 120 perc, legfeljebb öt lekérdezés); az üzenet „kézbesítve” vagy „nem kézbesíthető” lesz (mindkettő auditált: `message.delivered`, `message.undeliverable`), jelentés nélkül „elküldve · nincs jelentés”; a nem kézbesíthető SMS-t a rendszer nem küldi újra magától, a munkatárs kézzel küldheti újra; a lekérdező művelet és az állapotszavak az átjáróhoz igazíthatók (`OZEKI_STATUS_ACTION`, `OZEKI_DELIVERED_STATUSES`, `OZEKI_UNDELIVERED_STATUSES`); az üzenet adatlapja mutatja a jelentést, a Rendszerállapot kimenő üzenetek kártyája sárga nem kézbesíthető SMS vagy nem futott lekérdezés mellett; új percenkénti ütemezett feladat (`hdid:sms-delivery-checks`).
+- ÜZ-08: a Kimenő üzenetek lista (a Tartalom alatt és az Üzenetsorok oldalon) keresője a sorba állítás és a küldés időbélyegének részletére is keres, a megjelenített magyar alakban (például „10. 23.”, „23. 09:5”, „09:54”); eddig csak a címzettre keresett.
+
+**Frissítés előtt:** egy migráció (az `outbound_messages` kézbesítési oszlopai; a `migrate` szolgáltatás lefuttatja). Négy új, választható telepítési kulcs alapértékkel (`SMS_DELIVERY_CHECKS`, `OZEKI_STATUS_ACTION`, `OZEKI_DELIVERED_STATUSES`, `OZEKI_UNDELIVERED_STATUSES`); a lekérdező műveletet és az állapotszavakat a saját Ozeki-átjárón érdemes ellenőrizni (telepítési útmutató, 11. fejezet).
+
+Részletek:
+- A dokumentumok verziója 1.11.0.
+
+### English
+Rule changes in one sentence (with the specification identifiers):
+- KOM-02.2 (new): the delivery report of an SMS is queried from the Ozeki gateway with the gateway's message id at configurable offsets after sending (`SMS_DELIVERY_CHECKS`, by default 30 s, 2, 5, 30 and 120 minutes, at most five queries); the message becomes "delivered" or "undeliverable" (both audited: `message.delivered`, `message.undeliverable`), or stays "sent · no report"; an undeliverable SMS is never resent on its own, an operator may resend it by hand; the query action and the status words can be adapted to the gateway (`OZEKI_STATUS_ACTION`, `OZEKI_DELIVERED_STATUSES`, `OZEKI_UNDELIVERED_STATUSES`); the message's details show the report, the Outbound messages status tile turns yellow on an undeliverable SMS or a query that did not run; new minutely scheduled task (`hdid:sms-delivery-checks`).
+- ÜZ-08: the search box of the Outbound messages list (under Content and on the Queues page) also matches a fragment of the queued and sent timestamps as they are shown (for example "10. 23.", "23. 09:5", "09:54"); until now it searched the recipient only.
+
+**Before upgrading:** one migration (delivery columns of `outbound_messages`; the `migrate` service runs it). Four new optional deployment keys with defaults (`SMS_DELIVERY_CHECKS`, `OZEKI_STATUS_ACTION`, `OZEKI_DELIVERED_STATUSES`, `OZEKI_UNDELIVERED_STATUSES`); verify the query action and the status words on your own Ozeki gateway (install guide, chapter 11).
+
+Details:
+- The documents carry version 1.11.0.
+
 ## [1.10.0] – 2026-10-23
 
 ### Magyar

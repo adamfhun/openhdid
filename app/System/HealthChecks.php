@@ -15,6 +15,7 @@ use App\Enums\OutboundMessageStatus;
 use App\Enums\PrincipalType;
 use App\Enums\SyncRunStatus;
 use App\Mail\Transport\EwsTransport;
+use App\Messaging\SmsDeliveryChecks;
 use App\Models\ApiKey;
 use App\Models\AuditLog;
 use App\Models\Client;
@@ -249,9 +250,9 @@ class HealthChecks
             'queue' => __('E-mails, SMS and EMD sync run in the queue. Red: no worker heartbeat on the default queue, start or restart the queue worker (the "php artisan queue:work" service or the worker container). Yellow: the EMD sync queue (EMD_SYNC_QUEUE) has no worker of its own, or there are failed or piling jobs. Open the Queues page: it lists every queue with its worker, lets you run failed jobs again or delete them, and clears a queue, once the cause (mail, SMS, database) is fixed. The console equivalents are "php artisan queue:failed" and "queue:retry all".'),
             'scheduler' => __('The scheduler does not run: the cron entry "* * * * * php artisan schedule:run" or the scheduler container is missing or stopped. It drives the EMD sync, the stale-call cleanup, the override expiry and the data retention. Add or repair it on the app server.'),
             'php' => __('EMD sync and large file imports need a PHP max_execution_time of at least 120 seconds (300 recommended) in both PHP-FPM (the panel, this page) and the CLI (the worker, hdid:emd-sync); 0 means unlimited and is fine. Set it in php.ini or the FPM pool (php_admin_value[max_execution_time]) with request_terminate_timeout above it, then restart PHP-FPM. Below 120 s a sync refuses to start. This tile shows the limit of the process that ran the check: the panel shows PHP-FPM, "php artisan hdid:health" shows the CLI.'),
-            'messages' => __('Failed messages of the last 24 hours. Open Outbound messages or the Queues page, look at the error of a failed row and fix the transport (E-mail or SMS tile), then resend from the list (one, the selected ones or every failed one). Queued ones that never leave point to the queue worker; "Send queued now" sends them from the browser without a worker.'),
+            'messages' => __('Failed messages of the last 24 hours. Open Outbound messages or the Queues page, look at the error of a failed row and fix the transport (E-mail or SMS tile), then resend from the list (one, the selected ones or every failed one). Queued ones that never leave point to the queue worker; "Send queued now" sends them from the browser without a worker. An SMS the network reported undeliverable (wrong or switched-off number) is not resent on its own: check the number on the client record and resend by hand if it was right. Overdue delivery queries mean the scheduler has not run the minutely SMS delivery checks.'),
             'mail' => __('Red: the EWS URL or credentials are missing in the environment (MAIL_MAILER, EWS_*), or EWS_AUTH=ntlm is set where the libcurl has no NTLM (the OpenHDID image has it from 1.8.0; elsewhere use basic, oauth or SMTP). Yellow: a log/array mailer is set, so no e-mail leaves the server, fine for testing, not for production. Test with a magic link to your own client account.'),
-            'sms' => __('Red with Ozeki: the gateway is unreachable or the credentials are wrong (OZEKI_*), check the Ozeki service and the network path. Red/yellow with the log driver: SMS are only written to the log, set SMS_DRIVER=ozeki for production.'),
+            'sms' => __('Red with Ozeki: the gateway is unreachable or the credentials are wrong (OZEKI_*), check the Ozeki service and the network path. Red/yellow with the log driver: SMS are only written to the log, set SMS_DRIVER=ozeki for production. Delivery reports are asked for with the gateway\'s message id at the offsets in SMS_DELIVERY_CHECKS (OZEKI_STATUS_ACTION names the query action, OZEKI_DELIVERED_STATUSES and OZEKI_UNDELIVERED_STATUSES the status words); if every SMS stays "report pending" and ends "no report", the query action or the status words do not match your gateway: look at the raw gateway status on a message\'s details.'),
             'sync' => __('Red: the last run failed or no successful run happened in twice the expected interval. Open EMD sync runs for the error; check the API URL/key or upload the file manually. A refused run usually means the export was much smaller than before (row-ratio guard). Yellow with a waiting run: the sync started from the panel was not picked up, start a worker for the EMD_SYNC_QUEUE queue. With {{ ids }} in the export payload, a failed ID list query (EMD_SYNC_ID_LIST_URL, ID list settings) or no selected ID on the list also fails the run; the run details show the status codes. Yellow with accounts closing at the next sync: their records were absent from the last run(s); open EMD records, tab "Closes at the next sync", and check the export (or the ID list selection) before the next run closes them. Yellow with e-mail conflicts: the directory renamed an account e-mail to an address another account holds; the account kept its old address and cannot sign in until the duplicate is resolved in EMD or the other account is deleted. A changed classification (staff/client) closes the old account only after the same number of runs as a missing record; the run details list the pending ones.'),
             'api_keys' => __('Red: a mobile app backend key has no signing secret, so every request with it is refused (signing is mandatory for this scope). Issue one under API keys › Signing secret and hand it to the operator of the mobile backend, or revoke the key if it is not used. Yellow: a scope (call center or mobile backend) has no active key, so that partner cannot call in; create one under API keys and hand it over, or ignore this while the integration is not live yet.'),
             'package_overrides' => __('Informational: these clients carry a temporary manual package. Nothing to fix, but review the list now and then and end an override EMD has caught up with.'),
@@ -403,10 +404,20 @@ class HealthChecks
         $since = now()->subDay();
         $queued = OutboundMessage::query()->where('status', OutboundMessageStatus::Queued)->count();
         $failed = OutboundMessage::query()->where('status', OutboundMessageStatus::Failed)->where('created_at', '>=', $since)->count();
-        $sent = OutboundMessage::query()->where('status', OutboundMessageStatus::Sent)->where('created_at', '>=', $since)->count();
-        $detail = __(':s sent, :f failed in 24 h · :q queued', ['s' => $sent, 'f' => $failed, 'q' => $queued]);
+        $sent = OutboundMessage::query()->whereIn('status', [OutboundMessageStatus::Sent, OutboundMessageStatus::Delivered, OutboundMessageStatus::Undeliverable])->where('created_at', '>=', $since)->count();
+        $undeliverable = OutboundMessage::query()->where('status', OutboundMessageStatus::Undeliverable)->where('created_at', '>=', $since)->count();
+        $awaiting = SmsDeliveryChecks::due()->count();
+        $detail = __(':s sent, :f failed, :u SMS undeliverable in 24 h · :q queued', ['s' => $sent, 'f' => $failed, 'u' => $undeliverable, 'q' => $queued]);
 
-        return $failed > 0 ? Check::warn('messages', $label, $detail) : Check::ok('messages', $label, $detail);
+        if ($awaiting > 0) {
+            $detail .= ' · '.__(':n SMS delivery queries overdue (is the scheduler running?)', ['n' => $awaiting]);
+        }
+
+        if (($problem = SmsDeliveryChecks::configProblem()) !== null) {
+            $detail .= ' · '.$problem;
+        }
+
+        return $failed > 0 || $undeliverable > 0 || $problem !== null ? Check::warn('messages', $label, $detail) : Check::ok('messages', $label, $detail);
     }
 
     public function mail(): Check

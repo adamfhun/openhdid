@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Resources\OutboundMessages;
 use App\Auth\Permission;
 use App\Clients\ClientTiers;
 use App\Enums\OutboundMessageStatus;
+use App\Enums\SmsDeliveryStatus;
 use App\Filament\Admin\Clusters\Content;
 use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\OutboundMessages\Pages\ManageOutboundMessages;
@@ -12,7 +13,9 @@ use App\Messaging\Channel;
 use App\Messaging\MessageKey;
 use App\Messaging\MessageNotRetryableException;
 use App\Messaging\Messenger;
+use App\Messaging\SmsDeliveryChecks;
 use App\Models\OutboundMessage;
+use App\Support\HuDate;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\BulkAction;
@@ -72,6 +75,10 @@ class OutboundMessageResource extends BaseResource
                 TextEntry::make('created_at')->label(__('Queued'))->dateTime(),
                 TextEntry::make('last_attempt_at')->label(__('Last attempt'))->dateTime()->placeholder('-'),
                 TextEntry::make('sent_at')->label(__('Sent'))->dateTime()->placeholder('-'),
+                TextEntry::make('delivery_status')->label(__('Delivery report'))->badge()
+                    ->visible(fn (OutboundMessage $record): bool => $record->delivery_status !== null)
+                    ->formatStateUsing(fn (SmsDeliveryStatus $state): string => $state->label())->color(fn (SmsDeliveryStatus $state): string => $state->color())
+                    ->helperText(fn (OutboundMessage $record): ?string => static::deliveryNote($record)),
                 TextEntry::make('error')->label(__('Error'))->color('danger')->placeholder('-')->columnSpanFull()
                     ->state(fn (OutboundMessage $record): ?string => static::visibleText($record, $record->error)),
                 TextEntry::make('subject')->label(__('Subject'))->placeholder('-')->columnSpanFull()
@@ -107,12 +114,42 @@ class OutboundMessageResource extends BaseResource
         return app(ClientTiers::class)->servedText($record->client, $text);
     }
 
+    /**
+     * What the gateway's delivery report said and when the next query is
+     * due; null for e-mail and for SMS sent before reports were followed.
+     */
+    public static function deliveryNote(OutboundMessage $record): ?string
+    {
+        $status = $record->delivery_status;
+
+        if (! $status instanceof SmsDeliveryStatus) {
+            return null;
+        }
+
+        $parts = [$status->label()];
+
+        if ($record->delivery_status_raw !== null) {
+            $parts[] = __('gateway status: :s', ['s' => $record->delivery_status_raw]);
+        }
+
+        $parts[] = __(':n of :max queries', ['n' => $record->delivery_checks, 'max' => count(SmsDeliveryChecks::offsets())]);
+
+        if ($status === SmsDeliveryStatus::Pending && $record->next_delivery_check_at !== null) {
+            $parts[] = __('next :at', ['at' => $record->next_delivery_check_at->format(HuDate::DATETIME)]);
+        } elseif ($record->delivery_updated_at !== null) {
+            $parts[] = $record->delivery_updated_at->format(HuDate::DATETIME);
+        }
+
+        return implode(' · ', $parts);
+    }
+
     public static function table(Table $table): Table
     {
         return $table
             ->modifyQueryUsing(fn (Builder $query) => $query->with('client'))
             ->columns([
-                TextColumn::make('created_at')->label(__('Queued'))->dateTime()->sortable(),
+                TextColumn::make('created_at')->label(__('Queued'))->dateTime()->sortable()
+                    ->searchable(query: fn (Builder $query, string $search): Builder => $query->where('created_at', 'like', '%'.HuDate::searchFragment($search).'%')),
                 TextColumn::make('channel')->label(__('Channel'))->badge()->formatStateUsing(fn (Channel $state) => $state->label()),
                 TextColumn::make('template_key')->label(__('Message'))->formatStateUsing(fn (?MessageKey $state) => $state?->label())->placeholder(__('test / manual')),
                 TextColumn::make('recipient')->label(__('Recipient'))
@@ -121,9 +158,11 @@ class OutboundMessageResource extends BaseResource
                             ->orWhereHas('client', fn (Builder $client) => app(ClientTiers::class)->scopeServed($client))))
                     ->state(fn (OutboundMessage $record): string => static::visibleRecipient($record))
                     ->description(fn (OutboundMessage $record): ?string => app(ClientTiers::class)->servedName($record->client)),
-                TextColumn::make('status')->label(__('Status'))->badge()->formatStateUsing(fn (OutboundMessageStatus $state) => $state->label())->color(fn (OutboundMessageStatus $state) => $state->color())->sortable(),
+                TextColumn::make('status')->label(__('Status'))->badge()->formatStateUsing(fn (OutboundMessageStatus $state) => $state->label())->color(fn (OutboundMessageStatus $state) => $state->color())->sortable()
+                    ->tooltip(fn (OutboundMessage $record): ?string => static::deliveryNote($record)),
                 TextColumn::make('attempts')->label(__('Attempts'))->alignCenter(),
-                TextColumn::make('sent_at')->label(__('Sent'))->since()->placeholder('-'),
+                TextColumn::make('sent_at')->label(__('Sent'))->since()->placeholder('-')
+                    ->searchable(query: fn (Builder $query, string $search): Builder => $query->where('sent_at', 'like', '%'.HuDate::searchFragment($search).'%')),
                 TextColumn::make('error')->label(__('Error'))->limit(50)->placeholder('-')
                     ->state(fn (OutboundMessage $record): ?string => static::visibleText($record, $record->error))
                     ->tooltip(fn (OutboundMessage $record): ?string => static::visibleText($record, $record->error)),
@@ -138,7 +177,7 @@ class OutboundMessageResource extends BaseResource
                 Action::make('retry')->label(__('Retry'))->icon('heroicon-o-arrow-path')->color('warning')->requiresConfirmation()
                     ->modalDescription(__('The same message is queued again and sent to the same recipient; an SMS costs again.'))
                     ->authorize(fn () => auth()->user()?->can(Permission::SettingsManage->value) ?? false)
-                    ->visible(fn (OutboundMessage $record) => $record->status === OutboundMessageStatus::Failed)
+                    ->visible(fn (OutboundMessage $record) => $record->status->isRetryable())
                     ->disabled(fn (OutboundMessage $record) => $record->isRedacted() || static::hiddenClient($record))
                     ->tooltip(fn (OutboundMessage $record) => match (true) {
                         static::hiddenClient($record) => __('The client is not served at present (only premium clients are served), so nothing is sent to them.'),

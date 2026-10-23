@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\OutboundMessageStatus;
+use App\Enums\SmsDeliveryStatus;
 use App\Messaging\Channel;
 use App\Messaging\MessageKey;
 use App\Models\Concerns\HasTimeOrderedUuidKey;
@@ -17,7 +18,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * One e-mail or SMS on its way out: rendered up front, sent by the queue,
  * with the outcome kept for the operators.
  */
-#[Fillable(['channel', 'template_key', 'recipient', 'subject', 'body', 'meta', 'client_id', 'status', 'error', 'attempts', 'sent_at', 'last_attempt_at', 'redacted_at'])]
+#[Fillable(['channel', 'template_key', 'recipient', 'subject', 'body', 'meta', 'client_id', 'status', 'error', 'attempts', 'sent_at', 'last_attempt_at', 'redacted_at', 'gateway_message_id', 'delivery_status', 'delivery_status_raw', 'delivery_checks', 'next_delivery_check_at', 'delivery_updated_at'])]
 class OutboundMessage extends Model
 {
     /** @use HasFactory<OutboundMessageFactory> */
@@ -44,6 +45,10 @@ class OutboundMessage extends Model
             'sent_at' => 'datetime',
             'last_attempt_at' => 'datetime',
             'redacted_at' => 'datetime',
+            'delivery_status' => SmsDeliveryStatus::class,
+            'delivery_checks' => 'integer',
+            'next_delivery_check_at' => 'datetime',
+            'delivery_updated_at' => 'datetime',
         ];
     }
 

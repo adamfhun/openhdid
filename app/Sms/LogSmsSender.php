@@ -10,9 +10,16 @@ use Illuminate\Support\Facades\Log;
  */
 class LogSmsSender implements SmsSender
 {
-    public function send(string $to, string $message): void
+    public function send(string $to, string $message): ?string
     {
         Log::info('SMS (log driver)', ['to' => $to, 'message' => static::mask($message)]);
+
+        return null;
+    }
+
+    public function deliveryStatus(string $messageId): ?SmsDeliveryReport
+    {
+        return null;
     }
 
     public static function mask(string $message): string

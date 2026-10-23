@@ -6,6 +6,7 @@ use App\Clients\PackageOverrides;
 use App\Identification\QaSessionEngine;
 use App\Jobs\QueueHeartbeat;
 use App\Jobs\SendOutboundMessage;
+use App\Messaging\SmsDeliveryChecks;
 use App\Models\OutboundMessage;
 use App\System\HealthChecks;
 use App\System\QueueMaintenance;
@@ -71,3 +72,7 @@ Schedule::call(function (): void {
             SendOutboundMessage::dispatch($id);
         });
 })->everyMinute()->name('hdid:requeue-messages')->withoutOverlapping();
+
+// Delivery reports of sent SMS: ask the gateway for every message whose next query is due.
+Schedule::call(fn () => app(SmsDeliveryChecks::class)->run())
+    ->everyMinute()->name('hdid:sms-delivery-checks')->withoutOverlapping()->onOneServer();

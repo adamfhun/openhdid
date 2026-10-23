@@ -82,9 +82,10 @@ class Messenger
     }
 
     /**
-     * Queue a failed message again. A message whose secret body was wiped
-     * after the final failure cannot go out again (it would be empty); the
-     * caller issues a new PIN, code or link instead.
+     * Queue a failed (or network-reported undeliverable) message again, by
+     * hand only. A message whose secret body was wiped after the final
+     * failure cannot go out again (it would be empty); the caller issues a
+     * new PIN, code or link instead.
      *
      * @throws MessageNotRetryableException
      */
@@ -96,9 +97,12 @@ class Messenger
 
         $changed = OutboundMessage::query()
             ->whereKey($message->id)
-            ->where('status', OutboundMessageStatus::Failed)
+            ->whereIn('status', [OutboundMessageStatus::Failed, OutboundMessageStatus::Undeliverable])
             ->whereNull('redacted_at')
-            ->update(['status' => OutboundMessageStatus::Queued, 'attempts' => 0, 'error' => null, 'updated_at' => now()]);
+            ->update([
+                'status' => OutboundMessageStatus::Queued, 'attempts' => 0, 'error' => null, 'updated_at' => now(),
+                'gateway_message_id' => null, 'delivery_status' => null, 'delivery_status_raw' => null, 'delivery_checks' => 0, 'next_delivery_check_at' => null, 'delivery_updated_at' => null,
+            ]);
 
         if ($changed !== 1) {
             throw new MessageNotRetryableException($message->fresh() ?? $message);
