@@ -10,6 +10,7 @@ use App\Enums\ClientTier;
 use App\Enums\MfaMethod;
 use App\Enums\PrincipalType;
 use App\Filament\Actions\UnbindSsoAction;
+use App\Filament\Actions\UnlockLoginAction;
 use App\Filament\Admin\Clusters\Accounts;
 use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\Users\Pages\CreateUser;
@@ -31,6 +32,7 @@ use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Size;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -113,8 +115,11 @@ class UserResource extends BaseResource
                     TextEntry::make('directory_employment_status')->label(__('Employment status'))->state(fn (?User $record) => $record?->externalRecord?->employment_status)->visible(fn (?User $record) => filled($record?->externalRecord?->employment_status)),
                 ]),
             Section::make(__('Company sign-in binding'))
-                ->description(__('The directory identity (Entra object id, ADFS subject) the account\'s company sign-in is bound to. The first eligible sign-in binds it; afterwards a sign-in under the same e-mail address from another identity is refused. "Clear sign-in binding" in the header lets the next sign-in bind anew.'))
+                ->key('ssoBinding')
+                ->description(__('The directory identity (Entra object id, ADFS subject) the account\'s company sign-in is bound to. The first eligible sign-in binds it; afterwards a sign-in under the same e-mail address from another identity is refused. "Clear sign-in binding" next to it lets the next sign-in bind anew.'))
                 ->visible(fn (?User $record) => $record !== null)
+                // The button stands with the binding it clears, and only while there is one.
+                ->afterHeader(fn (?User $record): array => $record === null ? [] : [UnbindSsoAction::make()->button()->size(Size::ExtraSmall)])
                 ->schema([
                     TextEntry::make('sso_bindings')->hiddenLabel()->listWithLineBreaks()
                         ->state(fn (?User $record) => $record === null ? [] : UnbindSsoAction::lines($record))
@@ -209,6 +214,7 @@ class UserResource extends BaseResource
                             app(StaffMfa::class)->reset($record, auth()->user());
                             Notification::make()->title(__('Second factor reset'))->success()->send();
                         }),
+                    UnlockLoginAction::make(),
                     UnbindSsoAction::make(),
                     DeleteAction::make(),
                     RestoreAction::make(),

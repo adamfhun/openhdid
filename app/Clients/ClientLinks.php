@@ -40,12 +40,16 @@ class ClientLinks
     }
 
     /**
-     * Whether the client depends on someone else's premium: it has no
-     * implicit premium package of its own.
+     * Whether the client depends on someone else's premium: premium through
+     * the directory's explicit package alone, with no implicit premium
+     * package of its own. The explicit package is set on a dependent at a
+     * sponsor's request, which is what the link records; a client without
+     * it gains nothing from a link, so it cannot be linked (2026-10-23).
      */
     public function needsSponsor(Client $client): bool
     {
-        return ! $this->tiers->hasImplicitPremium($client);
+        return ! $this->tiers->hasImplicitPremium($client)
+            && $this->tiers->tierFromDirectory($client) === ClientTier::Premium;
     }
 
     /**
@@ -66,7 +70,7 @@ class ClientLinks
         }
 
         if (! $this->needsSponsor($client)) {
-            throw ValidationException::withMessages(['client' => __('This client has an implicit premium package of its own and does not need a link.')]);
+            throw ValidationException::withMessages(['client' => __('Only a client whose premium comes from an explicit package, without an implicit premium package of their own, can be linked to a sponsor.')]);
         }
 
         if ($client->activeSponsorLink()->exists()) {
@@ -96,7 +100,6 @@ class ClientLinks
     {
         // Only the directory's explicit package asks for a link; a manual override has its own reason.
         return $this->needsSponsor($client)
-            && $this->tiers->tierFromDirectory($client) === ClientTier::Premium
             && ! $client->hasMutedLinkWarning()
             && $client->sponsor() === null;
     }

@@ -14,7 +14,7 @@ use Illuminate\Support\Str;
 /**
  * Builds the rows of the client export from a chosen set of columns: the
  * fixed fields of ClientExportField plus the directory columns the
- * operator surfaced under Settings › Clients › Directory fields
+ * operator surfaced under Settings › Clients and levels › Client list and client page
  * (`directory:<column>` keys). Fields the user may not export are dropped
  * here, whatever the form posted.
  */

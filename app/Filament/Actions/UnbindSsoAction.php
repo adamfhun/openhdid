@@ -14,8 +14,9 @@ use Illuminate\Database\Eloquent\Model;
  * Clears the directory identity an account's company sign-in is bound to
  * (SsoSubjectBinding), so that the next eligible sign-in binds it anew.
  * Staff accounts follow the user policy (a SuperAdmin's only by a
- * SuperAdmin), clients the client policy. While nothing is bound the
- * button stays in place, disabled, and says so.
+ * SuperAdmin), clients the client policy. The button appears only while a
+ * binding exists: it remedies a state, and the binding itself is shown next
+ * to it, so there is nothing to explain while nothing is bound.
  */
 class UnbindSsoAction
 {
@@ -25,10 +26,8 @@ class UnbindSsoAction
             ->label(__('Clear sign-in binding'))
             ->icon('heroicon-o-link-slash')
             ->color('warning')
-            ->visible(fn (Principal&Model $record): bool => self::allowed($record))
+            ->visible(fn (Principal&Model $record): bool => self::allowed($record) && $record->ssoIdentities->isNotEmpty())
             ->authorize(fn (Principal&Model $record): bool => self::allowed($record))
-            ->disabled(fn (Principal&Model $record): bool => $record->ssoIdentities->isEmpty())
-            ->tooltip(fn (Principal&Model $record): ?string => $record->ssoIdentities->isNotEmpty() ? null : __('This account is not bound to a sign-in identity yet.'))
             ->requiresConfirmation()
             ->modalHeading(fn (Principal&Model $record): string => __('Clear the sign-in binding of :name?', ['name' => $record->getAttribute('name')]))
             ->modalDescription(fn (Principal&Model $record): string => __('The account is bound to the directory identity of its company sign-in (:providers). Clearing it lets the next company sign-in under this account\'s e-mail address or employee id bind the account to whatever identity it then comes from; do this only once you know why the identity changed (a re-created directory account, a replaced registration). The account is not signed out and its second factor is untouched. Recorded in the audit log.', ['providers' => self::summary($record)]))

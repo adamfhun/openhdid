@@ -9,6 +9,7 @@ use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\ValidationException;
@@ -89,25 +90,25 @@ it('offers mute and unmute on the client page only to clients.manage, and only i
 
     $this->actingAs(User::factory()->withRole(Role::Agent)->create());
     Livewire::test(ViewClient::class, ['record' => $client->id])
-        ->assertActionHidden('muteLinkWarning')
-        ->assertActionHidden('unmuteLinkWarning');
+        ->assertActionDoesNotExist(TestAction::make('muteLinkWarning')->schemaComponent('sponsor'))
+        ->assertActionDoesNotExist(TestAction::make('unmuteLinkWarning')->schemaComponent('sponsor'));
 
     $admin = User::factory()->withRole(Role::Admin)->create();
     $this->actingAs($admin);
 
     Livewire::test(ViewClient::class, ['record' => $client->id])
-        ->assertActionVisible('muteLinkWarning')
-        ->assertActionHidden('unmuteLinkWarning')
-        ->callAction('muteLinkWarning', ['reason' => 'Ticket 4711: önálló prémium szerződés'])
+        ->assertActionVisible(TestAction::make('muteLinkWarning')->schemaComponent('sponsor'))
+        ->assertActionDoesNotExist(TestAction::make('unmuteLinkWarning')->schemaComponent('sponsor'))
+        ->callAction(TestAction::make('muteLinkWarning')->schemaComponent('sponsor'), ['reason' => 'Ticket 4711: önálló prémium szerződés'])
         ->assertHasNoActionErrors();
 
     expect($client->refresh()->hasMutedLinkWarning())->toBeTrue()
         ->and($client->linkWarningMutedBy?->id)->toBe($admin->id);
 
     Livewire::test(ViewClient::class, ['record' => $client->id])
-        ->assertActionHidden('muteLinkWarning')
-        ->assertActionVisible('unmuteLinkWarning')
-        ->callAction('unmuteLinkWarning');
+        ->assertActionDoesNotExist(TestAction::make('muteLinkWarning')->schemaComponent('sponsor'))
+        ->assertActionVisible(TestAction::make('unmuteLinkWarning')->schemaComponent('sponsor'))
+        ->callAction(TestAction::make('unmuteLinkWarning')->schemaComponent('sponsor'));
 
     expect($client->refresh()->hasMutedLinkWarning())->toBeFalse()
         ->and(AuditLog::query()->where('event', 'client.link_warning_unmuted')->where('subject_id', $client->id)->count())->toBe(1);

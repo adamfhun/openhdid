@@ -32,7 +32,9 @@ it('links explicit-premium clients to an implicit-premium sponsor only', functio
 
     expect(fn () => $links->link($sponsor, $dependent))->toThrow(ValidationException::class, 'already linked');
     expect(fn () => $links->link($dependent, $another))->toThrow(ValidationException::class, 'implicit premium package can have');
-    expect(fn () => $links->link($sponsor, $another))->toThrow(ValidationException::class, 'does not need a link');
+    expect(fn () => $links->link($sponsor, $another))->toThrow(ValidationException::class, 'can be linked to a sponsor');
+    $standard = Client::factory()->synced()->create(['implicit_package' => 'Basic', 'explicit_package' => null]);
+    expect(fn () => $links->link($sponsor, $standard))->toThrow(ValidationException::class, 'can be linked to a sponsor');
     expect(fn () => $links->link($sponsor, $sponsor))->toThrow(ValidationException::class, 'itself');
 
     $links->unlink($link);

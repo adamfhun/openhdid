@@ -51,10 +51,10 @@ it('refuses a pin for a client without a registered phone number, on every path'
     // Sanctum's actingAs switched the default guard to the client; the panel runs on the web guard.
     app('auth')->shouldUse('web');
     $this->actingAs(User::factory()->withRole(Role::Admin)->create());
-    Livewire::test(ViewClient::class, ['record' => $client->id])->assertActionDisabled('setPin');
+    Livewire::test(ViewClient::class, ['record' => $client->id])->assertActionDisabled(TestAction::make('setPin')->schemaComponent('pin_hash'));
 
     $client->phoneNumbers()->create(['number_e164' => sharedNumber(), 'source' => PhoneNumberSource::Admin, 'verified_at' => now()]);
-    Livewire::test(ViewClient::class, ['record' => $client->id])->assertActionEnabled('setPin');
+    Livewire::test(ViewClient::class, ['record' => $client->id])->assertActionEnabled(TestAction::make('setPin')->schemaComponent('pin_hash'));
     $pins->setPin($client->fresh(), '123456');
     expect($client->fresh()->hasPin())->toBeTrue();
 });

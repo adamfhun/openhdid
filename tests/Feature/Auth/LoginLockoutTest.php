@@ -13,6 +13,7 @@ use App\Settings\Settings;
 use App\Sms\FakeSmsSender;
 use App\Sms\SmsSender;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Auth;
@@ -90,7 +91,7 @@ it('lets an administrator unlock a staff account, audited', function (): void {
     $open = User::factory()->synced()->withRole(Role::Agent)->create();
     $this->actingAs($admin);
 
-    Livewire::test(EditUser::class, ['record' => $open->id])->assertActionVisible('unlockLogin')->assertActionDisabled('unlockLogin');
+    Livewire::test(EditUser::class, ['record' => $open->id])->assertActionHidden('unlockLogin');
     Livewire::test(EditUser::class, ['record' => $locked->id])->callAction('unlockLogin');
 
     expect($locked->fresh()->isLoginLocked())->toBeFalse()
@@ -102,8 +103,9 @@ it('lets an administrator unlock a staff account, audited', function (): void {
 it('hides the unlock from staff without the management permission', function (): void {
     $this->actingAs(User::factory()->synced()->withRole(Role::Supervisor)->create());
 
+    // A hidden button next to an entry is left out of the page schema altogether.
     Livewire::test(ViewClient::class, ['record' => Client::factory()->synced()->create(['locked_until' => now()->addDay()])->id])
-        ->assertActionHidden('unlockLogin');
+        ->assertActionDoesNotExist(TestAction::make('unlockLogin')->schemaComponent('closed_at'));
 });
 
 it('locks the SMS login of a client after five wrong codes without naming the lock, sends it no more codes, and lets the helpdesk unlock it', function (): void {
@@ -135,7 +137,7 @@ it('locks the SMS login of a client after five wrong codes without naming the lo
 
     $this->actingAs(User::factory()->synced()->withRole(Role::Admin)->create());
     Filament::setCurrentPanel('admin');
-    Livewire::test(ViewClient::class, ['record' => $client->id])->callAction('unlockLogin');
+    Livewire::test(ViewClient::class, ['record' => $client->id])->callAction(TestAction::make('unlockLogin')->schemaComponent('closed_at'));
     Auth::guard('web')->logout();
 
     $this->postJson('/api/v1/client/auth/otp/verify', ['email' => 'c@x.hu', 'code' => $code[1]])->assertOk();

@@ -23,7 +23,7 @@ class SendMagicLinkAction
         return Action::make($name)
             ->label(__('Send login link'))
             ->icon('heroicon-o-envelope')
-            ->color('info')
+            ->color('primary')
             ->requiresConfirmation()
             ->modalHeading(fn (Client $record) => __('Send a login link to :email?', ['email' => $record->email]))
             ->modalDescription(__('The link signs the client in once and expires after the configured minutes.'))

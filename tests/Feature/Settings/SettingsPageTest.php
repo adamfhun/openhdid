@@ -423,8 +423,11 @@ it('does not save past the confirmation when the save is called directly', funct
 });
 
 it('rejects out-of-range login, session and SMS budget values without saving them', function (SettingKey $key, int $value): void {
+    // A setting under a switch is only sent while the switch is on.
+    $switch = $key->dependsOn();
+
     Livewire::test(ManageSettings::class)
-        ->fillForm([ManageSettings::fieldName($key) => $value])
+        ->fillForm([...($switch ? [ManageSettings::fieldName($switch) => true] : []), ManageSettings::fieldName($key) => $value])
         ->call('save')
         ->assertHasFormErrors([ManageSettings::fieldName($key)]);
 

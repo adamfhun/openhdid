@@ -434,7 +434,6 @@
     "Only clients without an implicit premium package of their own can be linked, and each client can be linked to one sponsor at a time.": "Only clients without an implicit premium package of their own can be linked, and each client can be linked to one sponsor at a time.",
     "Only EMD-only accounts": "Only EMD-only accounts",
     "Only names from the configured package lists can be chosen, so a typo cannot lock a client out.": "Only names from the configured package lists can be chosen, so a typo cannot lock a client out.",
-    "Only names from the configured package lists can be chosen. Add a new name under Settings › Packages first.": "Only names from the configured package lists can be chosen. Add a new name under Settings › Packages first.",
     "Only needed for password login; leave empty for SSO-only accounts.": "Only needed for password login; leave empty for SSO-only accounts.",
     "Only numbers you added yourself can be removed.": "Only numbers you added yourself can be removed.",
     "Only one number can be primary; switching it on here removes the flag from the others.": "Only one number can be primary; switching it on here removes the flag from the others.",
@@ -880,5 +879,12 @@
     "Mfa methods": "Allowed second factors",
     "Mfa trust provider mfa": "Accept the provider's MFA",
     "Qa blind check": "Q-A blind check",
-    "Qa typo tolerance": "Q-A allowed typos"
+    "Qa typo tolerance": "Q-A allowed typos",
+    "setting-unit.minutes": "minutes",
+    "setting-unit.hours": "hours",
+    "setting-unit.days": "days",
+    "setting-unit.years": "years",
+    "setting-unit.seconds": "s",
+    "setting-unit.digits": "digits",
+    "setting-unit.characters": "characters"
 }

@@ -12,6 +12,7 @@ use App\Enums\ClientTier;
 use App\Filament\Actions\SendMagicLinkAction;
 use App\Filament\Actions\SetPinAction;
 use App\Filament\Actions\UnbindSsoAction;
+use App\Filament\Actions\UnlockLoginAction;
 use App\Filament\Admin\NavigationGroup;
 use App\Filament\Admin\Pages\Identify;
 use App\Filament\Admin\Resources\BaseResource;
@@ -23,6 +24,7 @@ use App\Filament\Admin\Resources\Clients\RelationManagers\AnswersRelationManager
 use App\Filament\Admin\Resources\Clients\RelationManagers\IdSessionsRelationManager;
 use App\Filament\Admin\Resources\Clients\RelationManagers\LinkedClientsRelationManager;
 use App\Filament\Admin\Resources\Clients\RelationManagers\PhoneNumbersRelationManager;
+use App\Filament\Admin\Resources\ExternalRecords\ExternalRecordResource;
 use App\Identification\ClientAnswers;
 use App\Identification\PinService;
 use App\Models\Call;
@@ -33,6 +35,7 @@ use App\Settings\Settings;
 use App\Support\HuDate;
 use App\Support\PhoneNormalizer;
 use BackedEnum;
+use Closure;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\DeleteAction;
@@ -46,7 +49,10 @@ use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Text;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Size;
+use Filament\Support\Enums\TextSize;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -305,7 +311,7 @@ class ClientResource extends BaseResource
     }
 
     /**
-     * Directory columns surfaced by the operator (Settings › Clients ›
+     * Directory columns surfaced by the operator (Settings › Clients and levels ›
      * Directory fields): read-only entries on the client page.
      *
      * @return list<TextEntry>
@@ -479,6 +485,191 @@ class ClientResource extends BaseResource
         return $tier === null ? null : app(ClientTiers::class)->supportFor($tier);
     }
 
+    /**
+     * Tailwind classes of the note box on the client page: an internal note
+     * is the one text the helpdesk must not miss, so it is set off in yellow
+     * like on the identification page. Only applied while there is a note.
+     */
+    public const NOTE_CLASSES = 'whitespace-pre-line rounded-xl bg-warning-50 px-4 py-3 ring-1 ring-warning-600/20 dark:bg-warning-500/10';
+
+    /**
+     * Actions shown next to the entry they act on (2026-10-23): extra-small
+     * buttons in the label row, so that every button sits with its data and
+     * the page header keeps only Identify and Edit.
+     *
+     * @param  list<Action>  $actions
+     * @return list<Action>
+     */
+    public static function inline(array $actions): array
+    {
+        return array_map(fn (Action $action): Action => $action->button()->size(Size::ExtraSmall), $actions);
+    }
+
+    /**
+     * A coloured line under an entry, present only while it has something to
+     * say (a lock, a missing record, a warning); the entry keeps its place.
+     */
+    protected static function note(Closure $text, string|Closure $color): Text
+    {
+        return Text::make($text)
+            ->color($color)
+            ->size(TextSize::Small)
+            ->weight('medium')
+            ->visible(fn (Client $record): bool => $text($record) !== null);
+    }
+
+    /**
+     * Open, closed with its reason, or open with the sign-in lock (repeated
+     * wrong SMS codes) that the Unlock button next to it lifts.
+     */
+    public static function statusLabel(Client $client): string
+    {
+        if ($client->isClosed()) {
+            return __('Closed (:r)', ['r' => __((string) $client->closed_reason)]);
+        }
+
+        if ($client->isLoginLocked()) {
+            return __('Open · login locked until :until', ['until' => $client->locked_until->format(HuDate::DATETIME)]);
+        }
+
+        return __('Open');
+    }
+
+    public static function pinLabel(Client $client): string
+    {
+        return match (true) {
+            ! $client->hasPin() => __('No PIN'),
+            app(PinService::class)->isLocked($client) => __('PIN locked until :until', ['until' => $client->pin_locked_until->format(HuDate::DATETIME)]),
+            $client->phoneNumbers->isEmpty() => __('PIN set, no phone number'),
+            default => __('PIN set'),
+        };
+    }
+
+    public static function pinColor(Client $client): string
+    {
+        return match (true) {
+            ! $client->hasPin() => 'gray',
+            app(PinService::class)->isLocked($client) => 'danger',
+            $client->phoneNumbers->isEmpty() => 'warning',
+            default => 'success',
+        };
+    }
+
+    /**
+     * What the PIN badge cannot say in two words: why it is locked (red) or
+     * why the phone menu cannot use it (yellow). Null when nothing is wrong.
+     */
+    public static function pinNote(Client $client): ?string
+    {
+        if (! $client->hasPin()) {
+            return null;
+        }
+
+        if (app(PinService::class)->isLocked($client)) {
+            return __('Locked after :n wrong attempts in a row; the lock ends by itself, and a correct PIN afterwards clears the count.', ['n' => app(Settings::class)->int(SettingKey::PinMaxFailedAttempts)]);
+        }
+
+        if ($client->phoneNumbers->isEmpty()) {
+            return __('The phone menu recognises the caller by a registered number before it asks for the PIN; without a number the PIN cannot be used there.');
+        }
+
+        return null;
+    }
+
+    /**
+     * The EMD record's trouble, under the external id: missing from the sync
+     * since when (the account is closed for it), or one run away from being
+     * made missing. Null while the record is present and seen.
+     */
+    public static function directoryNote(Client $client): ?string
+    {
+        $record = $client->externalRecord;
+
+        if ($record === null) {
+            return null;
+        }
+
+        if ($record->isMissing()) {
+            return __('Missing from the EMD sync since :since (:n missed runs).', ['since' => $record->missing_since->format(HuDate::DATETIME), 'n' => $record->missed_runs]);
+        }
+
+        $threshold = ExternalRecordResource::threshold();
+
+        if ($record->closesAtNextRun($threshold)) {
+            return __('Missed :n of :m EMD syncs; the account closes at the next sync unless the record returns.', ['n' => $record->missed_runs, 'm' => $threshold]);
+        }
+
+        return null;
+    }
+
+    public static function closeAction(): Action
+    {
+        return Action::make('close')->label(__('Close account'))->icon('heroicon-o-lock-closed')->color('danger')->requiresConfirmation()
+            ->modalHeading(fn (Client $record) => __('Close the account of :name?', ['name' => $record->name]))
+            ->modalDescription(fn (Client $record) => static::closeWarning($record))
+            ->modalSubmitActionLabel(fn (Client $record) => $record->activeLinks()->exists() ? __('Close all of them') : __('Close account'))
+            ->visible(fn (Client $record) => ! $record->isClosed() && static::canEdit($record))
+            ->authorize(fn (Client $record) => static::canEdit($record))
+            ->action(fn (Client $record) => $record->close('admin'));
+    }
+
+    public static function reopenAction(): Action
+    {
+        return Action::make('reopen')->label(__('Reopen'))->icon('heroicon-o-lock-open')->color('success')
+            ->visible(fn (Client $record) => $record->isClosed() && static::canEdit($record))
+            ->authorize(fn (Client $record) => static::canEdit($record))
+            ->action(fn (Client $record) => $record->reopen());
+    }
+
+    public static function clearPinAction(): Action
+    {
+        return Action::make('clearPin')->label(__('Clear PIN'))->icon('heroicon-o-x-mark')->color('danger')->requiresConfirmation()
+            ->modalHeading(fn (Client $record) => __('Clear the PIN of :name?', ['name' => $record->name]))
+            ->modalDescription(__('The client can no longer identify with the PIN until a new one is set; the clearing is recorded in the audit log.'))
+            ->visible(fn (Client $record) => $record->hasPin() && static::canEdit($record))
+            ->authorize(fn (Client $record) => static::canEdit($record))
+            ->action(fn (Client $record) => app(PinService::class)->clearPin($record));
+    }
+
+    /**
+     * The internal note edited where it is read, without the whole edit form.
+     */
+    public static function editNotesAction(): Action
+    {
+        return Action::make('editNotes')
+            ->label(fn (Client $record) => filled($record->notes) ? __('Edit note') : __('Add note'))
+            ->icon(fn (Client $record) => filled($record->notes) ? 'heroicon-o-pencil-square' : 'heroicon-o-plus')
+            ->color('primary')
+            ->visible(fn (Client $record) => static::canEdit($record))
+            ->authorize(fn (Client $record) => static::canEdit($record))
+            ->modalHeading(fn (Client $record) => __('Note on :name', ['name' => $record->name]))
+            ->modalSubmitActionLabel(__('Save'))
+            ->fillForm(fn (Client $record) => ['notes' => $record->notes])
+            ->schema([
+                Textarea::make('notes')->label(__('Notes'))->rows(5)->maxLength(5000)
+                    ->helperText(__('Internal note for the helpdesk; shown on the identification page. The client never sees it.')),
+            ])
+            ->action(function (Client $record, array $data): void {
+                $notes = trim((string) ($data['notes'] ?? ''));
+                $record->update(['notes' => $notes === '' ? null : $notes]);
+                Notification::make()->title(__('Note saved'))->success()->send();
+            });
+    }
+
+    /**
+     * From the client to its EMD record on the directory list, for those who
+     * may see the directory at all.
+     */
+    public static function openDirectoryRecordAction(): Action
+    {
+        return Action::make('openDirectoryRecord')
+            ->label(__('Open EMD record'))
+            ->icon('heroicon-o-arrow-top-right-on-square')
+            ->color('primary')
+            ->visible(fn (Client $record) => $record->externalRecord !== null && ExternalRecordResource::canAccess())
+            ->url(fn (Client $record) => ExternalRecordResource::getUrl().'?tableSearch='.urlencode((string) $record->externalRecord?->external_id));
+    }
+
     public static function form(Schema $schema): Schema
     {
         return $schema->components([
@@ -500,75 +691,104 @@ class ClientResource extends BaseResource
                     ->disabled(fn (?Client $record) => $record?->isSynced() ?? false)->dehydrated(fn (?Client $record) => ! ($record?->isSynced() ?? false))
                     ->helperText(fn (?Client $record) => $record?->isSynced()
                         ? __('Comes from EMD. For a rare, temporary exception use the "Override package" action on the client page.')
-                        : __('Only names from the configured package lists can be chosen. Add a new name under Settings › Packages first.')),
+                        : __('Only names from the configured package lists can be chosen. Add a new name under Settings › Clients and levels first.')),
                 Textarea::make('notes')->label(__('Notes'))->rows(4)->maxLength(5000)->columnSpanFull()
                     ->helperText(__('Internal note for the helpdesk; shown on the identification page. The client never sees it.')),
             ]),
         ]);
     }
 
+    /**
+     * The client page (2026-10-23): five blocks, each piece of data with the
+     * buttons that act on it in its label row. A red or yellow line and the
+     * button that remedies it appear only while the state holds (sign-in
+     * lock, PIN lock, missing EMD record, missing sponsor); a button a state
+     * blocks stays, disabled, with the reason. Everything is tied to a
+     * permission, so any role sees exactly what its rights allow.
+     */
     public static function infolist(Schema $schema): Schema
     {
         $answers = app(ClientAnswers::class);
 
-        return $schema->components([
+        // One block per row: side by side, three entries with their buttons would not fit.
+        return $schema->columns(1)->components([
             Section::make(__('Client'))->columns(3)->schema([
                 TextEntry::make('name')->label(__('Name')),
                 TextEntry::make('email')->label(__('E-mail')),
                 TextEntry::make('closed_at')->label(__('Status'))->badge()
-                    ->state(fn (Client $record) => $record->isClosed() ? __('Closed (:r)', ['r' => __($record->closed_reason)]) : __('Open'))
-                    ->color(fn (Client $record) => $record->isClosed() ? 'danger' : 'success'),
-                TextEntry::make('externalRecord.external_id')->label(__('External id'))->placeholder(__('not linked to EMD')),
-                TextEntry::make('externalRecord.company')->label(__('Company'))->placeholder('-'),
-                TextEntry::make('job_title')->label(__('Job title'))->placeholder('-')->state(fn (Client $record) => $record->externalRecord?->jobTitle()),
-                TextEntry::make('department')->label(__('Department'))->placeholder('-')->state(fn (Client $record) => $record->externalRecord?->departmentName()),
-                TextEntry::make('externalRecord.login_name')->label(__('Login name'))->visible(fn (Client $record) => filled($record->externalRecord?->login_name)),
-                TextEntry::make('externalRecord.room')->label(__('Room'))->visible(fn (Client $record) => filled($record->externalRecord?->room)),
-                TextEntry::make('externalRecord.employment_status')->label(__('Employment status'))->visible(fn (Client $record) => filled($record->externalRecord?->employment_status)),
-                TextEntry::make('externalRecord.missing_since')->label(__('Missing since'))->since()->placeholder(__('present')),
+                    ->state(fn (Client $record) => static::statusLabel($record))
+                    ->color(fn (Client $record) => $record->isClosed() || $record->isLoginLocked() ? 'danger' : 'success')
+                    ->afterLabel(static::inline([UnlockLoginAction::make(), static::closeAction(), static::reopenAction()]))
+                    ->belowContent(static::note(fn (Client $record) => ! $record->isClosed() && $record->isLoginLocked()
+                        ? __('Locked after repeated wrong SMS codes; the lock ends by itself, or an administrator lifts it.') : null, 'danger')),
+                TextEntry::make('notes')->label(__('Notes'))->placeholder('-')->columnSpanFull()
+                    ->color(fn (Client $record) => filled($record->notes) ? 'warning' : null)
+                    ->extraAttributes(fn (Client $record) => ['class' => filled($record->notes) ? static::NOTE_CLASSES : 'whitespace-pre-line'])
+                    ->afterLabel(static::inline([static::editNotesAction()])),
+            ]),
+            Section::make(__('Identification'))->columns(3)->schema([
+                TextEntry::make('pin_hash')->label(__('PIN'))->badge()
+                    ->state(fn (Client $record) => static::pinLabel($record))
+                    ->color(fn (Client $record) => static::pinColor($record))
+                    ->afterLabel(static::inline([SetPinAction::make(), static::clearPinAction()]))
+                    ->belowContent(static::note(fn (Client $record) => static::pinNote($record), fn (Client $record) => app(PinService::class)->isLocked($record) ? 'danger' : 'warning')),
+                TextEntry::make('answers')->label(__('Security questions'))->badge()
+                    ->state(fn (Client $record) => __(':n / :r answers', ['n' => $answers->usableCount($record), 'r' => $answers->requiredCount()]))
+                    ->color(fn (Client $record) => $answers->isEligible($record) ? 'success' : 'gray'),
+                TextEntry::make('shared_numbers')->label(__('Shared phone numbers'))->badge()->color('warning')
+                    ->state(fn (Client $record) => app(ClientPhones::class)->sharedNumbersOf($record))
+                    ->visible(fn (Client $record) => app(ClientPhones::class)->sharedNumbersOf($record) !== [])
+                    ->belowContent(static::note(fn (Client $record) => __('Also on file for another client: the phone menu cannot recognise the caller from these numbers, so no PIN is asked there. See the Shared phone numbers page.'), 'warning')),
+            ]),
+            Section::make(__('Packages and level'))->columns(3)->schema([
                 TextEntry::make('implicit_package')->label(__('Implicit package'))->placeholder('-'),
-                TextEntry::make('explicit_package')->label(__('Explicit package'))->placeholder('-')
-                    ->helperText(fn (Client $record) => $record->hasActivePackageOverride() ? __('EMD value; an override is in force, see below.') : null),
-                TextEntry::make('package_override')->label(__('Package override'))->badge()->color('warning')
-                    ->visible(fn (Client $record) => $record->hasActivePackageOverride())
-                    ->helperText(fn (Client $record) => __(':reason · by :who · until :until', ['reason' => $record->package_override_reason, 'who' => $record->packageOverrideBy?->name ?? '-', 'until' => $record->package_override_until?->format(HuDate::DATETIME)])),
+                TextEntry::make('explicit_package')->label(__('Explicit package'))->placeholder('-'),
                 TextEntry::make('tier')->label(__('Portal access'))->badge()
                     ->state(fn (Client $record) => app(ClientTiers::class)->tierFor($record)?->label() ?? __('None'))
                     ->color(fn (Client $record) => match (app(ClientTiers::class)->tierFor($record)) {
                         ClientTier::Premium => 'warning', ClientTier::Standard => 'success', default => 'gray',
                     }),
-                TextEntry::make('externalRecord.email_domain')->label(__('E-mail domain'))->placeholder('-'),
-                TextEntry::make('answers')->label(__('Security questions'))->badge()
-                    ->state(fn (Client $record) => __(':n / :r answers', ['n' => $answers->usableCount($record), 'r' => $answers->requiredCount()]))
-                    ->color(fn (Client $record) => $answers->isEligible($record) ? 'success' : 'gray'),
-                TextEntry::make('pin_hash')->label(__('PIN'))->badge()
-                    ->state(fn (Client $record) => match (true) {
-                        ! $record->hasPin() => __('No PIN'),
-                        $record->phoneNumbers->isEmpty() => __('PIN set, no phone number'),
-                        default => __('PIN set'),
-                    })
-                    ->color(fn (Client $record) => ! $record->hasPin() ? 'gray' : ($record->phoneNumbers->isEmpty() ? 'warning' : 'success'))
-                    ->helperText(fn (Client $record) => $record->hasPin() && $record->phoneNumbers->isEmpty() ? __('The phone menu recognises the caller by a registered number before it asks for the PIN; without a number the PIN cannot be used there.') : null),
-                TextEntry::make('shared_numbers')->label(__('Shared phone numbers'))->badge()->color('warning')
-                    ->state(fn (Client $record) => app(ClientPhones::class)->sharedNumbersOf($record))
-                    ->visible(fn (Client $record) => app(ClientPhones::class)->sharedNumbersOf($record) !== [])
-                    ->helperText(__('Also on file for another client: the phone menu cannot recognise the caller from these numbers, so no PIN is asked there. See the Shared phone numbers page.')),
-                TextEntry::make('pin_locked_until')->label(__('PIN locked until'))->dateTime()->placeholder('-'),
-                TextEntry::make('last_login_at')->label(__('Last login'))->since()->placeholder('-'),
-                TextEntry::make('sso_bindings')->label(__('Sign-in binding'))->listWithLineBreaks()
-                    ->state(fn (Client $record) => UnbindSsoAction::lines($record))
-                    ->placeholder(__('Not bound yet: the first company sign-in binds the account.'))
-                    ->helperText(__('The directory identity the account\'s company sign-in is bound to; a sign-in under the same e-mail address from another identity is refused until an administrator clears the binding.')),
-                TextEntry::make('sponsor')->label(__('Linked to'))->placeholder(__('not linked'))
+                TextEntry::make('package_override')->label(__('Package override'))->badge()->color('warning')->placeholder('-')
+                    ->state(fn (Client $record) => $record->hasActivePackageOverride() ? $record->package_override : null)
+                    ->afterLabel(static::inline([static::overrideAction(), static::endOverrideAction()]))
+                    ->helperText(fn (Client $record) => $record->hasActivePackageOverride()
+                        ? __(':reason · by :who · until :until', ['reason' => $record->package_override_reason, 'who' => $record->packageOverrideBy?->name ?? '-', 'until' => $record->package_override_until?->format(HuDate::DATETIME)])
+                        : null),
+                TextEntry::make('sponsor')->label(__('Linked to'))->placeholder(__('not linked'))->columnSpan(2)
                     ->state(fn (Client $record) => $record->sponsor()?->name)
                     ->url(fn (Client $record) => ($s = $record->sponsor()) ? static::getUrl('view', ['record' => $s]) : null)
-                    ->helperText(fn (Client $record) => static::linkWarning($record) ?? static::linkWarningMutedNote($record)),
-                TextEntry::make('notes')->label(__('Notes'))->placeholder('-')->columnSpanFull()->prose(),
+                    ->afterLabel(static::inline([static::linkToSponsorAction(), static::muteLinkWarningAction(), static::unmuteLinkWarningAction()]))
+                    ->belowContent([
+                        static::note(fn (Client $record) => static::linkWarning($record), 'danger'),
+                        static::note(fn (Client $record) => static::linkWarningMutedNote($record), 'gray'),
+                    ]),
             ]),
-            Section::make(__('EMD data'))->columns(3)->description(__('Further columns of EMD, as chosen under Settings › Clients › EMD fields. Read-only.'))
-                ->visible(fn () => app(ClientExporter::class)->directoryFields() !== [])
-                ->schema(static::directoryFieldEntries()),
+            Section::make(__('Sign-in'))->columns(3)->schema([
+                TextEntry::make('last_login_at')->label(__('Last login'))->since()->placeholder('-')
+                    ->afterLabel(static::inline([SendMagicLinkAction::make()])),
+                TextEntry::make('sso_bindings')->label(__('Sign-in binding'))->listWithLineBreaks()->columnSpan(2)
+                    ->state(fn (Client $record) => UnbindSsoAction::lines($record))
+                    ->placeholder(__('Not bound yet: the first company sign-in binds the account.'))
+                    ->helperText(__('The directory identity the account\'s company sign-in is bound to; a sign-in under the same e-mail address from another identity is refused until an administrator clears the binding.'))
+                    ->afterLabel(static::inline([UnbindSsoAction::make()])),
+            ]),
+            Section::make(__('EMD data'))->columns(3)
+                ->description(__('Taken over from EMD and read-only; the further columns chosen under Settings › Clients and levels › Client list and client page are listed here too.'))
+                ->schema([
+                    TextEntry::make('externalRecord.external_id')->key('external_id')->label(__('External id'))->placeholder(__('not linked to EMD'))
+                        ->afterLabel(static::inline([static::openDirectoryRecordAction()]))
+                        ->belowContent(static::note(fn (Client $record) => static::directoryNote($record), fn (Client $record) => $record->externalRecord?->isMissing() ? 'danger' : 'warning')),
+                    TextEntry::make('externalRecord.company')->label(__('Company'))->placeholder('-'),
+                    TextEntry::make('job_title')->label(__('Job title'))->placeholder('-')->state(fn (Client $record) => $record->externalRecord?->jobTitle()),
+                    TextEntry::make('department')->label(__('Department'))->placeholder('-')->state(fn (Client $record) => $record->externalRecord?->departmentName()),
+                    TextEntry::make('externalRecord.login_name')->label(__('Login name'))->visible(fn (Client $record) => filled($record->externalRecord?->login_name)),
+                    TextEntry::make('externalRecord.room')->label(__('Room'))->visible(fn (Client $record) => filled($record->externalRecord?->room)),
+                    TextEntry::make('externalRecord.employment_status')->label(__('Employment status'))->visible(fn (Client $record) => filled($record->externalRecord?->employment_status)),
+                    TextEntry::make('externalRecord.email_domain')->label(__('E-mail domain'))->placeholder('-'),
+                    ...static::directoryFieldEntries(),
+                ]),
             Section::make(__('Support line for this client'))->columns(3)->description(__('The client should call the line of their own level; the support contact shown to them on the portal.'))
+                ->id('client-support-line')->collapsible()->collapsed()->persistCollapsed()
                 ->schema([
                     TextEntry::make('support_phone')->label(__('Phone'))->placeholder('-')->state(fn (Client $record) => static::supportOf($record)['phone'] ?? null),
                     TextEntry::make('support_email')->label(__('E-mail'))->placeholder('-')->state(fn (Client $record) => static::supportOf($record)['email'] ?? null),
@@ -659,31 +879,27 @@ class ClientResource extends BaseResource
             ->recordActions([
                 static::identifyAction()->iconButton()->tooltip(__('Identify')),
                 ViewAction::make()->iconButton()->tooltip(__('View')),
+                // Two groups with a divider: the everyday helpdesk moves first, the
+                // administrative ones below; state-bound ones appear only in their state.
                 ActionGroup::make([
-                    EditAction::make(),
-                    SetPinAction::make(),
-                    SendMagicLinkAction::make(),
-                    static::overrideAction(),
-                    static::endOverrideAction(),
-                    static::muteLinkWarningAction(),
-                    static::unmuteLinkWarningAction(),
-                    Action::make('clearPin')->label(__('Clear PIN'))->icon('heroicon-o-key')->color('gray')->requiresConfirmation()
-                        ->modalHeading(fn (Client $record) => __('Clear the PIN of :name?', ['name' => $record->name]))
-                        ->modalDescription(__('The client can no longer identify with the PIN until a new one is set; the clearing is recorded in the audit log.'))
-                        ->visible(fn (Client $record) => $record->hasPin() && static::canEdit($record))
-                        ->action(fn (Client $record) => app(PinService::class)->clearPin($record)),
-                    UnbindSsoAction::make(),
-                    Action::make('close')->label(__('Close account'))->icon('heroicon-o-lock-closed')->color('danger')->requiresConfirmation()
-                        ->modalHeading(fn (Client $record) => __('Close the account of :name?', ['name' => $record->name]))
-                        ->modalDescription(fn (Client $record) => static::closeWarning($record))
-                        ->modalSubmitActionLabel(fn (Client $record) => $record->activeLinks()->exists() ? __('Close all of them') : __('Close account'))
-                        ->visible(fn (Client $record) => ! $record->isClosed() && static::canEdit($record))
-                        ->action(fn (Client $record) => $record->close('admin')),
-                    Action::make('reopen')->label(__('Reopen'))->icon('heroicon-o-lock-open')->color('success')
-                        ->visible(fn (Client $record) => $record->isClosed() && static::canEdit($record))
-                        ->action(fn (Client $record) => $record->reopen()),
-                    static::deleteAction(),
-                    RestoreAction::make(),
+                    ActionGroup::make([
+                        EditAction::make(),
+                        SetPinAction::make(),
+                        SendMagicLinkAction::make(),
+                        static::clearPinAction(),
+                    ])->dropdown(false),
+                    ActionGroup::make([
+                        static::overrideAction(),
+                        static::endOverrideAction(),
+                        static::muteLinkWarningAction(),
+                        static::unmuteLinkWarningAction(),
+                        UnlockLoginAction::make(),
+                        UnbindSsoAction::make(),
+                        static::closeAction(),
+                        static::reopenAction(),
+                        static::deleteAction(),
+                        RestoreAction::make(),
+                    ])->dropdown(false),
                 ])->icon('heroicon-m-ellipsis-vertical')->color('gray')->tooltip(__('More')),
             ])
             ->defaultSort('name');

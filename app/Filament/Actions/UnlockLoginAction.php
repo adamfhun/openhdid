@@ -17,8 +17,10 @@ use Illuminate\Database\Eloquent\Model;
 /**
  * Lifts the lockout that repeated wrong passwords or SMS codes put on an
  * account (LoginLockout). Staff accounts need the user management, clients
- * the client management permission. While nothing is locked the button stays
- * in place, disabled, and says so.
+ * the client management permission. The button appears only while a lock is
+ * in force: it remedies a state, and the state itself is shown on the
+ * account (status badge, list column), so there is nothing to explain while
+ * nothing is locked.
  */
 class UnlockLoginAction
 {
@@ -30,10 +32,8 @@ class UnlockLoginAction
                 : __('Unlock login'))
             ->icon('heroicon-o-lock-open')
             ->color('warning')
-            ->visible(fn (Principal&Model $record): bool => self::allowed($record))
+            ->visible(fn (Principal&Model $record): bool => self::allowed($record) && self::lockedUntil($record) !== null)
             ->authorize(fn (Principal&Model $record): bool => self::allowed($record))
-            ->disabled(fn (Principal&Model $record): bool => self::lockedUntil($record) === null)
-            ->tooltip(fn (Principal&Model $record): ?string => self::lockedUntil($record) !== null ? null : __('The login of this account is not locked.'))
             ->requiresConfirmation()
             ->modalHeading(__('Unlock the login?'))
             ->modalDescription(__('The account was locked after repeated wrong passwords, SMS codes or second-factor codes. Unlocking lets it sign in again at once; the unlock is recorded in the audit log.'))
@@ -55,7 +55,7 @@ class UnlockLoginAction
     /**
      * The later end of the password (or SMS code) lock and the second-factor lock.
      */
-    private static function lockedUntil(Principal&Model $record): ?CarbonInterface
+    public static function lockedUntil(Principal&Model $record): ?CarbonInterface
     {
         $until = array_filter([
             $record->isLoginLocked() ? $record->locked_until : null,

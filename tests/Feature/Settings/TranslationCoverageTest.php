@@ -5,8 +5,10 @@ use Illuminate\Support\Facades\File;
 /**
  * Every sentence the panel or the server shows goes through __() with an
  * English key, and the Hungarian text has to be in lang/hu.json, or the
- * Hungarian interface shows English. Keys built at run time (a prefix ending
- * in a dot, completed with a value) are not literal sentences.
+ * Hungarian interface shows English. Keys built at run time (a prefix such
+ * as "permission." completed with a value) are not literal sentences; a
+ * sentence that merely ends with a full stop is, and is checked too
+ * (until 2026-10-23 every such sentence was skipped).
  */
 it('has a Hungarian translation for every literal interface sentence', function (): void {
     $translations = json_decode((string) file_get_contents(lang_path('hu.json')), true);
@@ -23,7 +25,9 @@ it('has a Hungarian translation for every literal interface sentence', function 
             foreach ($matches[1] as $key) {
                 $key = str_replace("\\'", "'", $key);
 
-                if (! str_ends_with($key, '.') && ! array_key_exists($key, $translations)) {
+                $isRuntimePrefix = str_ends_with($key, '.') && ! str_contains($key, ' ');
+
+                if (! $isRuntimePrefix && ! array_key_exists($key, $translations)) {
                     $missing[] = $key.' ('.$file->getRelativePathname().')';
                 }
             }

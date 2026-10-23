@@ -2,7 +2,6 @@
 
 namespace App\Filament\Admin\Resources\Users\Pages;
 
-use App\Filament\Actions\UnbindSsoAction;
 use App\Filament\Actions\UnlockLoginAction;
 use App\Filament\Admin\Resources\Users\UserResource;
 use App\Filament\Concerns\GuardsUnsavedChanges;
@@ -20,11 +19,14 @@ class EditUser extends EditRecord
 
     protected static string $resource = UserResource::class;
 
+    /**
+     * Unlock appears only while the login is locked; the sign-in binding's
+     * own button stands in the "Company sign-in binding" block of the form.
+     */
     protected function getHeaderActions(): array
     {
         return [
             UnlockLoginAction::make(),
-            UnbindSsoAction::make(),
             DeleteAction::make(),
             ForceDeleteAction::make(),
             RestoreAction::make(),

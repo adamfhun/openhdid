@@ -4,7 +4,7 @@ namespace App\Enums;
 
 /**
  * Second factors of staff sign-in. The administrator chooses which ones may
- * be used (Settings › User login), every staff member picks among those.
+ * be used (Settings › Staff sign-in), every staff member picks among those.
  */
 enum MfaMethod: string
 {

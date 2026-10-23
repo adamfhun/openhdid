@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Hash;
 use Livewire\Livewire;
@@ -18,11 +19,11 @@ it('lets an agent set a pin of any length between six and ten digits', function 
     $client = Client::factory()->synced()->withPhone()->create();
 
     Livewire::test(ViewClient::class, ['record' => $client->id])
-        ->callAction('setPin', ['pin' => '12345', 'send_sms' => false])
+        ->callAction(TestAction::make('setPin')->schemaComponent('pin_hash'), ['pin' => '12345', 'send_sms' => false])
         ->assertHasActionErrors(['pin']);
 
     Livewire::test(ViewClient::class, ['record' => $client->id])
-        ->callAction('setPin', ['pin' => '123456789', 'send_sms' => false])
+        ->callAction(TestAction::make('setPin')->schemaComponent('pin_hash'), ['pin' => '123456789', 'send_sms' => false])
         ->assertHasNoActionErrors();
 
     expect(Hash::check('123456789', $client->fresh()->pin_hash))->toBeTrue();
@@ -38,7 +39,7 @@ it('uses configured limits for the suggested and manually entered agent pin', fu
     ]);
     $client = Client::factory()->synced()->withPhone()->create();
 
-    $page = Livewire::test(ViewClient::class, ['record' => $client->id])->mountAction('setPin');
+    $page = Livewire::test(ViewClient::class, ['record' => $client->id])->mountAction(TestAction::make('setPin')->schemaComponent('pin_hash'));
     $suggestion = $page->get('mountedActions.0.data.pin');
     expect($suggestion)->toMatch('/^[0-9]{11}$/');
 
@@ -57,7 +58,7 @@ it('shows a field error when an agent selects an already assigned pin', function
     $client = Client::factory()->synced()->withPhone()->create();
 
     Livewire::test(ViewClient::class, ['record' => $client->id])
-        ->callAction('setPin', ['pin' => '123456', 'send_sms' => false])
+        ->callAction(TestAction::make('setPin')->schemaComponent('pin_hash'), ['pin' => '123456', 'send_sms' => false])
         ->assertHasActionErrors(['pin']);
 
     expect($client->fresh()->hasPin())->toBeFalse();

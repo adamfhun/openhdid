@@ -54,6 +54,8 @@ const RAW_HTML_ALLOWLIST = [
     'app/Filament/Admin/Widgets/FailedJobsWidget.php' => ['HtmlString' => 3],
     // The brand CSS is built from parsed colours, the favicon partial escapes its URLs.
     'app/Filament/BrandedPanel.php' => ['HtmlString' => 5],
+    // The readable view of a JSON request body: every token is e() escaped before it is wrapped (SettingsLayoutTest).
+    'app/Settings/JsonOverview.php' => ['HtmlString' => 6],
     // CommonMark with html_input=strip and allow_unsafe_links=false.
     'app/Models/NewsPost.php' => ['Str::markdown' => 1],
     // The HTML report is a Blade view with escaped output; "html" is the format method's name.

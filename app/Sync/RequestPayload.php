@@ -108,6 +108,18 @@ class RequestPayload
     }
 
     /**
+     * The payload with `{{ ids }}` outside quotes turned into the JSON string
+     * `$marker`, so that a display can parse and format the body and show
+     * the placeholder in the marker's place (settings page, readable view).
+     */
+    public static function markListPlaceholder(string $payload, string $marker): string
+    {
+        return self::replace($payload, fn (string $name, string $original, bool $quoted): string => ! $quoted && $name === self::LIST_PLACEHOLDER
+            ? (string) json_encode($marker)
+            : $original);
+    }
+
+    /**
      * Placeholders written outside quotes that are filled in as text only.
      *
      * @return list<string>

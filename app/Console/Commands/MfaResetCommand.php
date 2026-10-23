@@ -50,7 +50,7 @@ class MfaResetCommand extends Command
         if ($this->option('off')) {
             $settings->set(SettingKey::UserLoginMfaEnabled, false);
             $changes->record('mfa.switched_off_by_command', null, __('The command hdid:mfa-reset --off switched two-factor sign-in off for every staff member.'));
-            $this->info('Two-factor sign-in is off. Switch it on again under Settings › User login.');
+            $this->info('Two-factor sign-in is off. Switch it on again under Settings › Staff sign-in.');
         }
 
         return self::SUCCESS;

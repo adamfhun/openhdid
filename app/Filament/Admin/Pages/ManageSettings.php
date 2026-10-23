@@ -2,24 +2,27 @@
 
 namespace App\Filament\Admin\Pages;
 
-use App\Audit\AuditArchive;
 use App\Auth\Mfa\StaffMfa;
+use App\Auth\Oidc\OidcProvider;
 use App\Auth\Permission;
 use App\Clients\ClientLinks;
 use App\Clients\PackageListImpact;
 use App\Enums\ClientTier;
 use App\Enums\MfaMethod;
+use App\Enums\PrincipalType;
 use App\Filament\Actions\ExportTableAction;
 use App\Filament\Admin\Clusters\System;
 use App\Filament\Concerns\GuardsUnsavedChanges;
-use App\Identification\AnswerMatcher;
 use App\Identification\MobileOtpService;
 use App\Identification\PinService;
 use App\Models\Call;
 use App\Models\SyncIdListItem;
+use App\Settings\JsonOverview;
 use App\Settings\SettingKey;
 use App\Settings\SettingRules;
 use App\Settings\Settings;
+use App\Settings\SettingSection;
+use App\Settings\SettingTab;
 use App\Settings\SettingType;
 use App\Support\HuDate;
 use App\Sync\IdList;
@@ -43,12 +46,14 @@ use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Schemas\Components\Component;
 use Filament\Schemas\Components\EmbeddedTable;
+use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Text;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -57,6 +62,7 @@ use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
 use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Carbon;
@@ -207,22 +213,79 @@ class ManageSettings extends Page implements HasTable
         return $values;
     }
 
+    /**
+     * Seven tabs by the administrator's questions, each made of blocks that
+     * say where they act (SettingTab, SettingSection, 2026-10-23). A setting
+     * that only matters under a switch sits under it and shows while the
+     * switch is on; hidden, it is not sent and keeps its stored value.
+     */
     public function form(Schema $schema): Schema
     {
-        $tabs = collect(SettingKey::cases())
-            ->groupBy(fn (SettingKey $key) => $key->group())
-            ->map(fn ($keys, string $group) => Tab::make($keys->first()->groupLabel())
-                ->schema([
-                    ...$keys->map(fn (SettingKey $key) => $this->field($key))->all(),
-                    ...($group === 'sync' ? [$this->idListSection()] : []),
-                ])
-                ->columns(2))
-            ->values()
-            ->all();
+        $tabs = array_map(fn (SettingTab $tab): Tab => Tab::make($tab->label())->schema([
+            ...array_map(fn (SettingSection $section): Section => $this->section($section), $tab->sections()),
+            ...($tab === SettingTab::Directory ? [$this->idListSection()] : []),
+        ]), SettingTab::cases());
 
         return $schema
-            ->components([Tabs::make('settings')->tabs($tabs)->persistTabInQueryString()])
+            ->components([Tabs::make('settings')->tabs($tabs)->persistTabInQueryString()->extraAttributes(['class' => 'hdid-settings-tabs'])])
             ->statePath('data');
+    }
+
+    private function section(SettingSection $section): Section
+    {
+        $components = [];
+
+        foreach ($section->keys() as $key) {
+            if ($key->dependsOn() !== null) {
+                continue;
+            }
+
+            $components[] = $this->field($key);
+
+            if ($dependents = $key->dependents()) {
+                $components[] = Group::make(array_map(fn (SettingKey $dependent): Component => $this->field($dependent), $dependents))
+                    ->visible(fn (Get $get): bool => (bool) $get(static::fieldName($key)))
+                    ->extraAttributes(['class' => 'hdid-setting-dependents'])
+                    ->columnSpanFull();
+            }
+        }
+
+        $unused = $section->syncDriver() !== null && config('hdid.sync.driver') !== $section->syncDriver();
+
+        return Section::make($section->label())
+            ->description($section->where().($unused ? ' '.__('Not used: this installation reads EMD through another source (EMD_SYNC_DRIVER=:driver).', ['driver' => (string) config('hdid.sync.driver')]) : ''))
+            ->schema($components)
+            ->columns($section->columns())
+            ->inlineLabel($section->columns() === 1)
+            ->collapsible($unused)
+            ->collapsed($unused);
+    }
+
+    /**
+     * Every setting with where it is and the words it is found by, for the
+     * search box on top of the page: the label, the help and the details,
+     * the block and the tab, the key itself and the earlier label and tab.
+     * The values of the settings are not searched.
+     *
+     * @return list<array{key: string, master: ?string, tab: string, section: string, label: string, text: string}>
+     */
+    public function searchIndex(): array
+    {
+        return array_map(function (SettingKey $key): array {
+            $section = $key->section();
+
+            return [
+                'key' => $key->value,
+                'master' => $key->dependsOn()?->value,
+                'tab' => $section->tab()->label(),
+                'section' => $section->label(),
+                'label' => $key->label(),
+                'text' => implode(' ', array_filter([
+                    $key->label(), $section->label(), $section->tab()->label(), $key->help(), $key->details(), $key->unit(),
+                    $key->dependsOn()?->label(), ...$key->searchTerms(), ...$this->envKeysOf($key),
+                ])),
+            ];
+        }, SettingKey::cases());
     }
 
     /**
@@ -382,7 +445,7 @@ class ManageSettings extends Page implements HasTable
         foreach (SettingKey::cases() as $key) {
             if ($keyRules = SettingRules::for($key)) {
                 $rules[str_replace('.', '\\.', $key->value)] = $keyRules;
-                $labels[$key->value] = $key->groupLabel().' / '.$key->label();
+                $labels[$key->value] = $key->section()->tab()->label().' › '.$key->label();
             }
         }
 
@@ -770,19 +833,60 @@ class ManageSettings extends Page implements HasTable
     }
 
     /**
-     * A setting's field. While premium-only is switched on in the form, the
-     * standard level's settings say what they do now: the package list grants
-     * nothing, and the contacts are what a turned-away standard client sees
-     * on the portal's login page (so they stay editable).
+     * A setting's field with what every field shares: its help sentence,
+     * the finer points behind the info icon, the default it differs from,
+     * its unit, the installation status it depends on, and a marker the
+     * search box scrolls to. While premium-only is switched on in the form,
+     * the standard level's settings say what they do now: the package list
+     * grants nothing, and the contacts are what a turned-away standard
+     * client sees on the portal's login page (so they stay editable).
      */
     private function field(SettingKey $key): Component
     {
         $field = $this->baseField($key);
-        $premiumOnly = fn (Get $get): bool => (bool) $get(static::fieldName(SettingKey::PackagesPremiumOnly));
 
         if (! $field instanceof Field) {
             return $field;
         }
+
+        $field->extraFieldWrapperAttributes(['data-setting' => $key->value], merge: true);
+
+        // Tables and JSON bodies need the whole width: their label goes above them.
+        if ($field instanceof KeyValue || $field instanceof Repeater || $key->type() === SettingType::LongText) {
+            $field->inlineLabel(false);
+        }
+
+        if ($key->help() !== null) {
+            $field->helperText($key->help());
+        }
+
+        if ($key->details() !== null) {
+            $field->hintIcon(Heroicon::OutlinedInformationCircle, tooltip: $key->details())->hintColor('gray');
+        }
+
+        if ($this->showsDefault($key)) {
+            // The info icon shares the hint's colour: orange only while the default is shown.
+            $field->hint(fn (mixed $state): ?string => $this->defaultHint($key, $state))
+                ->hintColor(fn (mixed $state): string => $this->defaultHint($key, $state) === null ? 'gray' : 'warning');
+        }
+
+        if ($key->dependents() !== []) {
+            $field->live();
+        }
+
+        if ($key->unit() !== null && $field instanceof TextInput) {
+            $field->suffix($key->unit());
+        }
+
+        // The helper text lives in the same place under the field, so both go there together.
+        if (($status = $this->installationStatus($key)) !== null) {
+            $field->belowContent(array_values(array_filter([
+                $key->help() === null ? null : Text::make($key->help()),
+                Text::make($status['text'])->color($status['color'])->weight('medium'),
+            ])));
+        }
+
+        $premiumOnly = fn (Get $get): bool => (bool) $get(static::fieldName(SettingKey::PackagesPremiumOnly));
 
         if (in_array($key, [SettingKey::SupportStandardEmail, SettingKey::SupportStandardPhone, SettingKey::SupportStandardHours], true)) {
             return $field->helperText(fn (Get $get): ?string => $premiumOnly($get)
@@ -793,10 +897,172 @@ class ManageSettings extends Page implements HasTable
         if ($key === SettingKey::PackagesStandard) {
             return $field->helperText(fn (Get $get): string => $premiumOnly($get)
                 ? __('Grants nothing while only premium clients are served; it applies again once that is switched off.')
-                : __('Clients whose package is listed here get the standard portal. Clients in neither list cannot sign in.'));
+                : (string) $key->help());
         }
 
         return $field;
+    }
+
+    /**
+     * Settings with a meaningful default to compare with: switches, numbers,
+     * colours and short texts that have one.
+     */
+    private function showsDefault(SettingKey $key): bool
+    {
+        return in_array($key->type(), [SettingType::Boolean, SettingType::Integer, SettingType::Color], true)
+            || ($key->type() === SettingType::Text && $key->default() !== null);
+    }
+
+    /**
+     * "Default: 30 minutes" next to a setting whose value differs from the
+     * default; nothing while it holds the default.
+     */
+    private function defaultHint(SettingKey $key, mixed $state): ?string
+    {
+        $default = $key->type()->cast($key->default());
+        $value = $this->asStored($key, $state);
+
+        if ($key->type() === SettingType::Color ? strtolower((string) $value) === strtolower((string) $default) : $value === $default) {
+            return null;
+        }
+
+        $shown = match (true) {
+            is_bool($default) => $default ? __('on') : __('off'),
+            $key === SettingKey::CallsDefaultTier => ClientTier::tryFrom((string) $default)?->label() ?? (string) $default,
+            default => trim($default.' '.($key->unit() ?? '')),
+        };
+
+        return __('Default: :value', ['value' => $shown]);
+    }
+
+    /**
+     * What the installation provides for a switch that needs it: the SSO
+     * provider's keys, the SMS gateway. Null for other settings.
+     *
+     * @return array{text: string, color: string}|null
+     */
+    private function installationStatus(SettingKey $key): ?array
+    {
+        if (($sso = $this->ssoOf($key)) !== null) {
+            [$provider, $principal] = $sso;
+
+            return $provider->configFor($principal)->isConfigured()
+                ? ['text' => __('Set up in the installation.'), 'color' => 'success']
+                : ['text' => __('Missing in the installation: :keys. It can be switched on once these are filled in the .env file and the services are restarted.', ['keys' => implode(', ', $provider->envKeys($principal))]), 'color' => 'danger'];
+        }
+
+        if (in_array($key, [SettingKey::ClientLoginOtpSmsEnabled, SettingKey::PortalPhoneVerificationEnabled], true)) {
+            $driver = (string) config('hdid.sms.driver');
+
+            return $driver === 'log'
+                ? ['text' => __('No SMS gateway: SMS_DRIVER=log writes the text messages to the application log only.'), 'color' => 'warning']
+                : ['text' => __('SMS gateway connected (SMS_DRIVER=:driver).', ['driver' => $driver]), 'color' => 'success'];
+        }
+
+        return null;
+    }
+
+    /**
+     * The SSO provider and account type a switch turns on, or null.
+     *
+     * @return array{0: OidcProvider, 1: PrincipalType}|null
+     */
+    private function ssoOf(SettingKey $key): ?array
+    {
+        foreach (PrincipalType::cases() as $principal) {
+            foreach (OidcProvider::cases() as $provider) {
+                if ($provider->enabledSetting($principal) === $key) {
+                    return [$provider, $principal];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The .env keys a setting depends on, for the search.
+     *
+     * @return list<string>
+     */
+    private function envKeysOf(SettingKey $key): array
+    {
+        $sso = $this->ssoOf($key);
+
+        return match (true) {
+            $sso !== null => $sso[0]->envKeys($sso[1]),
+            in_array($key, [SettingKey::ClientLoginOtpSmsEnabled, SettingKey::PortalPhoneVerificationEnabled], true) => ['SMS_DRIVER'],
+            $key->section()->syncDriver() !== null => ['EMD_SYNC_DRIVER'],
+            default => [],
+        };
+    }
+
+    /**
+     * "Readable view" of a JSON request body: the text as it stands in the
+     * field (saved or not), formatted, coloured and with its placeholders
+     * marked. It only shows; the field and its saving are unchanged.
+     */
+    private function jsonOverviewAction(SettingKey $key): Action
+    {
+        return Action::make(lcfirst($key->name).'Overview')
+            ->label(__('Readable view'))
+            ->icon(Heroicon::OutlinedEye)
+            ->link()
+            ->modalHeading($key->label())
+            ->modalDescription(__('The text as it stands in the field now, saved or not; the field and its saving are unchanged.'))
+            ->modalContent(function () use ($key): View {
+                $text = (string) ($this->data[static::fieldName($key)] ?? '');
+
+                return view('filament.admin.settings.json-overview', [
+                    'overview' => JsonOverview::of(
+                        $text,
+                        $key === SettingKey::SyncExportPayload ? RequestPayload::EXPORT_PLACEHOLDERS : RequestPayload::ID_LIST_PLACEHOLDERS,
+                        $this->payloadSaveError($key, $text),
+                    ),
+                    'placeholders' => $this->placeholderNotes($key),
+                ]);
+            })
+            ->modalWidth(Width::FiveExtraLarge)
+            ->modalSubmitAction(false)
+            ->modalCancelActionLabel(__('Close'));
+    }
+
+    /**
+     * What saving this text would say against it (the same rules as Save),
+     * or null when it would be accepted.
+     */
+    private function payloadSaveError(SettingKey $key, string $text): ?string
+    {
+        if (trim($text) === '') {
+            return null;
+        }
+
+        $validator = Validator::make([$key->value => $text], [str_replace('.', '\\.', $key->value) => SettingRules::for($key)]);
+
+        if ($validator->fails()) {
+            return $validator->errors()->first();
+        }
+
+        return SettingRules::payloadErrors([$key->value => $text])[$key->value] ?? null;
+    }
+
+    /**
+     * What each placeholder of a request body stands for now.
+     *
+     * @return array<string, string>
+     */
+    private function placeholderNotes(SettingKey $key): array
+    {
+        $notes = ['now' => __('the time of sending in UTC, e.g. :example', ['example' => now()->utc()->format('Y-m-d\TH:i:s.000\Z')])];
+
+        if ($key === SettingKey::SyncExportPayload) {
+            $selected = app(IdList::class)->selectedIds();
+            $notes['ids'] = $selected === []
+                ? __('the selected IDs of the ID list; none is selected now, so the sync does not run')
+                : __(':n selected ID(s) of the ID list, e.g. :sample', ['n' => count($selected), 'sample' => implode(',', array_slice($selected, 0, 5)).(count($selected) > 5 ? ',…' : '')]);
+        }
+
+        return $notes;
     }
 
     private function baseField(SettingKey $key): Component
@@ -805,81 +1071,43 @@ class ManageSettings extends Page implements HasTable
         $label = $key->label();
 
         if ($key === SettingKey::PackagesPremiumOnly) {
-            return Toggle::make($name)->label($label)->inline(false)->live()->columnSpanFull()
-                ->helperText(__('On: only clients whose implicit or explicit package (or a temporary override) is on the premium list are served. Standard clients cannot sign in to the portal, the phone menu does not recognise them, and no staff view shows them; a thin bar on top of the panel says so. Nothing is deleted or closed, and the sync keeps importing them: switching off brings everything back. Switching on asks for confirmation with the number of clients affected.'));
+            return Toggle::make($name)->label($label)->inline(false)->live();
         }
 
         if ($key === SettingKey::SyncExportPayload || $key === SettingKey::SyncIdListPayload) {
-            return Textarea::make($name)->label($key === SettingKey::SyncExportPayload ? __('EMD export JSON payload') : $label)
-                ->rows($key === SettingKey::SyncExportPayload ? 16 : 8)->columnSpanFull()
+            return Textarea::make($name)->label($label)
+                ->rows($key === SettingKey::SyncExportPayload ? 16 : 8)
+                ->extraInputAttributes(['class' => 'font-mono text-sm'])
                 ->rules(SettingRules::for($key))
                 ->disabled(fn (): bool => ! $this->canManageSync())
                 ->dehydrated(fn (): bool => $this->canManageSync())
-                ->helperText($key === SettingKey::SyncExportPayload
-                    ? __('Complete JSON request body. Inside a text value, {{ now }} is replaced with the time of sending in UTC (e.g. 2026-09-28T12:03:15.000Z), and {{ ids }} with the selected IDs of the ID list below, comma-separated (e.g. "ids": "{{ ids }}" gives "3,12,40"). For a JSON list, write {{ ids }} without quotes between brackets: "ids": [{{ ids }}] gives [3,12,40] (all-digit IDs as numbers, others as text). Only staff who manage EMD sync can edit it.')
-                    : __('JSON request body of the ID list query (EMD_SYNC_ID_LIST_URL), sent with the export\'s token; {{ now }} works here too. Only staff who manage EMD sync can edit it.'));
+                ->hintAction($this->jsonOverviewAction($key));
         }
 
         if (in_array($key, [SettingKey::SyncIdListIdPath, SettingKey::SyncIdListNamePath, SettingKey::SyncIdListStatusPath], true)) {
             return TextInput::make($name)->label($label)->maxLength(200)->required($key !== SettingKey::SyncIdListStatusPath)
                 ->disabled(fn (): bool => ! $this->canManageSync())
                 ->dehydrated(fn (): bool => $this->canManageSync())
-                ->placeholder($key === SettingKey::SyncIdListStatusPath ? __('Empty: the HTTP status code') : null)
-                ->helperText(match ($key) {
-                    SettingKey::SyncIdListIdPath => __('Where the IDs are in the response, as a dotted path. A list is crossed by name (result.data.id reads data.id of every element of result) or with *. Default: result.data.id.'),
-                    SettingKey::SyncIdListNamePath => __('Where the names are, read the same way; an entry without a name shows its ID. Default: result.data.name.'),
-                    default => __('Where the status code is in the response body, e.g. statusCode. Empty: the HTTP status code of the response. The list is accepted only with a 2xx status.'),
-                });
+                ->placeholder($key === SettingKey::SyncIdListStatusPath ? __('Empty: the HTTP status code') : null);
+        }
+
+        if (($sso = $this->ssoOf($key)) !== null) {
+            [$provider, $principal] = $sso;
+
+            // Off and not set up: it cannot be switched on (the status line says
+            // what is missing). On but no longer set up: it can still be switched off.
+            return Toggle::make($name)->label($label)->inline(false)
+                ->disabled(fn (mixed $state): bool => ! $state && ! $provider->configFor($principal)->isConfigured());
         }
 
         return match ($key->type()) {
-            SettingType::Boolean => Toggle::make($name)->label($label)->inline(false)
-                ->helperText(match ($key) {
-                    SettingKey::PinUniqueRequired => __('Enabled: newly assigned PINs must be unique across clients, including closed accounts. Disabled: clients may share a PIN. Changing this setting does not alter existing PINs.'),
-                    SettingKey::PinClientChangesEnabled => __('Allows clients to set, replace and remove their own PIN. Disabled: only authorized staff can manage it. PIN uniqueness is controlled separately.'),
-                    SettingKey::SyncUniqueDomains => __('Enabled: a domain may appear in only one list. Disabled: shared domains are classified as staff. Domains are saved in lowercase; unlisted domains are skipped.'),
-                    SettingKey::ClientsListRelevantOnly => __('The Clients list opens with the relevant accounts only: portal access, closed, or any history (PIN, answers, calls, identifications, links, notes). EMD-only accounts stay reachable through the list filter and the search.'),
-                    SettingKey::ClientsUnlinkedBadge => __('Shows a red counter next to the Clients menu item with the number of explicit-premium clients that have no sponsor link yet. The tab on the list keeps its counter either way.'),
-                    SettingKey::PortalPhoneVerificationEnabled => __('The client confirms a number added on the portal with a code sent by SMS; needs a working SMS gateway. Off: the helpdesk confirms the number on the client page, or an identified call does when that switch is on. Unverified numbers rank below verified ones when a caller is matched.'),
-                    SettingKey::VerifyPhoneOnIdentifiedCall => __('A client identified on a call (by PIN, code, question and answer or manually) proves the number the call came from: their unverified copy of that number becomes verified. Off: numbers are verified by SMS code or by the helpdesk only.'),
-                    SettingKey::ClientLoginMagicLinkPreviewInPanel => __('On: after "Send a login link" the panel notification also shows the link itself, so a tester can sign in without the mailbox. Anyone who can send links can then sign in as the client: keep it off in production; the system status page warns while it is on. Debug mode shows the link regardless.'),
-                    SettingKey::ClientLoginOtpSmsEmailFallbackEnabled => __('On: when the SMS code did not arrive after the second send, the login page offers to e-mail a login link once. Works only while "Magic link enabled" is also on: with the e-mail link login off, this switch has no effect and the page says to contact support, as when the switch is off.'),
-                    SettingKey::UserLoginMfaEnabled => __('On: every staff sign-in (password, ADFS, Entra, remember-me cookie) asks for a second factor before anything in the panel opens, once per new session. Staff without a factor set one up at their next step; switching on applies to sessions already open too.'),
-                    SettingKey::UserLoginMfaTrustProvider => __('On: a company sign-on whose verified token proves that ADFS or Entra already asked for a second factor (amr claim) needs no other; the audit log records it. Off: HDID always asks for its own second factor.'),
-                    SettingKey::UserLoginRememberEnabled, SettingKey::ClientLoginRememberEnabled => __('On: a sign-in through single sign-on (and, for staff, the "Remember me" box of the password form) keeps the browser signed in for the days set below, beyond the session limit. Off: no remember-me cookie. The e-mail link and the SMS code never remember.'),
-                    SettingKey::QaBlindCheck => __('On: during question-and-answer identification the stored answer is hidden. The agent types what the caller says and the system compares it (case, accents, punctuation and spaces do not count, digits must be the same, a few typos are allowed as set below); the answer is shown only when it matches. A match accepts the question, a clearly different answer rejects it, a close one gets one retry and then counts as "cannot decide". The agent cannot accept or reject by hand, so the caller cannot be led to the answer. Off: the agent sees the stored answer and decides. A switch applies to sessions started afterwards.'),
-                    SettingKey::PortalSharedNumberNotice => __('On: the portal tells the client when one of their numbers is also on file for another client, so the phone menu cannot recognise them from it (the other client is never named). Off: the portal says nothing about it.'),
-                    default => null,
-                }),
+            SettingType::Boolean => Toggle::make($name)->label($label)->inline(false),
             SettingType::Integer => TextInput::make($name)->label($label)->numeric()->required()
                 ->minValue(match ($key) {
                     SettingKey::PinMinLength, SettingKey::PinMaxLength => PinService::MIN_ALLOWED_LENGTH,
                     SettingKey::MobileOtpLength, SettingKey::IvrCodeLength => MobileOtpService::MIN_LENGTH,
                     SettingKey::AgentAttemptsPerHour, SettingKey::QaMinAcceptedToPass, SettingKey::QaMaxQuestionsPerSession, SettingKey::QaMinAnsweredQuestionsRequired, SettingKey::QaMaxRejectedToFail, SettingKey::QaSessionTtlMinutes, SettingKey::MobileOtpTtlMinutes, SettingKey::ClientLoginMagicLinkTtlMinutes, SettingKey::ClientLoginOtpSmsTtlMinutes, SettingKey::PinMaxFailedAttempts, SettingKey::PinLockoutMinutes, SettingKey::UserLoginRememberDays, SettingKey::ClientLoginRememberDays, SettingKey::UserLoginSessionMaxHours, SettingKey::ClientLoginSessionMaxHours, SettingKey::UserLoginLockoutMaxAttempts, SettingKey::ClientLoginLockoutMaxAttempts, SettingKey::UserLoginLockoutMinutes, SettingKey::ClientLoginLockoutMinutes, SettingKey::SsoMobileTokenMaxAgeMinutes, SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute, SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour => 1,
                     default => 0,
-                })
-                ->helperText(match ($key) {
-                    SettingKey::ClientLoginMagicLinkTtlMinutes => __('In minutes; 720 = 12 hours.'),
-                    SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute => __('Login codes sent to one phone number per minute; the login page offers the next send after this interval. Keeps a flood of requests from running up the SMS bill. Other text messages are not limited.'),
-                    SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour => __('Login codes sent to one phone number per hour; beyond it no code goes out until the hour has passed (the request is refused silently and audited). The login page offers one re-send, then the e-mailed link or support.'),
-                    SettingKey::UserLoginRememberDays, SettingKey::ClientLoginRememberDays => __('How long a remembered sign-in lasts, in days.'),
-                    SettingKey::UserLoginSessionMaxHours, SettingKey::ClientLoginSessionMaxHours => __('A browser session ends this many hours after sign-in, however active it is; the idle limit of the session applies as well.'),
-                    SettingKey::UserLoginLockoutMaxAttempts => __('Wrong passwords in a row before the password login of the staff account is locked. Single sign-on stays usable.'),
-                    SettingKey::ClientLoginLockoutMaxAttempts => __('Wrong SMS codes in a row before the SMS login of the client is locked. Single sign-on and the e-mail link stay usable.'),
-                    SettingKey::UserLoginLockoutMinutes, SettingKey::ClientLoginLockoutMinutes => __('How long the lockout lasts, in minutes (120 = 2 hours). Staff with the user or client management permission can unlock it earlier on the account page.'),
-                    SettingKey::SsoMobileTokenMaxAgeMinutes => __('The Microsoft ID token of the mobile app is accepted once, and only within this many minutes of its issue.'),
-                    SettingKey::PinMinLength, SettingKey::PinMaxLength => __('Allowed PIN length when setting or replacing a PIN (:min–:max digits). Existing PINs remain valid. The phone menu checks the PIN only for callers recognised by a registered number, so a PIN needs a phone number.', ['min' => PinService::MIN_ALLOWED_LENGTH, 'max' => PinService::MAX_ALLOWED_LENGTH]),
-                    SettingKey::IvrCodeLength => __('Length of new IVR codes requested by the mobile app backend (8–12 digits), independent of the portal one-time identification code.'),
-                    SettingKey::MobileOtpLength => __('Digits of the one-time identification code; shown in pairs, the second digit of a pair is never zero.'),
-                    SettingKey::AgentAttemptsPerHour => __('Failed code and PIN checks one agent may run in an hour; successful checks do not count.').' '.__('Answers of the blind question-and-answer check that do not match count as well.'),
-                    SettingKey::QaTypoTolerance => __('Blind check only: how many typos (a letter swapped, missing or extra, or two neighbours swapped) still match, 0–:max. Answers shorter than :short characters must match exactly, and digits always.', ['max' => AnswerMatcher::MAX_TOLERANCE, 'short' => AnswerMatcher::EXACT_BELOW]),
-                    SettingKey::SyncMinRowsRatioPercent => __('A run is refused when it reads fewer rows than this share of the previous successful run (0 = off). Protects against a truncated export closing accounts.'),
-                    SettingKey::SyncExpectedIntervalHours => __('How often EMD sync is expected to run; the status page fails when no successful run happened in twice this time.'),
-                    SettingKey::RetentionGeneralYears => __('Identification sessions, calls, outbound messages, EMD sync runs and the audit archive files older than this are deleted for good.'),
-                    SettingKey::RetentionShortLivedYears => __('Expired one-time codes, uploaded EMD files and the EMD change records of sync runs older than this are deleted.'),
-                    SettingKey::RetentionAuditHotDays => __('Audit entries older than this many days (at least :min) are moved by the nightly task from the database into daily compressed archive files (Audit archive page) and deleted from the database; the archive is kept for the general retention period.', ['min' => AuditArchive::MIN_HOT_DAYS]),
-                    SettingKey::CallsStaleAfterHours => __('A call whose end the call center never reported (lost event, PBX restart) is closed as missed after this many hours, so it does not stay on the dashboard forever.'),
-                    default => null,
                 }),
             // A removed or replaced image is deleted from the disk once the change
             // is saved (replacedImages), never while the form is still open: a
@@ -888,29 +1116,22 @@ class ManageSettings extends Page implements HasTable
                 ->maxSize(4096)->imagePreviewHeight('120')->columnSpan(1),
             SettingType::Text => match ($key) {
                 SettingKey::CallsDefaultTier => Select::make($name)->label($label)->required()->native(false)
-                    ->options(collect(ClientTier::cases())->mapWithKeys(fn (ClientTier $t) => [$t->value => $t->label()])->all())
-                    ->helperText(__('The level a call gets when its queue is not listed below and the caller is unknown. While only the premium call center is connected, leave it on premium.')),
-                default => TextInput::make($name)->label($label)->maxLength(500)->helperText(match ($key) {
-                    SettingKey::SyncCsvEncoding => __('Character set of uploaded CSV files, e.g. UTF-8, Windows-1250 or ISO-8859-2.'),
-                    default => null,
-                }),
+                    ->options(collect(ClientTier::cases())->mapWithKeys(fn (ClientTier $t) => [$t->value => $t->label()])->all()),
+                default => TextInput::make($name)->label($label)->maxLength(500),
             },
             SettingType::Color => ColorPicker::make($name)->label($label)->required()->hex(),
-            SettingType::LongText => Textarea::make($name)->label($label)->rows(5)->columnSpanFull()
-                ->helperText($key === SettingKey::PortalFooterText ? __('Shown at the bottom of the client site; line breaks are kept.') : null),
+            SettingType::LongText => Textarea::make($name)->label($label)->rows(5),
             SettingType::Json => match ($key) {
-                SettingKey::SyncColumnMapping => KeyValue::make($name)->label($label)->keyLabel(__('Field'))->valueLabel(__('Source column'))->columnSpanFull()
-                    ->editableKeys(false)->addable(false)->deletable(false)->reorderable(false)
-                    ->helperText(__('Use exact source headings. For phones, list all phone column headings separated by commas, e.g. Mobile phone, Office phone. Each cell may also contain several comma-separated numbers. All numbers are normalized and deduplicated. Empty mappings use the field name.')),
+                SettingKey::SyncColumnMapping => KeyValue::make($name)->label($label)->keyLabel(__('Field'))->valueLabel(__('Source column'))
+                    ->editableKeys(false)->addable(false)->deletable(false)->reorderable(false),
                 SettingKey::UserLoginMfaMethods => CheckboxList::make($name)->label($label)
                     ->options(collect(MfaMethod::cases())->mapWithKeys(fn (MfaMethod $method): array => [$method->value => $method->label()])->all())
                     ->disableOptionWhen(fn (string $value): bool => $value === MfaMethod::Sms->value && ! StaffMfa::smsAvailable())
                     ->helperText(fn (): string => __('The second factors staff may choose from: an authenticator app (RFC 6238 codes with a QR code, e.g. Google Authenticator), an SMS code to a mobile number of their EMD record, an e-mail code to their account address.')
                         .(StaffMfa::smsAvailable() ? '' : ' '.__('SMS is not available: no SMS gateway is connected (SMS_DRIVER=log).'))),
-                SettingKey::ClientsDirectoryFields => KeyValue::make($name)->label($label)->keyLabel(__('EMD column'))->valueLabel(__('Label shown'))->columnSpanFull()
-                    ->reorderable()
-                    ->helperText(__('Columns of EMD that are not mapped to a fixed field arrive as "other columns" of the EMD record. List here the ones the helpdesk should see on the client page and list and be able to export; the key is the column header as EMD sends it, the value is the label shown.')),
-                SettingKey::CallsQueueTiers => Repeater::make($name)->label($label)->columnSpanFull()
+                SettingKey::ClientsDirectoryFields => KeyValue::make($name)->label($label)->keyLabel(__('EMD column'))->valueLabel(__('Label shown'))
+                    ->reorderable(),
+                SettingKey::CallsQueueTiers => Repeater::make($name)->label($label)
                     ->schema([
                         Select::make('queue')->label(__('Call queue'))->required()->searchable()->native(false)
                             ->options(fn () => static::knownQueues())
@@ -927,21 +1148,13 @@ class ManageSettings extends Page implements HasTable
                     ->columns(2)
                     ->addActionLabel(__('Add a call queue'))
                     ->reorderable(false)
-                    ->defaultItems(0)
-                    ->helperText(__('One phone number is one call queue. Only needed once a second call center (the standard line) is connected; queues not listed here get the default level below.')),
+                    ->defaultItems(0),
                 SettingKey::PackagesPremium, SettingKey::PackagesStandard => TagsInput::make($name)->label($label)
-                    ->placeholder(__('Add a package name and press enter'))
-                    ->helperText($key === SettingKey::PackagesPremium
-                        ? __('Clients whose implicit or explicit package is listed here get the premium portal. Matching ignores case, accents and extra spaces.')
-                        : __('Clients whose package is listed here get the standard portal. Clients in neither list cannot sign in.')),
+                    ->placeholder(__('Add a package name and press enter')),
                 SettingKey::SyncUserDomains, SettingKey::SyncClientDomains => TagsInput::make($name)->label($label)
                     ->live()->formatStateUsing(fn ($state) => SettingRules::normalizeDomains((array) $state))
                     ->afterStateUpdated(fn (TagsInput $component, $state) => $component->state(SettingRules::normalizeDomains((array) $state)))
-                    ->placeholder(__('Add a domain and press enter'))
-                    ->helperText(match ($key) {
-                        SettingKey::SyncUserDomains => __('Rows with these e-mail domains become staff users.'),
-                        default => __('Rows with these e-mail domains become clients.'),
-                    }),
+                    ->placeholder(__('Add a domain and press enter')),
                 default => TagsInput::make($name)->label($label),
             },
         };

@@ -13,6 +13,8 @@ use App\Models\MessageTemplate;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\Settings\SettingSection;
+use App\Settings\SettingTab;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Storage;
@@ -38,7 +40,8 @@ it('remembers the saved form and names every field with its tab', function (): v
     $domains = ManageSettings::fieldName(SettingKey::SyncUserDomains);
     $page = Livewire::test(ManageSettings::class);
 
-    expect($page->get('unsavedLabels')[$domains])->toBe(['label' => SettingKey::SyncUserDomains->label(), 'group' => SettingKey::SyncUserDomains->groupLabel()])
+    // The group is the tab (its dot marks a change), the section the block within it.
+    expect($page->get('unsavedLabels')[$domains])->toBe(['label' => SettingKey::SyncUserDomains->label(), 'group' => SettingTab::Directory->label(), 'section' => SettingSection::DirectoryClassification->label()])
         ->and($page->instance()->isUnchangedSinceSaved())->toBeTrue();
 
     $page->fillForm([$domains => ['domain.com']]);

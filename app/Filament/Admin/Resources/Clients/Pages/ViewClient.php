@@ -3,10 +3,6 @@
 namespace App\Filament\Admin\Resources\Clients\Pages;
 
 use App\Audit\Auditor;
-use App\Filament\Actions\SendMagicLinkAction;
-use App\Filament\Actions\SetPinAction;
-use App\Filament\Actions\UnbindSsoAction;
-use App\Filament\Actions\UnlockLoginAction;
 use App\Filament\Actions\WrapUpNoteAction;
 use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Identification\CurrentIdentification;
@@ -24,6 +20,8 @@ use Filament\Schemas\Schema;
  * client (AZO-07), an "Identified" bar heads the page with the method, the
  * time and the call, and leaving the page asks first while the call is in
  * progress; the header's "Identified client" button leads back from anywhere.
+ * The header keeps Identify and Edit only; every other button stands next to
+ * the data it acts on (ClientResource::infolist).
  */
 class ViewClient extends ViewRecord
 {
@@ -76,15 +74,6 @@ class ViewClient extends ViewRecord
     {
         return [
             ClientResource::identifyAction(),
-            ClientResource::linkToSponsorAction(),
-            ClientResource::muteLinkWarningAction(),
-            ClientResource::unmuteLinkWarningAction(),
-            SetPinAction::make(),
-            SendMagicLinkAction::make(),
-            UnlockLoginAction::make(),
-            UnbindSsoAction::make(),
-            ClientResource::overrideAction(),
-            ClientResource::endOverrideAction(),
             EditAction::make(),
         ];
     }

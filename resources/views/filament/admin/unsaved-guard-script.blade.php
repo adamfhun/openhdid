@@ -86,7 +86,7 @@
             return [...new Set(this.dirtyKeys().map((key) => {
                 const item = labels[key];
 
-                return item ? (item.group ? `${item.group} › ${item.label}` : item.label) : key;
+                return item ? [item.group, item.section, item.label].filter(Boolean).join(' › ') : key;
             }))];
         },
 

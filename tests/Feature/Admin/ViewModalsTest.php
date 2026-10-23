@@ -28,15 +28,15 @@ it('offers ending the override instead of setting one while an override is in fo
     $client = Client::factory()->synced()->unentitled()->create();
 
     Livewire::test(ViewClient::class, ['record' => $client->id])
-        ->assertActionVisible('overridePackage')
-        ->assertActionHidden('endOverride')
-        ->callAction('overridePackage', ['package' => 'Premium', 'reason' => 'Hibajegy 123', 'until' => now()->addDays(10)->toDateString()])
+        ->assertActionVisible(TestAction::make('overridePackage')->schemaComponent('package_override'))
+        ->assertActionDoesNotExist(TestAction::make('endOverride')->schemaComponent('package_override'))
+        ->callAction(TestAction::make('overridePackage')->schemaComponent('package_override'), ['package' => 'Premium', 'reason' => 'Hibajegy 123', 'until' => now()->addDays(10)->toDateString()])
         ->assertHasNoActionErrors()
-        ->assertActionHidden('overridePackage')
-        ->assertActionVisible('endOverride')
-        ->callAction('endOverride')
-        ->assertActionVisible('overridePackage')
-        ->assertActionHidden('endOverride');
+        ->assertActionDoesNotExist(TestAction::make('overridePackage')->schemaComponent('package_override'))
+        ->assertActionVisible(TestAction::make('endOverride')->schemaComponent('package_override'))
+        ->callAction(TestAction::make('endOverride')->schemaComponent('package_override'))
+        ->assertActionVisible(TestAction::make('overridePackage')->schemaComponent('package_override'))
+        ->assertActionDoesNotExist(TestAction::make('endOverride')->schemaComponent('package_override'));
 
     expect($client->fresh()->package_override)->toBeNull();
 });

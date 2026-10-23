@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Actions\Testing\TestAction;
 use Illuminate\Support\Facades\Cache;
 use Livewire\Livewire;
 
@@ -63,21 +64,23 @@ it('links a dependent client to a sponsor from its own record and keeps the over
     $waiting = Client::factory()->synced()->create(['name' => 'Váró Vilmos', 'implicit_package' => 'Basic', 'explicit_package' => 'Premium']);
 
     Livewire::test(ViewClient::class, ['record' => $waiting->getKey()])
-        ->assertActionVisible('linkToSponsor')
-        ->callAction('linkToSponsor', ['sponsor_id' => $sponsor->id])
+        ->assertActionVisible(TestAction::make('linkToSponsor')->schemaComponent('sponsor'))
+        ->callAction(TestAction::make('linkToSponsor')->schemaComponent('sponsor'), ['sponsor_id' => $sponsor->id])
         ->assertHasNoActionErrors()
-        ->assertActionHidden('linkToSponsor');
+        ->assertActionDoesNotExist(TestAction::make('linkToSponsor')->schemaComponent('sponsor'));
 
     expect($waiting->fresh()->sponsor()?->id)->toBe($sponsor->id);
 
     // The sponsor is premium by directory: the override button stays, greyed out with the reason.
     Livewire::test(ViewClient::class, ['record' => $sponsor->getKey()])
-        ->assertActionHidden('linkToSponsor')
-        ->assertActionVisible('overridePackage')
-        ->assertActionDisabled('overridePackage');
+        ->assertActionDoesNotExist(TestAction::make('linkToSponsor')->schemaComponent('sponsor'))
+        ->assertActionVisible(TestAction::make('overridePackage')->schemaComponent('package_override'))
+        ->assertActionDisabled(TestAction::make('overridePackage')->schemaComponent('package_override'));
 
-    // A standard client can still be raised, so the button is live there.
+    // A standard client can still be raised, so the button is live there; and
+    // without an explicit premium package it has nothing to be linked for (2026-10-23).
     $basic = Client::factory()->synced()->create(['name' => 'Alap Aladár', 'implicit_package' => 'Basic', 'explicit_package' => null]);
     Livewire::test(ViewClient::class, ['record' => $basic->getKey()])
-        ->assertActionEnabled('overridePackage');
+        ->assertActionEnabled(TestAction::make('overridePackage')->schemaComponent('package_override'))
+        ->assertActionDoesNotExist(TestAction::make('linkToSponsor')->schemaComponent('sponsor'));
 });

@@ -26,9 +26,11 @@ trait GuardsUnsavedChanges
     public string $unsavedBaseline = '';
 
     /**
-     * What each top-level form key is called on screen, for the dialog.
+     * What each top-level form key is called on screen, for the dialog: the
+     * field, the tab it is on (whose dot marks a change) and the block
+     * within the tab.
      *
-     * @var array<string, array{label: string, group: ?string}>
+     * @var array<string, array{label: string, group: ?string, section: ?string}>
      */
     #[Locked]
     public array $unsavedLabels = [];
@@ -144,10 +146,11 @@ trait GuardsUnsavedChanges
     }
 
     /**
-     * The on-screen name of each top-level form key: the field's label and
-     * the nearest tab or section around it.
+     * The on-screen name of each top-level form key: the field's label, the
+     * tab around it and the block within that tab; on a page without tabs
+     * the group is the nearest block.
      *
-     * @return array<string, array{label: string, group: ?string}>
+     * @return array<string, array{label: string, group: ?string, section: ?string}>
      */
     protected function unsavedChangeLabels(): array
     {
@@ -161,29 +164,33 @@ trait GuardsUnsavedChanges
                 continue;
             }
 
-            $labels[$key] = ['label' => trim(strip_tags((string) $field->getLabel())), 'group' => $this->unsavedGroupOf($field)];
+            $labels[$key] = ['label' => trim(strip_tags((string) $field->getLabel())), ...$this->unsavedPlaceOf($field)];
         }
 
         return $labels;
     }
 
-    private function unsavedGroupOf(Field $field): ?string
+    /**
+     * @return array{group: ?string, section: ?string}
+     */
+    private function unsavedPlaceOf(Field $field): array
     {
+        $section = null;
         $parent = $field->getContainer()->getParentComponent();
 
         while ($parent !== null) {
             if ($parent instanceof Tab) {
-                return trim(strip_tags((string) $parent->getLabel()));
+                return ['group' => trim(strip_tags((string) $parent->getLabel())), 'section' => $section];
             }
 
-            if ($parent instanceof Section && filled($heading = $parent->getHeading())) {
-                return trim(strip_tags((string) $heading));
+            if ($section === null && $parent instanceof Section && filled($heading = $parent->getHeading())) {
+                $section = trim(strip_tags((string) $heading));
             }
 
             $parent = $parent->getContainer()->getParentComponent();
         }
 
-        return null;
+        return ['group' => $section, 'section' => null];
     }
 
     private function unsavedState(): string

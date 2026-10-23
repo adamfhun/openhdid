@@ -4,6 +4,40 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.13.0] – 2026-10-24
+
+### Magyar
+Szabályváltozások egy mondatban (a specifikáció azonosítóival):
+- NYT-06, ADM-01.2: főügyfélhez csak az az ügyfél kapcsolható, aki az ügyféltörzs explicit csomagja alapján prémium, saját implicit prémium csomag nélkül (a főügyfél kérésére kapott explicit csomag esete); implicit normál, explicit üres ügyfélnél a kapcsolásnak nincs funkciója, ezért a gomb és a főügyfél fülének keresője sem kínálja, a szolgáltatás elutasítja. A meglévő kapcsolatok nem változnak.
+- ADM-01: az ügyféladatlap fejlécében csak az Azonosítás és a Szerkesztés gomb marad; minden más művelet annak az adatnak a sorában áll, amiről szól (PIN beállítása és törlése a PIN mellett, fiók lezárása, újranyitása és a zárolás feloldása az Állapot mellett, főügyfélhez kapcsolás és a figyelmeztetés elrejtése a „Kapcsolva ehhez” mellett, belépési link az Utolsó belépés mellett, kötés törlése a Belépési kötés mellett). Az adatok öt blokkban: Ügyfél, Azonosítás, Csomagok és szint, Belépés, Ügyféltörzs (EMD); az ügyfélszolgálati vonal alapból összecsukva.
+- ADM-01, BEL-00.2, BEL-04.1: az állapotot elhárító gombok (Zárolás feloldása, Belépési kötés törlése) csak az adott állapotban jelennek meg, az ügyfélnél és a munkatársnál is; a belépés zárolását az Állapot jelvény pirossal mondja, a PIN zárolását a PIN jelvény, az ügyféltörzs-tétel hiányzását vagy a következő átvételnél várható lezárást a Külső azonosító alatti sor (külön „Hiányzik ekkortól” és „PIN zárolva eddig” mező nincs többé).
+- ADM-01: a belső megjegyzés kitöltve sárga dobozban áll, és az adatlapon közvetlenül hozzáadható, szerkeszthető; az ügyféltörzs megtekintésére jogosult a Külső azonosító mellől megnyithatja a tételt; az ügyféllista sormenüje két csoportra válik (napi és adminisztratív műveletek).
+- ÜZ-01: a Beállítások oldal tizenhárom, a belső kulcsnevek szerinti füle helyett hét fül a rendszergazda kérdései szerint (Ügyfelek és szintek, Azonosítás, Ügyfélportál, Munkatársi belépés, Ügyféltörzs (EMD), Megjelenés, Üzemeltetés és megőrzés), fülönként blokkok „Hol hat” sorral; egyetlen beállítás és tárolt érték sem változott. A csak egy kapcsoló mellett számító beállítások a kapcsoló alatt, csak bekapcsolva látszanak (elrejtve a tárolt érték megmarad); a mértékegység a mezőben, a részletek egy „i” jel mögött, az alapértéktől eltérő érték „alap: …” jelzéssel; a céges belépés és az SMS-átjárót kívánó kapcsolók alatt a telepítési állapot (a céges belépés hiányzó kulcsokkal nem kapcsolható be, a sor megnevezi őket; `SMS_DRIVER=log` mellett sárga figyelmeztetés). Új kereső minden fülön (név, magyarázat, blokk, fül, belső kulcs, korábbi felirat, telepítési kulcs; értékekben nem). A két JSON-kéréstörzs mellé csak megjelenítő „Áttekinthető nézet” került (formázva, színezve, a helyőrzők kiemelve, a mentés ítéletével). A nem mentett módosítás „fül › blokk › beállítás” alakban jelenik meg.
+
+**Frissítés előtt:** migráció nincs; új telepítési kulcs nincs.
+
+Részletek:
+- A munkatársi belépés zárolási számai (hibás jelszó vagy kód) nem kerültek a jelszavas belépés kapcsolója alá, mert a kétlépcsős belépés hibás kódjaira is vonatkoznak; a feliratuk ezt ki is mondja.
+- Az ügyféladatlap és a Beállítások oldal telefonos szélességen is vízszintes görgetés nélkül használható.
+- Függőségek, biztonsági javítás: Livewire 4.4.8 (PKSA-xhv3-nr94-h8db, jogosultság-ellenőrzés megkerülése az `#[Authorize]` attribútumnál; a HDID nem használja, de a javított verzió megy ki).
+- A dokumentumok verziója 1.13.0.
+
+### English
+Rule changes in one sentence (with the specification identifiers):
+- NYT-06, ADM-01.2: only a client who is premium through the directory's explicit package, without an implicit premium package of their own (the explicit package granted at a sponsor's request), can be linked to a sponsor; for a client with a standard implicit package and no explicit package a link has no function, so neither the button nor the sponsor's tab offers it and the service refuses it. Existing links are untouched.
+- ADM-01: the client page header keeps Identify and Edit only; every other action stands in the row of the data it acts on (Set and Clear PIN next to the PIN, Close, Reopen and Unlock next to the Status, Link to a sponsor and Mute warning next to "Linked to", Send login link next to Last login, Clear binding next to the Sign-in binding). The data is grouped in five blocks: Client, Identification, Packages and level, Sign-in, EMD data; the support line is collapsed by default.
+- ADM-01, BEL-00.2, BEL-04.1: buttons that remedy a state (Unlock login, Clear sign-in binding) appear only while the state holds, for clients and staff alike; the sign-in lock shows in red on the Status badge, the PIN lock on the PIN badge, a missing EMD record or a closure due at the next sync in the line under the External id (the separate "Missing since" and "PIN locked until" entries are gone).
+- ADM-01: a filled internal note stands in a yellow box and can be added or edited on the record page directly; whoever may view the directory can open the EMD record from next to the External id; the client list's row menu is split into two groups (everyday and administrative actions).
+- ÜZ-01: the Settings page has seven tabs by the administrator's questions instead of thirteen by the internal key names (Clients and levels, Identification, Client portal, Staff sign-in, EMD data, Appearance, Operations and retention), each made of blocks with a "Where it acts" line; no setting and no stored value changed. Settings that only matter under a switch show under it while it is on (hidden, the stored value is kept); units sit in the field, the finer points behind an info icon, a value that differs from the default says so; the company sign-in switches and the switches that need the SMS gateway show the installation status (company sign-in cannot be switched on with keys missing, the line names them; `SMS_DRIVER=log` gives a yellow warning). A new search covers every tab (label, help, block, tab, internal key, earlier label, deployment keys; not the values). The two JSON request bodies get a display-only "Readable view" (formatted, coloured, placeholders marked, with Save's verdict). Unsaved changes are named as "tab › block › setting".
+
+**Before upgrading:** no migration; no new deployment key.
+
+Details:
+- The staff sign-in lockout numbers (wrong password or code) did not move under the password sign-in switch, because they also count wrong second-factor codes; their label now says so.
+- The client page and the Settings page work at phone width without horizontal scrolling.
+- Dependencies, security fix: Livewire 4.4.8 (PKSA-xhv3-nr94-h8db, authorization bypass in the `#[Authorize]` attribute; HDID does not use it, but ships the fixed version).
+- The documents carry version 1.13.0.
+
 ## [1.12.0] – 2026-10-23
 
 ### Magyar

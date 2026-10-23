@@ -21,6 +21,7 @@ use App\Settings\Settings;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -296,7 +297,7 @@ it('clears the binding from the users list under the user policy and binds anew 
     Filament::setCurrentPanel('admin');
 
     Livewire::test(ListUsers::class)
-        ->assertTableActionDisabled('unbindSso', $unbound)
+        ->assertTableActionHidden('unbindSso', $unbound)
         ->assertTableActionHidden('unbindSso', $superAdmin)
         ->callTableAction('unbindSso', $user)
         ->assertNotified();
@@ -322,7 +323,7 @@ it('clears a client binding from the record page and shows the binding there', f
     Livewire::test(ViewClient::class, ['record' => $client->getRouteKey()])
         ->assertSee(__('Microsoft login'))
         ->assertSee('the binding refused 2 sign-in(s)')
-        ->callAction('unbindSso')
+        ->callAction(TestAction::make('unbindSso')->schemaComponent('sso_bindings'))
         ->assertNotified();
 
     expect($client->ssoIdentities()->count())->toBe(0)
