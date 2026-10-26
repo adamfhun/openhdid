@@ -4,6 +4,20 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.14.1] – 2026-10-26
+
+### Magyar
+- Biztonsági javítóverzió: a PHP munkamenet-feltöltési folyamatjelzője ki van kapcsolva (`session.upload_progress.enabled = 0` az image `php.ini`-jében, a PHP-FPM-poolban rögzítve, az alkalmazás sem kapcsolhatja vissza), a PHP 2026. október 21-i és 23-i biztonsági közleményeinek (CVE-2026-109619, CVE-2026-115560) mitigációs ajánlása szerint. Az image PHP 8.5.12-je már javított; ez kiegészítő védelem, amíg a következő PHP-javítás meg nem jelenik. Az alkalmazás a funkciót nem használja (a munkameneteket a Laravel kezeli), mellékhatása nincs. A webes kérés memóriakorlátja változatlanul 128M, a parancssori folyamatoké 256M (soha nem korlátlan).
+- A dokumentumok verziója 1.14.1.
+
+**Frissítés előtt:** migráció nincs, új telepítési kulcs nincs; a frissítés az 1.14.0 `UPGRADE.md` lépései szerint (az 1.13.1-ről érdemes közvetlenül erre a verzióra frissíteni). Hagyományos telepítésen ugyanezt a PHP-FPM `php.ini`-jében és poolfájljában kell beállítani, majd az FPM-et újraindítani (telepítési útmutató 4.3).
+
+### English
+- Security patch release: the PHP session upload progress tracking is off (`session.upload_progress.enabled = 0` in the image's `php.ini`, locked in the PHP-FPM pool so the application cannot switch it back on), following the mitigation of the PHP security advisories of 21 and 23 October 2026 (CVE-2026-109619, CVE-2026-115560). The image's PHP 8.5.12 is already fixed; this is an extra safeguard until the next PHP fix release. The application does not use the feature (Laravel keeps its own sessions), so nothing changes in operation. The memory limit of a web request stays 128M, that of the command-line processes 256M (never unlimited).
+- The documents carry version 1.14.1.
+
+**Before upgrading:** no migration, no new deployment key; upgrade with the steps of the 1.14.0 `UPGRADE.md` (from 1.13.1, upgrade straight to this version). On a classic installation set the same in the PHP-FPM `php.ini` and pool file and restart PHP-FPM (installation guide 4.3).
+
 ## [1.14.0] – 2026-10-26
 
 ### Magyar
