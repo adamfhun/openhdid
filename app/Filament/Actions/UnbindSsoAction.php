@@ -4,6 +4,7 @@ namespace App\Filament\Actions;
 
 use App\Auth\Contracts\Principal;
 use App\Auth\Oidc\SsoSubjectBinding;
+use App\Filament\Admin\Resources\Users\UserResource;
 use App\Models\SsoIdentity;
 use App\Support\HuDate;
 use Filament\Actions\Action;
@@ -26,8 +27,11 @@ class UnbindSsoAction
             ->label(__('Clear sign-in binding'))
             ->icon('heroicon-o-link-slash')
             ->color('warning')
-            ->visible(fn (Principal&Model $record): bool => self::allowed($record) && $record->ssoIdentities->isNotEmpty())
+            ->visible(fn (Principal&Model $record): bool => self::permitted($record) && $record->ssoIdentities->isNotEmpty())
             ->authorize(fn (Principal&Model $record): bool => self::allowed($record))
+            // A stronger staff account keeps its binding shown, the button greyed out with the reason.
+            ->authorizationTooltip()
+            ->authorizationMessage(fn (Principal&Model $record): ?string => UserResource::manageRefusal($record))
             ->requiresConfirmation()
             ->modalHeading(fn (Principal&Model $record): string => __('Clear the sign-in binding of :name?', ['name' => $record->getAttribute('name')]))
             ->modalDescription(fn (Principal&Model $record): string => __('The account is bound to the directory identity of its company sign-in (:providers). Clearing it lets the next company sign-in under this account\'s e-mail address or employee id bind the account to whatever identity it then comes from; do this only once you know why the identity changed (a re-created directory account, a replaced registration). The account is not signed out and its second factor is untouched. Recorded in the audit log.', ['providers' => self::summary($record)]))
@@ -79,5 +83,14 @@ class UnbindSsoAction
     private static function allowed(Principal&Model $record): bool
     {
         return auth()->user()?->can('update', $record) ?? false;
+    }
+
+    /**
+     * Allowed, or a staff account the editor manages users for but may not
+     * change (a stronger one): the button is then shown greyed out.
+     */
+    private static function permitted(Principal&Model $record): bool
+    {
+        return self::allowed($record) || UserResource::manageRefusal($record) !== null;
     }
 }

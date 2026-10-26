@@ -99,7 +99,7 @@ class JsonApiReader implements SourceReader
                 }
 
                 $flat = Arr::dot($row) + $row;
-                yield ExternalRecordDto::fromRow($flat, $this->mapping) ?? SkippedRow::fromRow(SkippedRow::REASON_INVALID_ROW, $flat, $this->mapping);
+                yield ExternalRecordDto::fromRowOrSkip($flat, $this->mapping);
             }
 
             if ($page >= self::MAX_PAGES) {

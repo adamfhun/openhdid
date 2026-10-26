@@ -24,7 +24,8 @@ use Illuminate\Support\Facades\DB;
 /**
  * State machine for a question-and-answer identification session.
  *
- *  - start: snapshot the rules, open the session
+ *  - start: snapshot the rules, open the session (unless the client had
+ *    too many unsuccessful sessions lately, QaRetryLimit)
  *  - next: reveal one random, not yet shown, usable answer to the agent
  *  - decide: record the agent's verdict and resolve the outcome
  *
@@ -46,6 +47,7 @@ class QaSessionEngine
         private readonly ClientTiers $tiers,
         private readonly AnswerMatcher $matcher,
         private readonly AgentAttemptLimiter $limiter,
+        private readonly QaRetryLimit $retryLimit,
     ) {}
 
     public function start(Client $client, User $agent, ?Call $call = null, IdChannel $channel = IdChannel::Manual): IdSession
@@ -72,6 +74,10 @@ class QaSessionEngine
             if ($open !== null) {
                 throw new IdentificationException(__('Another agent (:name) is already identifying this client.', ['name' => $open->agent?->name ?? '?']));
             }
+
+            // Too many unsuccessful sessions of this client lately: the
+            // count runs under the same lock as the insert (QaRetryLimit).
+            $this->retryLimit->assertAllowed($client, $agent, $call);
 
             $session = IdSession::query()->create([
                 'client_id' => $client->id,

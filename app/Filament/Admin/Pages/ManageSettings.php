@@ -3,6 +3,7 @@
 namespace App\Filament\Admin\Pages;
 
 use App\Auth\Mfa\StaffMfa;
+use App\Auth\Oidc\EntraTenantOverview;
 use App\Auth\Oidc\OidcProvider;
 use App\Auth\Permission;
 use App\Clients\ClientLinks;
@@ -13,6 +14,7 @@ use App\Enums\PrincipalType;
 use App\Filament\Actions\ExportTableAction;
 use App\Filament\Admin\Clusters\System;
 use App\Filament\Concerns\GuardsUnsavedChanges;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Identification\MobileOtpService;
 use App\Identification\PinService;
 use App\Models\Call;
@@ -24,10 +26,17 @@ use App\Settings\Settings;
 use App\Settings\SettingSection;
 use App\Settings\SettingTab;
 use App\Settings\SettingType;
+use App\Sms\SmsDestinations;
+use App\Support\DomainNameRule;
+use App\Support\EmailAddressRule;
 use App\Support\HuDate;
+use App\Support\InputLimits;
+use App\Support\PhoneNumberRule;
 use App\Sync\IdList;
 use App\Sync\RequestPayload;
+use App\System\Installation;
 use BackedEnum;
+use Closure;
 use Filament\Actions\Action;
 use Filament\Actions\BulkAction;
 use Filament\Forms\Components\CheckboxList;
@@ -52,6 +61,7 @@ use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Text;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\View as SchemaView;
 use Filament\Schemas\Schema;
 use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
@@ -69,6 +79,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Locked;
 use RuntimeException;
@@ -81,6 +92,27 @@ class ManageSettings extends Page implements HasTable
 {
     use GuardsUnsavedChanges;
     use InteractsWithTable;
+    use LimitsSearchInput;
+
+    /** Entries of a package or domain list. */
+    public const LIST_MAX_ITEMS = 200;
+
+    /** Call queues mapped to a level, and the length of a queue name (the call center API takes the same). */
+    public const QUEUE_TIERS_MAX_ITEMS = 100;
+
+    public const QUEUE_NAME_MAX_LENGTH = 100;
+
+    /** EMD columns shown on the client, and the length of their label. */
+    public const DIRECTORY_FIELDS_MAX_ITEMS = 50;
+
+    public const DIRECTORY_LABEL_MAX_LENGTH = 100;
+
+    /** A dotted path or a parameter name of the EMD API, and the CSV encoding name. */
+    public const PATH_MAX_LENGTH = 200;
+
+    public const PARAM_MAX_LENGTH = 100;
+
+    public const ENCODING_MAX_LENGTH = 40;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCog6Tooth;
 
@@ -160,9 +192,11 @@ class ManageSettings extends Page implements HasTable
     {
         $value = $key->type()->cast($this->fromFormValue($key, $formValue));
 
-        return in_array($key, [SettingKey::SyncUserDomains, SettingKey::SyncClientDomains], true)
-            ? SettingRules::normalizeDomains((array) $value)
-            : $value;
+        return match (true) {
+            in_array($key, [SettingKey::SyncUserDomains, SettingKey::SyncClientDomains], true) => SettingRules::normalizeDomains((array) $value),
+            $key === SettingKey::PhoneAllowedRegions => SmsDestinations::normalizeRegions((array) $value),
+            default => $value,
+        };
     }
 
     /**
@@ -309,7 +343,7 @@ class ManageSettings extends Page implements HasTable
         abort_unless(static::canAccess(), 403);
 
         try {
-            Cache::lock('hdid:settings-save', 60)->block(15, fn () => $this->persistLocked($action));
+            Cache::lock(Installation::lockName('hdid:settings-save'), 60)->block(15, fn () => $this->persistLocked($action));
         } catch (LockTimeoutException) {
             Notification::make()->warning()->title(__('Another save of the settings is in progress; try again in a moment.'))->send();
             $action->halt();
@@ -338,22 +372,27 @@ class ManageSettings extends Page implements HasTable
         $values = $this->valuesAfterSave($changes);
 
         $this->assertConsistent(collect($values)->mapWithKeys(fn (mixed $value, string $key) => [static::fieldName(SettingKey::from($key)) => $value])->all());
-        $this->validateValues($values);
+        $this->validateValues($values, $changes);
         $impact = $this->assertPackageListsUsable($values);
         $replaced = $this->replacedImages($settings, $changes);
         $settings->setMany($changes);
         $this->deleteImages($replaced);
         // Entitlement follows the lists at once; the links of sponsors whose
         // package left the premium list end now, not at the hourly sweep.
-        $endedLinks = $impact['changed'] ? app(ClientLinks::class)->endLinksOfIneligibleSponsors() : 0;
+        // A closed sponsor's links end too, and the clients closed only with it reopen.
+        $ended = $impact['changed'] ? app(ClientLinks::class)->sweepIneligibleSponsors() : ['links' => 0, 'reopened' => 0, 'kept_closed' => 0];
         // The page now shows what is stored, other admins' changes included.
         $this->fillFromSettings();
 
         $saved = Notification::make()->title(__('Settings saved'))->success();
-        if ($endedLinks > 0 || $impact['downgraded']['count'] > 0 || $impact['upgraded']['count'] > 0) {
-            $saved->body(__('Package lists applied: :links link(s) ended, :down client(s) moved to the standard tier, :up to premium.', [
-                'links' => $endedLinks, 'down' => $impact['downgraded']['count'], 'up' => $impact['upgraded']['count'],
-            ]))->persistent();
+        if ($ended['links'] > 0 || $ended['reopened'] > 0 || $impact['downgraded']['count'] > 0 || $impact['upgraded']['count'] > 0) {
+            $body = __('Package lists applied: :links link(s) ended, :down client(s) moved to the standard tier, :up to premium.', [
+                'links' => $ended['links'], 'down' => $impact['downgraded']['count'], 'up' => $impact['upgraded']['count'],
+            ]);
+            if ($ended['reopened'] > 0) {
+                $body .= ' '.__(':n linked client(s), closed only because their sponsor was closed, reopened.', ['n' => $ended['reopened']]);
+            }
+            $saved->body($body)->persistent();
         }
         $saved->send();
 
@@ -434,16 +473,28 @@ class ManageSettings extends Page implements HasTable
 
     /**
      * Range and format rules per key plus the cross-key rules; errors land
-     * on the offending fields.
+     * on the offending fields. The format and list limits (limitRules) apply
+     * to what this page changes: an older stored value they would refuse (a
+     * phone number the normaliser cannot read, a domain with an underscore)
+     * keeps working until someone edits it. So do the field lengths
+     * (maxLengthOf): a longer value stored before the limit does not block
+     * saving another field.
      *
      * @param  array<string, mixed>  $values  keyed by SettingKey value
+     * @param  array<string, mixed>  $changes  the keys changed on this page
      */
-    private function validateValues(array $values): void
+    private function validateValues(array $values, array $changes = []): void
     {
         $rules = [];
         $labels = [];
         foreach (SettingKey::cases() as $key) {
-            if ($keyRules = SettingRules::for($key)) {
+            $keyRules = SettingRules::for($key);
+
+            if (array_key_exists($key->value, $changes)) {
+                $keyRules = [...$keyRules, ...static::limitRules($key)];
+            }
+
+            if ($keyRules !== []) {
                 $rules[str_replace('.', '\\.', $key->value)] = $keyRules;
                 $labels[$key->value] = $key->section()->tab()->label().' › '.$key->label();
             }
@@ -495,7 +546,8 @@ class ManageSettings extends Page implements HasTable
 
     /**
      * Saving asks for confirmation only when the package lists change who
-     * sponsors or which tier clients get.
+     * sponsors (a closed sponsor's links too, with the linked clients that
+     * reopen) or which tier clients get.
      */
     public function saveAction(): Action
     {
@@ -856,8 +908,9 @@ class ManageSettings extends Page implements HasTable
             $field->inlineLabel(false);
         }
 
-        if ($key->help() !== null) {
-            $field->helperText($key->help());
+        // Lists and tables draw no maxlength attribute: their limits go into the help text.
+        if (($help = static::helpWithLimits($key)) !== null) {
+            $field->helperText($help);
         }
 
         if ($key->details() !== null) {
@@ -883,6 +936,7 @@ class ManageSettings extends Page implements HasTable
             $field->belowContent(array_values(array_filter([
                 $key->help() === null ? null : Text::make($key->help()),
                 Text::make($status['text'])->color($status['color'])->weight('medium'),
+                $this->entraTenantList($key),
             ])));
         }
 
@@ -897,10 +951,35 @@ class ManageSettings extends Page implements HasTable
         if ($key === SettingKey::PackagesStandard) {
             return $field->helperText(fn (Get $get): string => $premiumOnly($get)
                 ? __('Grants nothing while only premium clients are served; it applies again once that is switched off.')
-                : (string) $key->help());
+                : (string) static::helpWithLimits($key));
+        }
+
+        if ($key === SettingKey::PhoneAllowedRegions) {
+            return $field->belowContent(fn (mixed $state): array => $this->acceptedCountriesNotes($key, $state));
         }
 
         return $field;
+    }
+
+    /**
+     * Under the accepted countries: the help sentence, and, as the field
+     * changes (before saving), the chosen countries whose numbering plan
+     * does not tell every mobile number apart from a landline, by name.
+     *
+     * @return list<Text>
+     */
+    private function acceptedCountriesNotes(SettingKey $key, mixed $state): array
+    {
+        $notes = [Text::make((string) $key->help())];
+        $mixed = array_values(array_intersect(SmsDestinations::normalizeRegions((array) $state), SmsDestinations::regionsWithoutSeparateMobileNumbers()));
+
+        if ($mixed !== []) {
+            $notes[] = Text::make(__('In these countries the numbering plan does not tell every mobile number apart from a landline, so a text message may go to their landline numbers too: :countries.', [
+                'countries' => implode(', ', SmsDestinations::regionNames($mixed)),
+            ]))->color('warning')->weight('medium');
+        }
+
+        return $notes;
     }
 
     /**
@@ -963,6 +1042,22 @@ class ManageSettings extends Page implements HasTable
     }
 
     /**
+     * Under the client Entra switch, next to its installation status: the
+     * tenants the installation allows (CLIENT_ENTRA_TENANTS) and what the EMD
+     * sync makes of each domain they may present. Read-only, shown with the
+     * switch off as well; EntraTenantOverview decides, this only draws it.
+     */
+    private function entraTenantList(SettingKey $key): ?Component
+    {
+        if ($key !== OidcProvider::Entra->enabledSetting(PrincipalType::Client)) {
+            return null;
+        }
+
+        return SchemaView::make('filament.admin.settings.entra-tenants')
+            ->viewData(fn (): array => ['overview' => app(EntraTenantOverview::class)->clients()]);
+    }
+
+    /**
      * The SSO provider and account type a switch turns on, or null.
      *
      * @return array{0: OidcProvider, 1: PrincipalType}|null
@@ -990,6 +1085,8 @@ class ManageSettings extends Page implements HasTable
         $sso = $this->ssoOf($key);
 
         return match (true) {
+            // The tenant list is searched for too: the status tile sends the operator here by its name.
+            $sso !== null && $sso[0] === OidcProvider::Entra && $sso[1] === PrincipalType::Client => [...$sso[0]->envKeys($sso[1]), 'CLIENT_ENTRA_TENANTS'],
             $sso !== null => $sso[0]->envKeys($sso[1]),
             in_array($key, [SettingKey::ClientLoginOtpSmsEnabled, SettingKey::PortalPhoneVerificationEnabled], true) => ['SMS_DRIVER'],
             $key->section()->syncDriver() !== null => ['EMD_SYNC_DRIVER'],
@@ -1075,9 +1172,9 @@ class ManageSettings extends Page implements HasTable
         }
 
         if ($key === SettingKey::SyncExportPayload || $key === SettingKey::SyncIdListPayload) {
-            return Textarea::make($name)->label($label)
+            return $this->limitLength(Textarea::make($name)->label($label)
                 ->rows($key === SettingKey::SyncExportPayload ? 16 : 8)
-                ->extraInputAttributes(['class' => 'font-mono text-sm'])
+                ->extraInputAttributes(['class' => 'font-mono text-sm']), $key)
                 ->rules(SettingRules::for($key))
                 ->disabled(fn (): bool => ! $this->canManageSync())
                 ->dehydrated(fn (): bool => $this->canManageSync())
@@ -1085,7 +1182,7 @@ class ManageSettings extends Page implements HasTable
         }
 
         if (in_array($key, [SettingKey::SyncIdListIdPath, SettingKey::SyncIdListNamePath, SettingKey::SyncIdListStatusPath], true)) {
-            return TextInput::make($name)->label($label)->maxLength(200)->required($key !== SettingKey::SyncIdListStatusPath)
+            return $this->limitLength(TextInput::make($name)->label($label), $key)->required($key !== SettingKey::SyncIdListStatusPath)
                 ->disabled(fn (): bool => ! $this->canManageSync())
                 ->dehydrated(fn (): bool => $this->canManageSync())
                 ->placeholder($key === SettingKey::SyncIdListStatusPath ? __('Empty: the HTTP status code') : null);
@@ -1106,21 +1203,26 @@ class ManageSettings extends Page implements HasTable
                 ->minValue(match ($key) {
                     SettingKey::PinMinLength, SettingKey::PinMaxLength => PinService::MIN_ALLOWED_LENGTH,
                     SettingKey::MobileOtpLength, SettingKey::IvrCodeLength => MobileOtpService::MIN_LENGTH,
-                    SettingKey::AgentAttemptsPerHour, SettingKey::QaMinAcceptedToPass, SettingKey::QaMaxQuestionsPerSession, SettingKey::QaMinAnsweredQuestionsRequired, SettingKey::QaMaxRejectedToFail, SettingKey::QaSessionTtlMinutes, SettingKey::MobileOtpTtlMinutes, SettingKey::ClientLoginMagicLinkTtlMinutes, SettingKey::ClientLoginOtpSmsTtlMinutes, SettingKey::PinMaxFailedAttempts, SettingKey::PinLockoutMinutes, SettingKey::UserLoginRememberDays, SettingKey::ClientLoginRememberDays, SettingKey::UserLoginSessionMaxHours, SettingKey::ClientLoginSessionMaxHours, SettingKey::UserLoginLockoutMaxAttempts, SettingKey::ClientLoginLockoutMaxAttempts, SettingKey::UserLoginLockoutMinutes, SettingKey::ClientLoginLockoutMinutes, SettingKey::SsoMobileTokenMaxAgeMinutes, SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute, SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour => 1,
+                    SettingKey::AgentAttemptsPerHour, SettingKey::QaMinAcceptedToPass, SettingKey::QaMaxQuestionsPerSession, SettingKey::QaMinAnsweredQuestionsRequired, SettingKey::QaMaxRejectedToFail, SettingKey::QaSessionTtlMinutes, SettingKey::QaMaxUnsuccessfulSessions, SettingKey::QaUnsuccessfulWindowHours, SettingKey::MobileOtpTtlMinutes, SettingKey::ClientLoginMagicLinkTtlMinutes, SettingKey::ClientLoginOtpSmsTtlMinutes, SettingKey::PinMaxFailedAttempts, SettingKey::PinLockoutMinutes, SettingKey::UserLoginRememberDays, SettingKey::ClientLoginRememberDays, SettingKey::UserLoginSessionMaxHours, SettingKey::ClientLoginSessionMaxHours, SettingKey::UserLoginLockoutMaxAttempts, SettingKey::ClientLoginLockoutMaxAttempts, SettingKey::UserLoginLockoutMinutes, SettingKey::ClientLoginLockoutMinutes, SettingKey::SsoMobileTokenMaxAgeMinutes, SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute, SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour, SettingKey::ClientLoginOtpSmsMaxPerNumberPerDay, SettingKey::ClientLoginOtpSmsMaxPerHour, SettingKey::ClientLoginOtpSmsMaxPerDay => 1,
                     default => 0,
                 }),
             // A removed or replaced image is deleted from the disk once the change
             // is saved (replacedImages), never while the form is still open: a
-            // discarded change would otherwise point to a missing file.
+            // discarded change would otherwise point to a missing file. Only the
+            // image this page was opened with (or the one stored now) may stand in
+            // the field as a path: a path the browser made up would be stored and
+            // deleted from the public disk by the next image change.
             SettingType::Image => FileUpload::make($name)->label($label)->image()->disk('public')->directory('branding')->visibility('public')
+                ->preventFilePathTampering(allowFilePathUsing: fn (string $file): bool => in_array($file, [$this->loaded[$key->value] ?? null, app(Settings::class)->string($key)], true))
+                ->validationMessages(['tampered' => __('The file has to be uploaded here; a file path cannot be given.')])
                 ->maxSize(4096)->imagePreviewHeight('120')->columnSpan(1),
             SettingType::Text => match ($key) {
                 SettingKey::CallsDefaultTier => Select::make($name)->label($label)->required()->native(false)
                     ->options(collect(ClientTier::cases())->mapWithKeys(fn (ClientTier $t) => [$t->value => $t->label()])->all()),
-                default => TextInput::make($name)->label($label)->maxLength(500),
+                default => $this->limitLength(TextInput::make($name)->label($label), $key),
             },
             SettingType::Color => ColorPicker::make($name)->label($label)->required()->hex(),
-            SettingType::LongText => Textarea::make($name)->label($label)->rows(5),
+            SettingType::LongText => $this->limitLength(Textarea::make($name)->label($label)->rows(5), $key),
             SettingType::Json => match ($key) {
                 SettingKey::SyncColumnMapping => KeyValue::make($name)->label($label)->keyLabel(__('Field'))->valueLabel(__('Source column'))
                     ->editableKeys(false)->addable(false)->deletable(false)->reorderable(false),
@@ -1135,10 +1237,10 @@ class ManageSettings extends Page implements HasTable
                     ->schema([
                         Select::make('queue')->label(__('Call queue'))->required()->searchable()->native(false)
                             ->options(fn () => static::knownQueues())
-                            ->getSearchResultsUsing(fn (string $search) => array_filter(static::knownQueues(), fn (string $q) => str_contains(mb_strtolower($q), mb_strtolower($search))))
+                            ->getSearchResultsUsing(fn (string $search) => array_filter(static::knownQueues(), fn (string $q) => str_contains(mb_strtolower($q), mb_strtolower(InputLimits::search($search)))))
                             ->getOptionLabelUsing(fn ($value) => is_string($value) && $value !== '' ? $value : null)
                             ->createOptionForm([
-                                TextInput::make('name')->label(__('Queue name as the call center sends it'))->required()->maxLength(100),
+                                TextInput::make('name')->label(__('Queue name as the call center sends it'))->required()->maxLength(self::QUEUE_NAME_MAX_LENGTH),
                             ])
                             ->createOptionUsing(fn (array $data): string => trim($data['name']))
                             ->helperText(__('Queues already seen in the call events are listed; a not-yet-seen queue can be added with its exact name.')),
@@ -1149,6 +1251,9 @@ class ManageSettings extends Page implements HasTable
                     ->addActionLabel(__('Add a call queue'))
                     ->reorderable(false)
                     ->defaultItems(0),
+                // Live: the note below names the chosen countries where a text message may reach a landline.
+                SettingKey::PhoneAllowedRegions => Select::make($name)->label($label)->multiple()->searchable()->native(false)->required()->live()
+                    ->options(fn (): array => SmsDestinations::regionOptions()),
                 SettingKey::PackagesPremium, SettingKey::PackagesStandard => TagsInput::make($name)->label($label)
                     ->placeholder(__('Add a package name and press enter')),
                 SettingKey::SyncUserDomains, SettingKey::SyncClientDomains => TagsInput::make($name)->label($label)
@@ -1157,6 +1262,190 @@ class ManageSettings extends Page implements HasTable
                     ->placeholder(__('Add a domain and press enter')),
                 default => TagsInput::make($name)->label($label),
             },
+        };
+    }
+
+    /**
+     * The length limit of a typed text field: the browser keeps new typing
+     * within it (maxlength), and the save checks it on the changed values
+     * only (limitRules in validateValues). A value stored before the limit
+     * that is longer keeps working and does not block saving another field;
+     * the field says so until someone shortens it.
+     *
+     * @template T of TextInput|Textarea
+     *
+     * @param  T  $field
+     * @return T
+     */
+    private function limitLength(TextInput|Textarea $field, SettingKey $key): TextInput|Textarea
+    {
+        $max = static::maxLengthOf($key);
+
+        if ($max === null) {
+            return $field;
+        }
+
+        return $field->extraInputAttributes(['maxlength' => $max], merge: true)
+            ->hint(fn (): ?string => mb_strlen((string) ($this->loaded[$key->value] ?? '')) > $max
+                ? __('The stored value is longer than the :max characters allowed now; it keeps working, and a change has to fit.', ['max' => $max])
+                : null)
+            ->hintColor('warning');
+    }
+
+    /**
+     * The longest value a typed text setting takes: the field shows it
+     * (maxlength) and the save enforces the same number (limitRules). Null
+     * for settings that are not typed text (switches, numbers, lists,
+     * choices, colours, images).
+     */
+    public static function maxLengthOf(SettingKey $key): ?int
+    {
+        return match ($key) {
+            SettingKey::BrandingAppName => InputLimits::APP_NAME,
+            SettingKey::PremiumBadgeLabel => InputLimits::BADGE,
+            SettingKey::SupportStandardEmail, SettingKey::SupportPremiumEmail => EmailAddressRule::MAX_LENGTH,
+            SettingKey::SupportStandardPhone, SettingKey::SupportPremiumPhone => PhoneNumberRule::RAW_MAX_LENGTH,
+            SettingKey::PortalPrivacyUrl, SettingKey::PortalTermsUrl, SettingKey::PortalImprintUrl => InputLimits::URL,
+            SettingKey::SyncApiDataPath, SettingKey::SyncIdListIdPath, SettingKey::SyncIdListNamePath, SettingKey::SyncIdListStatusPath => self::PATH_MAX_LENGTH,
+            SettingKey::SyncApiPageParam => self::PARAM_MAX_LENGTH,
+            SettingKey::SyncCsvEncoding => self::ENCODING_MAX_LENGTH,
+            SettingKey::PortalFooterText => InputLimits::FOOTER,
+            SettingKey::SyncExportPayload, SettingKey::SyncIdListPayload => InputLimits::JSON_CHARS,
+            SettingKey::CallsDefaultTier => null,
+            default => in_array($key->type(), [SettingType::Text, SettingType::LongText], true) ? InputLimits::NAME : null,
+        };
+    }
+
+    /**
+     * Length and format rules of a value typed on this page, on top of
+     * SettingRules::for(): the standard e-mail, phone and URL forms, the
+     * EMD API names, #RRGGBB colours, and the size of lists and tables.
+     *
+     * @return list<mixed>
+     */
+    public static function limitRules(SettingKey $key): array
+    {
+        $max = static::maxLengthOf($key);
+        $string = $max === null ? [] : ['nullable', 'string', 'max:'.$max];
+
+        return match (true) {
+            in_array($key, [SettingKey::SupportStandardEmail, SettingKey::SupportPremiumEmail], true) => [...$string, new EmailAddressRule],
+            in_array($key, [SettingKey::SupportStandardPhone, SettingKey::SupportPremiumPhone], true) => [...$string, new PhoneNumberRule],
+            in_array($key, [SettingKey::PortalPrivacyUrl, SettingKey::PortalTermsUrl, SettingKey::PortalImprintUrl], true) => [...$string, 'url:http,https'],
+            $key === SettingKey::SyncApiDataPath => [...$string, 'regex:/^[A-Za-z0-9_\-]+(\.[A-Za-z0-9_\-]+)*$/'],
+            $key === SettingKey::SyncApiPageParam => [...$string, 'regex:/^[A-Za-z0-9_\-.\[\]]+$/'],
+            $key->type() === SettingType::Color => ['nullable', 'string', 'regex:/^#[0-9a-f]{6}$/i'],
+            in_array($key, [SettingKey::PackagesPremium, SettingKey::PackagesStandard], true) => [self::listRule(self::LIST_MAX_ITEMS, InputLimits::NAME)],
+            in_array($key, [SettingKey::SyncUserDomains, SettingKey::SyncClientDomains], true) => [self::listRule(self::LIST_MAX_ITEMS, DomainNameRule::MAX_LENGTH, DomainNameRule::problem(...))],
+            $key === SettingKey::CallsQueueTiers => [self::mapRule(self::QUEUE_TIERS_MAX_ITEMS, self::QUEUE_NAME_MAX_LENGTH, self::QUEUE_NAME_MAX_LENGTH, array_map(fn (ClientTier $tier): string => $tier->value, ClientTier::cases()))],
+            $key === SettingKey::ClientsDirectoryFields => [self::mapRule(self::DIRECTORY_FIELDS_MAX_ITEMS, InputLimits::NAME, self::DIRECTORY_LABEL_MAX_LENGTH)],
+            $key === SettingKey::SyncColumnMapping => [self::mapRule(count(static::mappingFields()), InputLimits::NAME, InputLimits::NAME)],
+            default => $string,
+        };
+    }
+
+    /**
+     * The setting's help sentence with the limits of a list or table (their
+     * fields draw no maxlength attribute), or null when there is neither.
+     */
+    public static function helpWithLimits(SettingKey $key): ?string
+    {
+        $limits = match (true) {
+            in_array($key, [SettingKey::PackagesPremium, SettingKey::PackagesStandard], true) => __('At most :items names, each at most :max characters.', ['items' => self::LIST_MAX_ITEMS, 'max' => InputLimits::NAME]),
+            in_array($key, [SettingKey::SyncUserDomains, SettingKey::SyncClientDomains], true) => __('At most :items domains, each a domain name of at most :max characters.', ['items' => self::LIST_MAX_ITEMS, 'max' => DomainNameRule::MAX_LENGTH]),
+            $key === SettingKey::CallsQueueTiers => __('At most :items call queues, each name at most :max characters.', ['items' => self::QUEUE_TIERS_MAX_ITEMS, 'max' => self::QUEUE_NAME_MAX_LENGTH]),
+            $key === SettingKey::ClientsDirectoryFields => __('At most :items columns; a column name at most :column, a label at most :label characters.', ['items' => self::DIRECTORY_FIELDS_MAX_ITEMS, 'column' => InputLimits::NAME, 'label' => self::DIRECTORY_LABEL_MAX_LENGTH]),
+            $key === SettingKey::SyncColumnMapping => __('A source column name may be at most :max characters long.', ['max' => InputLimits::NAME]),
+            default => null,
+        };
+
+        $help = array_values(array_filter([$key->help(), $limits]));
+
+        return $help === [] ? null : implode(' ', $help);
+    }
+
+    /**
+     * A list setting: at most $maxItems entries of at most $maxLength
+     * characters, each also passing $problem (a translated reason or null).
+     *
+     * @param  (callable(string): ?string)|null  $problem
+     */
+    private static function listRule(int $maxItems, int $maxLength, ?callable $problem = null): Closure
+    {
+        return function (string $attribute, mixed $value, Closure $fail) use ($maxItems, $maxLength, $problem): void {
+            if ($value === null || $value === []) {
+                return;
+            }
+
+            if (! is_array($value) || count($value) > $maxItems) {
+                $fail(__('At most :items entries.', ['items' => $maxItems]));
+
+                return;
+            }
+
+            foreach ($value as $item) {
+                if (! is_string($item) || mb_strlen($item) > $maxLength) {
+                    $fail(__('Each entry may be at most :max characters long.', ['max' => $maxLength]));
+
+                    return;
+                }
+
+                if ($problem !== null && ($reason = $problem($item)) !== null) {
+                    $fail(__('":entry": :reason', ['entry' => Str::limit($item, 60), 'reason' => $reason]));
+
+                    return;
+                }
+            }
+        };
+    }
+
+    /**
+     * A table setting (key => value): at most $maxItems rows, keys of at
+     * most $keyMax characters, values (or each value of a list) of at most
+     * $valueMax, and only $allowed values when given.
+     *
+     * @param  list<string>|null  $allowed
+     */
+    private static function mapRule(int $maxItems, int $keyMax, int $valueMax, ?array $allowed = null): Closure
+    {
+        return function (string $attribute, mixed $value, Closure $fail) use ($maxItems, $keyMax, $valueMax, $allowed): void {
+            if ($value === null || $value === []) {
+                return;
+            }
+
+            if (! is_array($value) || count($value) > $maxItems) {
+                $fail(__('At most :items rows.', ['items' => $maxItems]));
+
+                return;
+            }
+
+            foreach ($value as $name => $entry) {
+                if (mb_strlen((string) $name) > $keyMax) {
+                    $fail(__('A name in the table may be at most :max characters long.', ['max' => $keyMax]));
+
+                    return;
+                }
+
+                foreach (is_array($entry) ? $entry : [$entry] as $part) {
+                    if (! is_scalar($part) && $part !== null) {
+                        $fail(__('A value in the table is not text.'));
+
+                        return;
+                    }
+
+                    if (mb_strlen((string) $part) > $valueMax) {
+                        $fail(__('A value in the table may be at most :max characters long.', ['max' => $valueMax]));
+
+                        return;
+                    }
+
+                    if ($allowed !== null && ! in_array((string) $part, $allowed, true)) {
+                        $fail(__('":entry" is not one of the choices.', ['entry' => Str::limit((string) $part, 60)]));
+
+                        return;
+                    }
+                }
+            }
         };
     }
 

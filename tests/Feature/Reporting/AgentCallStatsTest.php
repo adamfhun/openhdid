@@ -141,7 +141,8 @@ it('defaults the shared dashboard report period to fourteen days', function (): 
 
 it('uses the selected period in all dashboard reports with separate caches', function (int $days): void {
     $this->freezeTime();
-    $agent = User::factory()->withRole(Role::Agent)->create();
+    // A supervisor sees every dashboard report; widgets authorize already on mount.
+    $agent = User::factory()->withRole(Role::Supervisor)->create();
     $this->actingAs($agent);
     $start = today()->subDays($days - 1);
     Call::factory()->create(['agent_user_id' => $agent->id, 'arrived_at' => $start, 'queue' => 'Included']);

@@ -7,6 +7,7 @@ use App\Auth\Permission;
 use App\Models\Client;
 use App\Models\Setting;
 use App\Models\User;
+use App\System\Installation;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -23,12 +24,15 @@ use Illuminate\Validation\ValidationException;
  * committed may still store what it read, but under the old key, which
  * nobody reads any more; with a fixed key it would have put the old values
  * back in front of everyone until the next write.
+ *
+ * Both keys carry the installation id as well: two installations sharing
+ * one Valkey/Redis under the same key prefix (a test and a production
+ * installation with the default APP_NAME) would otherwise serve each other
+ * their settings, the second factor and the sign-in switches included.
  */
 class Settings
 {
     private const CACHE_KEY = 'hdid.settings';
-
-    private const VERSION_KEY = 'hdid.settings.version';
 
     /** How long a cached map or version lives at most (seconds); a lost version only means one fresh read. */
     private const CACHE_TTL = 86400;
@@ -187,25 +191,43 @@ class Settings
     public function forget(): void
     {
         $this->loaded = null;
-        $old = $this->cache->get(self::VERSION_KEY);
-        $this->cache->put(self::VERSION_KEY, Str::random(20), self::CACHE_TTL);
+        $versionKey = $this->versionKey();
+        $old = $this->cache->get($versionKey);
+        $this->cache->put($versionKey, Str::random(20), self::CACHE_TTL);
 
         if (is_string($old)) {
-            $this->cache->forget(self::CACHE_KEY.'.'.$old);
+            $this->cache->forget($this->mapKey($old));
         }
     }
 
     private function cacheKey(): string
     {
-        $version = $this->cache->get(self::VERSION_KEY);
+        $versionKey = $this->versionKey();
+        $version = $this->cache->get($versionKey);
 
         if (! is_string($version)) {
             // add() does not overwrite a version a concurrent write has just set.
-            $this->cache->add(self::VERSION_KEY, Str::random(20), self::CACHE_TTL);
-            $version = (string) $this->cache->get(self::VERSION_KEY);
+            $this->cache->add($versionKey, Str::random(20), self::CACHE_TTL);
+            $version = (string) $this->cache->get($versionKey);
         }
 
-        return self::CACHE_KEY.'.'.$version;
+        return $this->mapKey($version);
+    }
+
+    /**
+     * The key of the current version of this installation's settings.
+     */
+    private function versionKey(): string
+    {
+        return self::CACHE_KEY.'.'.Installation::id().'.version';
+    }
+
+    /**
+     * The key of this installation's settings map in one version.
+     */
+    private function mapKey(string $version): string
+    {
+        return self::CACHE_KEY.'.'.Installation::id().'.'.$version;
     }
 
     /**

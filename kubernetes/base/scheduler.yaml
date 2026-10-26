@@ -39,9 +39,11 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+          # schedule:work, schedule:run and the EMD sync and the retention task in the background:
+          # at most three PHP processes of 256M at once, and the 128 MB /tmp.
           resources:
-            requests: {cpu: 100m, memory: 192Mi}
-            limits: {memory: 512Mi}
+            requests: {cpu: 100m, memory: 1Gi}
+            limits: {memory: 1Gi}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
             - {name: storage, mountPath: /app/storage}

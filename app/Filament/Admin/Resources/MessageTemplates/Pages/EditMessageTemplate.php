@@ -2,13 +2,16 @@
 
 namespace App\Filament\Admin\Resources\MessageTemplates\Pages;
 
+use App\Enums\OutboundMessageStatus;
 use App\Filament\Admin\Resources\MessageTemplates\MessageTemplateResource;
 use App\Filament\Concerns\GuardsUnsavedChanges;
 use App\Messaging\Channel;
 use App\Messaging\Messenger;
 use App\Messaging\TemplateRenderer;
 use App\Models\MessageTemplate;
+use App\Support\EmailAddressRule;
 use App\Support\PhoneNormalizer;
+use App\Support\PhoneNumberRule;
 use Filament\Actions\Action;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
@@ -18,6 +21,9 @@ use Throwable;
 class EditMessageTemplate extends EditRecord
 {
     use GuardsUnsavedChanges;
+
+    /** outbound_messages.subject is varchar(255). */
+    public const SUBJECT_MAX_LENGTH = 255;
 
     protected static string $resource = MessageTemplateResource::class;
 
@@ -62,8 +68,8 @@ class EditMessageTemplate extends EditRecord
                 ->icon('heroicon-o-paper-airplane')
                 ->color('info')
                 ->schema(fn (): array => $this->getRecord()->key->channel() === Channel::Sms
-                    ? [TextInput::make('phone')->label(__('Phone number'))->tel()->required()->placeholder('+36 30 123 4567')]
-                    : [TextInput::make('email')->label(__('E-mail address'))->email()->required()->default(auth()->user()?->email)])
+                    ? [TextInput::make('phone')->label(__('Phone number'))->tel()->required()->maxLength(PhoneNumberRule::RAW_MAX_LENGTH)->rule(new PhoneNumberRule)->placeholder('+36 30 123 4567')]
+                    : [TextInput::make('email')->label(__('E-mail address'))->type('email')->required()->maxLength(EmailAddressRule::MAX_LENGTH)->rule(new EmailAddressRule)->default(auth()->user()?->email)])
                 ->action(function (array $data): void {
                     /** @var MessageTemplate $record */
                     $record = $this->getRecord();
@@ -73,14 +79,22 @@ class EditMessageTemplate extends EditRecord
                     try {
                         if ($key->channel() === Channel::Sms) {
                             $phone = app(PhoneNormalizer::class)->normalize($data['phone']) ?? throw new \InvalidArgumentException(__('Invalid phone number.'));
-                            app(Messenger::class)->sendRaw(Channel::Sms, $phone, null, $rendered->body);
+                            $message = app(Messenger::class)->sendRaw(Channel::Sms, $phone, null, $rendered->body);
                             $to = $phone;
                         } else {
-                            app(Messenger::class)->sendRaw(Channel::Email, $data['email'], '[TEST] '.$rendered->subject, $rendered->body);
+                            // The prefix must not push the subject past its column (varchar 255).
+                            $message = app(Messenger::class)->sendRaw(Channel::Email, $data['email'], mb_substr('[TEST] '.$rendered->subject, 0, self::SUBJECT_MAX_LENGTH), $rendered->body);
                             $to = $data['email'];
                         }
                     } catch (Throwable $e) {
                         Notification::make()->title($e->getMessage())->danger()->send();
+
+                        return;
+                    }
+
+                    // A text message to a number no SMS may go to is cancelled at once: say so.
+                    if ($message->status === OutboundMessageStatus::Cancelled) {
+                        Notification::make()->title(__('Test message not sent to :to', ['to' => $to]))->body((string) $message->error)->warning()->send();
 
                         return;
                     }

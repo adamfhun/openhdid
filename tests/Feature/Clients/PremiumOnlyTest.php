@@ -404,9 +404,11 @@ it('locks a client page opened before the switch, with its tabs', function (): v
 
     premiumOnly();
 
-    // The very next request of the page is refused, before anything is filled or saved.
-    $edit->set('data.notes', 'titok')->assertForbidden();
-    $view->call('$refresh')->assertForbidden();
+    // The very next request of the page is refused, before anything is filled or saved:
+    // since Filament 5.10 the page restores its record through the resource's (served)
+    // query, so the hidden client is not found; the policy check stays behind it.
+    $edit->set('data.notes', 'titok')->assertNotFound();
+    $view->call('$refresh')->assertNotFound();
     $phones->call('$refresh')->assertNotFound();
     expect($this->standard->fresh()->notes)->toBe('x');
 });

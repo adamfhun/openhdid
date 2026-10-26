@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Messaging\Channel;
 use App\Messaging\Messenger;
 use App\Models\OutboundMessage;
+use App\Support\EmailAddressRule;
 use Illuminate\Console\Command;
 
 /**
@@ -21,8 +22,10 @@ class TestMailCommand extends Command
     {
         $address = (string) $this->argument('address');
 
-        if (! filter_var($address, FILTER_VALIDATE_EMAIL)) {
-            $this->error('Not a valid e-mail address.');
+        $problem = EmailAddressRule::problem($address);
+
+        if ($problem !== null) {
+            $this->error($problem);
 
             return self::FAILURE;
         }

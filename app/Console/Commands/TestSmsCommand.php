@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Messaging\Channel;
 use App\Messaging\Messenger;
 use App\Support\PhoneNormalizer;
+use App\Support\PhoneNumberRule;
 use Illuminate\Console\Command;
 
 /**
@@ -18,13 +19,16 @@ class TestSmsCommand extends Command
 
     public function handle(Messenger $messenger, PhoneNormalizer $phones): int
     {
-        $number = $phones->normalize((string) $this->argument('number'));
+        $typed = (string) $this->argument('number');
+        $problem = PhoneNumberRule::problem($typed);
 
-        if ($number === null) {
-            $this->error('Not a valid phone number.');
+        if ($problem !== null) {
+            $this->error($problem);
 
             return self::FAILURE;
         }
+
+        $number = (string) $phones->normalize($typed);
 
         $message = $messenger->sendRaw(Channel::Sms, $number, null, 'HDID SMS test '.now()->format('H:i'));
 

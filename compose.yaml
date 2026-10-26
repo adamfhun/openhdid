@@ -11,7 +11,11 @@
 #
 # Méretezés: a használati profil kiegészítő fájlja (profiles/5k, profiles/10k) adja a PHP-FPM, a
 # worker- és az adatbázis-méreteket; a .env COMPOSE_FILE sora választja ki. A 20k profil a
-# kubernetes mappa manifesztjeivel fut.
+# kubernetes mappa manifesztjeivel fut. Minden szolgáltatásnak memóriaplafonja van (mem_limit):
+# a plafon a benne futó folyamatok kemény felső határa (PHP memory_limit, pufferek, a /tmp
+# tmpfs), így a plafonok összege és az operációs rendszer adja a gép memóriáját. Az itteni
+# alapértékek a profil nélküli, kipróbálásra szánt telepítésé: a plafonok összege kb. 6,2 GB,
+# a gép 2 vCPU és 8 GB (részletek az üzemeltetési kézikönyv méretezési fejezetében).
 #
 # Részletek: docs/openhdid-telepitesi-utmutato.pdf és docs/openhdid-uzemeltetesi-kezikonyv.pdf.
 
@@ -28,10 +32,16 @@ x-logging: &logging
 x-app: &app
   image: ghcr.io/adamfhun/openhdid:${OPENHDID_VERSION:?Set OPENHDID_VERSION in .env}
   env_file: [.env]
+  # The sessions go to the session Valkey of the redis profile (valkey-sessions); the image falls
+  # back to REDIS_HOST when the main Valkey is not the bundled one (an external REDIS_HOST).
+  environment:
+    REDIS_SESSION_HOST: ${REDIS_SESSION_HOST:-valkey-sessions}
   restart: unless-stopped
   read_only: true
+  # Memory-backed: counts towards the service's mem_limit. The web service needs more (request
+  # bodies, uploads), the EMD workers some (spreadsheet imports).
   tmpfs:
-    - /tmp:size=256m,mode=1777
+    - /tmp:size=64m,mode=1777
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   volumes:
@@ -50,6 +60,8 @@ services:
     command: migrate
     restart: "no"
     env_file: [.env, db.env]
+    # One PHP process (memory_limit 256M) and the 64 MB /tmp.
+    mem_limit: 384m
     depends_on:
       mariadb:
         condition: service_healthy
@@ -59,6 +71,17 @@ services:
   web:
     <<: *app
     command: web
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    # PHP-FPM processes × (OPENHDID_FPM_MEMORY_LIMIT + about 22 MB), the opcache (208 MB), nginx
+    # (about 80 MB per nginx worker with full connection buffers), the 256 MB /tmp and 64 MB to
+    # spare: 8 × 150 + 208 + 2 × 80 + 256 + 64 ≈ 1888 MB without a profile. Raise it together with
+    # OPENHDID_FPM_MAX_CHILDREN or OPENHDID_FPM_MEMORY_LIMIT; the Capacity card warns otherwise.
+    mem_limit: ${OPENHDID_WEB_MEM_LIMIT:-1920m}
+    # The nginx workers the ceiling counts with; auto would start one per CPU of the host.
+    environment:
+      REDIS_SESSION_HOST: ${REDIS_SESSION_HOST:-valkey-sessions}
+      OPENHDID_NGINX_WORKERS: ${OPENHDID_NGINX_WORKERS:-2}
     volumes:
       - storage:/app/storage
       - ./ca:/etc/openhdid/ca:ro
@@ -73,20 +96,30 @@ services:
         host_ip: "${OPENHDID_BIND_IP:-0.0.0.0}"
         protocol: tcp
 
-  # E-mail, SMS és életjel.
+  # E-mail, SMS és életjel. Sorlista nélkül előbb az elsőbbségi sort (HDID_PRIORITY_QUEUE: a
+  # belépési hivatkozások és kódok), utána a default sort dolgozza fel.
   worker:
     <<: *app
-    command: [worker, default]
+    command: [worker]
+    # One PHP process (memory_limit 256M, restarted softly above 192 MB) and the 64 MB /tmp.
+    mem_limit: 384m
 
   # A panelről indított ügyféltörzs-átvétel külön soron (EMD_SYNC_QUEUE=sync).
   sync-worker:
     <<: *app
     command: [worker, sync]
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    mem_limit: 448m
 
-  # Az ütemező (a cron helyett); pontosan egy példány fusson.
+  # Az ütemező (a cron helyett); pontosan egy példány fusson. Az ütemezett ügyféltörzs-átvétel és
+  # a megőrzési tisztítás a háttérben fut: legfeljebb három PHP-folyamat egyszerre (256M egyenként).
   scheduler:
     <<: *app
     command: scheduler
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    mem_limit: 1g
 
   # Beépített adatbázis: COMPOSE_PROFILES=db. Külső MariaDB esetén a profil kimarad.
   mariadb:
@@ -108,6 +141,10 @@ services:
         target: /docker-entrypoint-initdb.d/10-openhdid-accounts.sh
     volumes:
       - db:/var/lib/mysql
+    # innodb_buffer_pool_size + about 192 MB of global buffers + max_connections × 20 MB (sort,
+    # join and read buffers, a 16 MB in-memory temporary table): 256M + 192 + 25 × 20 ≈ 948 MB
+    # without a profile. Raise it together with OPENHDID_DB_BUFFER_POOL and OPENHDID_DB_MAX_CONNECTIONS.
+    mem_limit: ${OPENHDID_DB_MEM_LIMIT:-1g}
     security_opt: [no-new-privileges:true]
     logging: *logging
     healthcheck:
@@ -117,7 +154,9 @@ services:
       retries: 12
       start_period: 30s
 
-  # Megosztott gyorsítótár, munkamenet és sor több példányhoz: COMPOSE_PROFILES=db,redis.
+  # Gyorsítótár, sor, zárak és korlátszámlálók: COMPOSE_PROFILES=db,redis. A konténer
+  # memóriaplafonja a Valkey maxmemory korlátja fölött hagy helyet az AOF-újraírásnak és a
+  # puffereknek, így egy betelt tár sem fogyasztja el a gazdagép memóriáját.
   valkey:
     image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
     profiles: [redis]
@@ -128,13 +167,45 @@ services:
         target: /etc/valkey/valkey.conf
     volumes:
       - valkey:/data
+    # Twice maxmemory and 256 MB: the AOF rewrite forks (copy-on-write) while the store is full.
+    mem_limit: ${OPENHDID_VALKEY_MEM_LIMIT:-768m}
     security_opt: [no-new-privileges:true]
     logging: *logging
+    healthcheck: &valkey-health
+      # Up and answering; NOAUTH is the answer without the password.
+      test: [CMD-SHELL, "valkey-cli ping 2>&1 | grep -qE 'PONG|NOAUTH'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # A munkamenetek saját Valkey-je (redis profil): betelt tárnál a legrégebben használt
+  # munkameneteket szorítja ki (allkeys-lru). A valódi felhasználók munkamenete minden kéréssel
+  # frissül, így marad; egy belépőoldal-áradat egyszer írt munkamenetei szorulnak ki elsőként, a
+  # sor, a zárak és a korlátszámlálók (valkey) pedig írhatók maradnak. Ötpercenkénti RDB-
+  # pillanatkép: tervezett újraindításkor a Valkey leálláskor ment, így senki nem lép ki;
+  # összeomláskor legfeljebb az utolsó öt perc új belépései vesznek el.
+  valkey-sessions:
+    image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
+    profiles: [redis]
+    restart: unless-stopped
+    command: [valkey-server, /etc/valkey/valkey.conf]
+    configs:
+      - source: valkey-sessions
+        target: /etc/valkey/valkey.conf
+    volumes:
+      - valkey-sessions:/data
+    # Twice maxmemory and 128 MB: the RDB snapshot forks (copy-on-write) while the store is full.
+    mem_limit: ${OPENHDID_VALKEY_SESSIONS_MEM_LIMIT:-384m}
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    healthcheck: *valkey-health
 
 volumes:
   storage:
   db:
   valkey:
+  valkey-sessions:
 
 configs:
   mariadb-server:
@@ -143,8 +214,11 @@ configs:
       character-set-server = utf8mb4
       collation-server = utf8mb4_unicode_ci
       skip-name-resolve
-      innodb_buffer_pool_size = ${OPENHDID_DB_BUFFER_POOL:-512M}
-      max_connections = ${OPENHDID_DB_MAX_CONNECTIONS:-200}
+      # Every connection: PHP-FPM processes, workers, the scheduler with two background tasks, a
+      # migration and a few spare (backup, artisan); MyISAM is not used, its key cache stays small.
+      innodb_buffer_pool_size = ${OPENHDID_DB_BUFFER_POOL:-256M}
+      max_connections = ${OPENHDID_DB_MAX_CONNECTIONS:-25}
+      key_buffer_size = 16M
 
   # First start only: the migration account may change the schema, the runtime
   # account used by web, worker and scheduler may only read and write rows.
@@ -165,8 +239,26 @@ configs:
       GRANT SELECT, INSERT, UPDATE, DELETE ON \`$${MARIADB_DATABASE}\`.* TO '$${runtime_user}'@'%';
       EOSQL
 
+  # Memóriakorlát kiszorítás nélkül: betelt tárnál a Valkey az írást utasítja el, és nem dob el
+  # csendben kulcsot (korlátszámláló, visszajátszás-védelem, zár, várakozó feladat, és a munkamenet,
+  # ha REDIS_SESSION_HOST=valkey). A rendszerállapot Valkey / Redis csempéje 80 % felett
+  # figyelmeztet. A profil saját értéket ad.
   valkey:
     content: |
       appendonly yes
       save ""
       requirepass "${REDIS_PASSWORD:-}"
+      maxmemory ${OPENHDID_VALKEY_MAXMEMORY:-256mb}
+      maxmemory-policy noeviction
+
+  # A munkamenet-tár: kiszorítás a legrégebben használt kulcsok szerint (a pontosabb mintavétellel),
+  # RDB-pillanatkép, és egy sikertelen mentés sem állítja meg az írást (a belépést).
+  valkey-sessions:
+    content: |
+      appendonly no
+      save 300 1
+      stop-writes-on-bgsave-error no
+      requirepass "${REDIS_PASSWORD:-}"
+      maxmemory ${OPENHDID_VALKEY_SESSIONS_MAXMEMORY:-128mb}
+      maxmemory-policy allkeys-lru
+      maxmemory-samples 10

@@ -6,6 +6,7 @@ use App\Audit\Auditor;
 use App\Jobs\QueueHeartbeat;
 use App\Jobs\RunDirectorySync;
 use App\Jobs\SendOutboundMessage;
+use App\Messaging\Messenger;
 use App\Models\FailedJob;
 use App\Models\QueuedJob;
 use Illuminate\Bus\UniqueLock;
@@ -56,15 +57,16 @@ class QueueMaintenance
     }
 
     /**
-     * Queues a worker is expected to listen on: the default one and the EMD
-     * sync queue when it is a separate one. The scheduler sends a heartbeat
-     * to each of these.
+     * Queues a worker is expected to listen on: the default one, the priority
+     * queue of the sign-in messages (HDID_PRIORITY_QUEUE) and the EMD sync
+     * queue, each when it is a separate one. The scheduler sends a heartbeat
+     * to each of these, so a worker that does not listen on one shows.
      *
      * @return list<string>
      */
     public function configuredQueues(): array
     {
-        return array_values(array_unique(array_filter(['default', (string) config('hdid.sync.queue', 'default')])));
+        return array_values(array_unique(array_filter(['default', Messenger::priorityQueue(), (string) config('hdid.sync.queue', 'default')])));
     }
 
     /**

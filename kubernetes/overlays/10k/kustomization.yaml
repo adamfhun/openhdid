@@ -1,6 +1,13 @@
 # OpenHDID – 10k profil Kubernetesen (a két gépes Compose-telepítés alternatívája): legfeljebb
-# 10 000 ügyfél, 500–800 egyidejű portálhasználó, 20–30 ügyintéző. Web 2–4 pod, 2 feldolgozó;
-# menedzselt MariaDB (4 vCPU, 16 GB) és Valkey (1 GB).
+# 10 000 ügyfél, 500–800 egyidejű portálhasználó, 20–30 ügyintéző. Méretezés: a normál csúcs
+# (kb. 75 kérés/s) kétszerese, kb. 150 kérés/s. Web 2–4 pod (8 PHP-FPM folyamat, 1 vCPU kérés,
+# 2Gi memória kérés = korlát), 2 feldolgozó (384Mi), 1 ügyféltörzs-feldolgozó (448Mi), 1 ütemező
+# (1Gi); a korlátok összege a HPA maximumán, a frissítés többletpodjával kb. 12,6 GiB. Csomópont-
+# készlet: 3 × (4 vCPU, 8 GB); egy csomópont kiesésekor is elfér. Menedzselt MariaDB (2 vCPU, 8 GB,
+# innodb_buffer_pool_size 4G, max_connections 80) és két Valkey: a fő 256mb maxmemory-val,
+# maxmemory-policy noeviction kötelező, legalább 768 MB-os példány; a munkamenet-tár 576mb
+# maxmemory-val, maxmemory-policy allkeys-lru kötelező, legalább 1,25 GB-os példány (lásd
+# base/kustomization.yaml).
 #
 #   kubectl apply -k kubernetes/overlays/10k
 apiVersion: kustomize.config.k8s.io/v1beta1

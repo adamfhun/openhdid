@@ -250,7 +250,7 @@ it('writes the end, the claim and the release of a call inside the call lock', f
     $locked = [];
     Event::listen('eloquent.updated: '.Call::class, function (Call $call) use (&$locked): void {
         // A second lock instance can only take the key when nobody holds it.
-        $probe = Cache::lock('hdid:call:'.$call->external_call_id, 1);
+        $probe = Cache::lock(CallCenterService::callLockName($call->external_call_id), 1);
         $free = $probe->get();
         if ($free) {
             $probe->release();

@@ -10,7 +10,23 @@
 #
 # A .env ugyanaz, mint a Compose-telepítésnél (.env.example), ezekkel az eltérésekkel:
 # OPENHDID_TLS=off (a TLS az ingressen zárul le), TRUSTED_PROXIES az ingress-vezérlő pod-hálózata,
-# DB_HOST és REDIS_HOST a menedzselt MariaDB és Valkey címe, COMPOSE_* sorok nélkül.
+# DB_HOST és REDIS_HOST a menedzselt MariaDB és Valkey címe, COMPOSE_* sorok nélkül. A web podokat
+# a networkpolicy.yaml szerint csak az ingress-nginx névtér érheti el; más vezérlőnél a névtér
+# nevét ott kell átírni.
+#
+# Két menedzselt Valkey kell. A fő (gyorsítótár, sor, zárak, korlátszámlálók; REDIS_HOST) példányon
+# a maxmemory-policy noeviction kötelező (a szolgáltatók alapértéke gyakran kiszorító, például
+# volatile-lru: betelt memóriánál csendben elvesznének a korlátszámlálók, a visszajátszás-védelem,
+# a zárak és a várakozó feladatok), a maxmemory a példány memóriájának kb. háromnegyede. A
+# munkamenetek példányán (REDIS_SESSION_HOST, REDIS_SESSION_PORT, REDIS_SESSION_PASSWORD,
+# REDIS_SESSION_DB a .env-ben) épp fordítva: maxmemory-policy allkeys-lru kötelező, hogy egy
+# belépőoldal-áradat a saját munkameneteit szorítsa ki, és ne állítsa meg a belépést. A Valkey
+# egyetlen telepítésé; ha mégis közös, legalább külön adatbázis, ACL-felhasználó és saját
+# REDIS_PREFIX kell. A rendszerállapot Valkey / Redis csempéje kiszorító politikánál piros, a
+# Munkamenet-tár csempéje sárga, amíg a munkamenetek a fő Valkey-ben vannak.
+#
+# A memória kérése minden podnál egyenlő a korlátjával (a csomópontok nem fogadnak el többet, mint
+# amennyi elfér), a CPU-nak csak kérése van. A web pod élő-próbája csak az nginx-et kérdezi.
 #
 #   kubectl apply -k kubernetes/overlays/20k
 #   kubectl -n openhdid wait --for=condition=complete job/openhdid-migrate --timeout=600s
@@ -35,7 +51,8 @@ resources:
   - sync-worker.yaml
   - scheduler.yaml
   - ingress.yaml
+  - networkpolicy.yaml
 
 images:
   - name: ghcr.io/adamfhun/openhdid
-    newTag: "1.13.1"
+    newTag: "1.14.0"

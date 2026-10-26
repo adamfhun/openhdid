@@ -3,6 +3,7 @@
 namespace App\Filament\Admin\Widgets;
 
 use App\Auth\Permission;
+use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
 use App\Reporting\AgentCallStats;
 use App\Reporting\AgentCallSummary;
 use Filament\Widgets\Concerns\InteractsWithPageFilters;
@@ -15,6 +16,7 @@ use Filament\Widgets\Widget;
  */
 class AgentCallsTableWidget extends Widget
 {
+    use AuthorizesEveryRequest;
     use InteractsWithPageFilters;
 
     protected static ?int $sort = 5;

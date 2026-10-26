@@ -4,12 +4,15 @@ namespace App\Filament\Admin\Resources\Roles\Pages;
 
 use App\Audit\RoleAudit;
 use App\Filament\Admin\Resources\Roles\RoleResource;
+use App\Filament\Concerns\LimitsSearchInput;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ManageRecords;
 use Spatie\Permission\PermissionRegistrar;
 
 class ManageRoles extends ManageRecords
 {
+    use LimitsSearchInput;
+
     protected static string $resource = RoleResource::class;
 
     protected function getHeaderActions(): array

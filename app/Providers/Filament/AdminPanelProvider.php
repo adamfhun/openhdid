@@ -23,6 +23,7 @@ use App\Http\Middleware\EnsureStaffMfa;
 use App\Http\Middleware\TouchLastSeen;
 use App\Localization\SetLocale;
 use App\Models\User;
+use Closure;
 use Filament\Actions\Action;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
@@ -32,6 +33,7 @@ use Filament\Navigation\NavigationGroup as FilamentNavigationGroup;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Enums\Width;
+use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
 use Filament\View\PanelsRenderHook;
 use Illuminate\Contracts\View\View;
@@ -40,8 +42,12 @@ use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Str;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
+
+use function Livewire\before;
 
 /**
  * The single staff panel: helpdesk agents and administrators share it, the
@@ -56,6 +62,34 @@ class AdminPanelProvider extends PanelProvider
             ->persistFiltersInSession()
             ->persistSortInSession()
             ->persistSearchInSession());
+
+        // The page size of a table is a public Livewire property: an update
+        // could ask for every row at once ('all', 100000). Registered before
+        // the lifecycle hooks, so the table's own updated hook already sees
+        // (and stores in the session) the corrected value.
+        before('update', fn (object $component, string $path): ?Closure => static::limitTableRecordsPerPage($component, $path));
+    }
+
+    /**
+     * After a Livewire update of a table's page size: a size the table does
+     * not offer becomes its first offered size ('all' stays only where a
+     * table offers it); an offered size sent as text becomes the option itself.
+     */
+    public static function limitTableRecordsPerPage(object $component, string $path): ?Closure
+    {
+        if (! $component instanceof HasTable || ! property_exists($component, 'tableRecordsPerPage') || Str::before($path, '.') !== 'tableRecordsPerPage') {
+            return null;
+        }
+
+        return function () use ($component): void {
+            $options = array_values($component->getTable()->getPaginationPageOptions());
+            $requested = $component->tableRecordsPerPage;
+            $offered = is_int($requested) || is_string($requested)
+                ? Arr::first($options, fn (int|string $option): bool => (string) $option === (string) $requested)
+                : null;
+
+            $component->tableRecordsPerPage = $offered ?? $options[0] ?? null;
+        };
     }
 
     public function panel(Panel $panel): Panel

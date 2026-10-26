@@ -26,14 +26,17 @@ use RuntimeException;
  * Demo data: an agent, a few questions in a published pool, two clients (one
  * fully set up) and a ringing call. Accounts are built without factories,
  * because the container image ships without the Faker dev dependency and
- * seeds its demo mode from there. Refuses to run in production.
+ * seeds its demo mode from there. Runs only in the demo environment, on a
+ * developer machine (local, demo.sh) and in the tests: the demo passwords
+ * are published, so production and staging (often reachable from outside)
+ * refuse it.
  */
 class DemoSeeder extends Seeder
 {
     public function run(): void
     {
-        if (app()->isProduction()) {
-            throw new RuntimeException('Demo data must not be loaded in production (APP_ENV=production).');
+        if (! app()->environment(['demo', 'local', 'testing'])) {
+            throw new RuntimeException('Demo data is loaded only with APP_ENV=demo (or local, testing); its passwords are published (now APP_ENV='.app()->environment().').');
         }
 
         $this->call(RolesAndPermissionsSeeder::class);

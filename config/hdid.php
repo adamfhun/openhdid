@@ -67,6 +67,12 @@ return [
     // manual): the capacity tile of the system status compares the measured activity with it.
     'profile' => env('HDID_SIZING_PROFILE') ?: null,
 
+    // pm.max_children of this web server's PHP-FPM pool (the container sets it): the capacity
+    // tile compares it with the memory limit of the container and with max_connections.
+    'capacity' => [
+        'fpm_max_children' => env('OPENHDID_FPM_MAX_CHILDREN') ?: null,
+    ],
+
     // Public source repository of the running build. When set, the portal and panel footers link to
     // it, which is how a network service offers its source under the AGPL-3.0 (section 13).
     'source_url' => env('HDID_SOURCE_URL') ?: null,
@@ -94,6 +100,19 @@ return [
     'phone' => [
         'default_region' => env('HDID_PHONE_REGION', 'HU'),
     ],
+
+    // Host names the application answers besides the APP_URL host, separated by spaces or commas
+    // ("*.example.org" covers its subdomains). Outside local development a request naming any other
+    // Host or X-Forwarded-Host is refused (400); generated links start with APP_URL either way. The
+    // container's web server serves the same names, hence the OpenHDID name of the variable.
+    'extra_hosts' => array_values(array_filter(array_map('strtolower', preg_split('/[\s,]+/', trim((string) env('OPENHDID_EXTRA_HOSTS', ''))) ?: []))),
+
+    // Networks free of the limits keyed on the client address (route throttles, the panel's login
+    // limit; in the container nginx's limit_req and limit_conn too), separated by commas or spaces:
+    // a company whose users all come from one NAT address. Never the limits per e-mail address,
+    // phone number or system, nor sign-in itself. IPv4 at most /8 wide, IPv6 /32; one invalid entry
+    // voids the whole list (App\Support\RateLimitExemptions, status page tile rate_limit_exemptions).
+    'rate_limit_exempt_networks' => (string) env('HDID_RATE_LIMIT_EXEMPT_NETWORKS', ''),
 
     // Proxy of the application's outbound HTTP(S) requests (master data, Exchange, SMS gateway, ADFS,
     // Entra), e.g. http://proxy.example.org:3128, with a password http://user:password@proxy.example.org:3128.
@@ -135,6 +154,13 @@ return [
         // Vite dev server or other hosts to the extra sources when needed.
         'csp_enabled' => (bool) env('HDID_CSP_ENABLED', env('APP_ENV') !== 'local'),
         'csp_extra_sources' => env('HDID_CSP_EXTRA_SOURCES', ''),
+    ],
+
+    'messages' => [
+        // Queue of the short-lived sign-in secrets (client login links and SMS codes, staff MFA codes),
+        // so a pile of other messages cannot delay them past their lifetime. The worker must listen on
+        // it first (queue:work --queue=priority,default). Empty: "default", every message on one queue.
+        'priority_queue' => env('HDID_PRIORITY_QUEUE') ?: 'default',
     ],
 
     'sms' => [

@@ -6,6 +6,7 @@ use App\Audit\Auditor;
 use App\Models\SyncIdListItem;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\Installation;
 use Collator;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as Http;
@@ -163,7 +164,7 @@ class IdList
             return 0;
         }
 
-        return Cache::lock(self::LOCK, 60)->block(10, fn (): int => DB::transaction(fn (): int => $this->applySelection($ids, $selected)));
+        return Cache::lock(Installation::lockName(self::LOCK), 60)->block(10, fn (): int => DB::transaction(fn (): int => $this->applySelection($ids, $selected)));
     }
 
     /**
@@ -180,7 +181,7 @@ class IdList
         // One critical section: the IDs to drop are read and dropped together.
         // IDs off the list for now count too: left selected, they would be
         // sent again the moment they return.
-        return Cache::lock(self::LOCK, 60)->block(10, fn (): array => DB::transaction(function () use ($wanted): array {
+        return Cache::lock(Installation::lockName(self::LOCK), 60)->block(10, fn (): array => DB::transaction(function () use ($wanted): array {
             $drop = SyncIdListItem::query()->where('selected', true)->whereNotIn('external_id', $wanted)
                 ->pluck('external_id')->map(fn ($id): string => (string) $id)->all();
 
@@ -380,7 +381,7 @@ class IdList
      */
     private function store(array $items): array
     {
-        return Cache::lock(self::LOCK, 60)->block(10, fn (): array => DB::transaction(function () use ($items): array {
+        return Cache::lock(Installation::lockName(self::LOCK), 60)->block(10, fn (): array => DB::transaction(function () use ($items): array {
             $now = now();
             $counts = ['added' => 0, 'renamed' => 0, 'removed' => 0, 'returned' => 0];
             $existing = SyncIdListItem::query()->get()->keyBy('external_id');

@@ -97,6 +97,7 @@ Every rejection returns `401` with a JSON `message`; the reason is recorded in t
 | Reason | Message | Cause |
 |---|---|---|
 | `missing` | Missing API key. | no key in the request |
+| `malformed` | Invalid API key. | the key is not text or longer than 255 characters (issued keys have 45) |
 | `invalid` | Invalid API key. | unknown, revoked or other-scope key |
 | `signature_required` | Signature required: this key has no signing secret yet. | a mobile backend key without a secret; an administrator has to issue one |
 | `stale_timestamp` | Stale or missing timestamp. | `X-Timestamp` missing or more than {ttl} s off |

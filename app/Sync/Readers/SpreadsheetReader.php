@@ -5,7 +5,6 @@ namespace App\Sync\Readers;
 use App\Enums\SyncSource;
 use App\Sync\Contracts\SourceReader;
 use App\Sync\ExternalRecordDto;
-use App\Sync\SkippedRow;
 use App\Sync\SourceFormatException;
 use Spatie\SimpleExcel\SimpleExcelReader;
 
@@ -58,7 +57,7 @@ class SpreadsheetReader implements SourceReader
         $this->assertHeaders($reader->getHeaders() ?? []);
 
         foreach ($reader->getRows() as $row) {
-            yield ExternalRecordDto::fromRow($row, $this->mapping) ?? SkippedRow::fromRow(SkippedRow::REASON_INVALID_ROW, $row, $this->mapping);
+            yield ExternalRecordDto::fromRowOrSkip($row, $this->mapping);
         }
     }
 

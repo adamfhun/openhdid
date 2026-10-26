@@ -1,13 +1,31 @@
 # Bejárat: a TLS itt zárul le (openhdid-tls Secret), a web a 8080-as porton HTTP-t kap
 # (OPENHDID_TLS=off). A kiszolgálónév az APP_URL-ből: az overlay írja át a sajátjára. Az
-# ingress-vezérlő továbbított fejléceit (X-Forwarded-*) az alkalmazás csak a TRUSTED_PROXIES
-# listában szereplő címekről fogadja el: a .env-ben a vezérlő pod-hálózatának tartománya álljon.
+# ingress-vezérlő X-Forwarded-For fejlécéből a webkonténer nginx-e csak a TRUSTED_PROXIES listában
+# szereplő címekről veszi át a kliens címét: a .env-ben a vezérlő pod-hálózatának tartománya álljon.
+# A többi X-Forwarded-* fejlécet az nginx a saját, ellenőrzött értékére cseréli (kiszolgálónév az
+# APP_URL-ből vagy az OPENHDID_EXTRA_HOSTS-ból, https, az APP_URL portja). A vezérlő a kliens saját
+# X-Forwarded-For fejlécét felülírja (ingress-nginx: use-forwarded-headers alapból false), és a
+# networkpolicy.yaml szerint csak ő éri el a web podokat.
+#
+# Kliens-címenkénti korlát már a bejáratnál (ingress-nginx): a web podok saját korlátja podonként
+# számol, így a HPA felskálázásakor a támadó kerete is nőne. 50 kérés/s és 200-as löket (a
+# limit-burst-multiplier a limit-rps szorzója), 128 egyidejű kapcsolat címenként: egy NAT mögötti
+# ügyfélszolgálat is belefér. Az ingress-nginx a teljes IPv6-címre kulcsol; a /64-es kulcs a web
+# podok saját korlátjában él. Az időkorlát a webkonténer 120 s-os FastCGI-korlátjához igazodik.
+# A HDID_RATE_LIMIT_EXEMPT_NETWORKS a web podok korlátja alól mentesít, a bejáratéról nem: a
+# vállalati hálózatot itt a nginx.ingress.kubernetes.io/limit-whitelist annotáció mentesíti
+# (ugyanazok a hálózatok, vesszővel elválasztva), saját overlay-javítással.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: openhdid
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: 12m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "4"
+    nginx.ingress.kubernetes.io/limit-connections: "128"
 spec:
   tls:
     - hosts: [hdid.example.org]

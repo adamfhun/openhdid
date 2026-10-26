@@ -2,6 +2,7 @@
 
 namespace App\Filament\Concerns;
 
+use App\Support\InputLimits;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\Field;
 use Filament\Resources\Pages\CreateRecord;
@@ -128,13 +129,15 @@ trait GuardsUnsavedChanges
      * Only this site's own addresses are followed; anything else leads to the
      * panel's home page. Browsers read a backslash as a slash and drop tabs
      * and line breaks, so an address carrying either is refused outright, and
-     * an absolute one must start with this site's own origin and a slash.
+     * an absolute one must start with this site's own origin and a slash. No
+     * page of the panel has an address longer than a URL can be
+     * (InputLimits::URL).
      */
     public static function safeLeaveUrl(string $url): string
     {
         $home = Filament::getUrl() ?? '/';
 
-        if ($url === '' || preg_match('/[\x00-\x20\x7F\\\\]/', $url) === 1) {
+        if ($url === '' || strlen($url) > InputLimits::URL || preg_match('/[\x00-\x20\x7F\\\\]/', $url) === 1) {
             return $home;
         }
 
@@ -142,7 +145,16 @@ trait GuardsUnsavedChanges
             return str_starts_with($url, '//') ? $home : $url;
         }
 
-        return str_starts_with($url, request()->getSchemeAndHttpHost().'/') ? $url : $home;
+        // The panel's own links begin with the configured root (APP_URL, forced outside
+        // local), which may be written differently from the request's origin (a :443,
+        // capitals, http behind a TLS proxy); either is this site.
+        foreach ([request()->getSchemeAndHttpHost(), rtrim(url('/'), '/')] as $origin) {
+            if (str_starts_with($url, $origin.'/')) {
+                return $url;
+            }
+        }
+
+        return $home;
     }
 
     /**

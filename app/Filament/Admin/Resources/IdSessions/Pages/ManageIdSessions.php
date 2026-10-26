@@ -5,12 +5,15 @@ namespace App\Filament\Admin\Resources\IdSessions\Pages;
 use App\Clients\ClientTiers;
 use App\Filament\Actions\ExportTableAction;
 use App\Filament\Admin\Resources\IdSessions\IdSessionResource;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\IdSession;
 use App\Support\HuDate;
 use Filament\Resources\Pages\ManageRecords;
 
 class ManageIdSessions extends ManageRecords
 {
+    use LimitsSearchInput;
+
     protected static string $resource = IdSessionResource::class;
 
     protected function getHeaderActions(): array

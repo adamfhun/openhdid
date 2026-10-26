@@ -9,6 +9,7 @@ use App\Identification\PinService;
 use App\Models\Client;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\Sms\SmsDestinations;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -27,6 +28,8 @@ class ClientResource extends JsonResource
         $settings = app(Settings::class);
         // Whether a number is shared with another client is told only when the operator decided to say so.
         $shared = $settings->bool(SettingKey::PortalSharedNumberNotice) && $this->relationLoaded('phoneNumbers') ? app(ClientPhones::class)->sharedNumbersOf($this->resource) : [];
+        $destinations = app(SmsDestinations::class);
+        $smsTarget = $this->relationLoaded('phoneNumbers') ? $destinations->targetFor($this->resource) : null;
 
         return [
             'id' => $this->id,
@@ -45,7 +48,13 @@ class ClientResource extends JsonResource
                 'verified' => $p->verified_at !== null,
                 'verified_via' => $p->verified_via?->value,
                 'shared' => in_array($p->number_e164, $shared, true),
+                // A landline (or a number of a country no longer accepted): no SMS confirmation, no SMS sign-in code.
+                'sms_capable' => $destinations->allows($p->number_e164),
+                // Where the SMS sign-in code and the PIN by SMS go: the primary number, or the first one that may receive SMS.
+                'sms_target' => $p->number_e164 === $smsTarget,
             ])->values()),
+            // The countries whose numbers the client may add, named in the client's language.
+            'phone_countries' => SmsDestinations::regionNames($destinations->allowedRegions()),
             'phone_verification' => $settings->bool(SettingKey::PortalPhoneVerificationEnabled),
             'phone_verification_on_call' => $settings->bool(SettingKey::VerifyPhoneOnIdentifiedCall),
             'max_phone_numbers' => $settings->int(SettingKey::PortalMaxPhoneNumbersPerClient),

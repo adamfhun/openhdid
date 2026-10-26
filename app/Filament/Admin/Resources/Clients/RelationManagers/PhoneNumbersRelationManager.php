@@ -5,12 +5,15 @@ namespace App\Filament\Admin\Resources\Clients\RelationManagers;
 use App\Clients\ClientPhones;
 use App\Enums\PhoneNumberSource;
 use App\Enums\PhoneVerificationSource;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Filament\Concerns\RequiresServedOwner;
 use App\Models\Client;
 use App\Models\ClientPhoneNumber;
+use App\Sms\SmsDestinations;
+use App\Sms\SmsRefusal;
 use App\Support\HuDate;
 use App\Support\PhoneNormalizer;
-use Closure;
+use App\Support\PhoneNumberRule;
 use Filament\Actions\Action;
 use Filament\Actions\CreateAction;
 use Filament\Actions\DeleteAction;
@@ -25,16 +28,21 @@ use Filament\Schemas\Schema;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\Response;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Gate;
 
 /**
  * The numbers the phone menu recognises the caller by. A number that
  * another client also carries recognises nobody, so adding one asks the
- * operator to acknowledge that; every number shows what verified it.
+ * operator to acknowledge that; every number shows what verified it. Staff
+ * may record any number: one of a country not accepted, or one no text
+ * message may go to (a landline), is stored with a warning saying so.
  */
 class PhoneNumbersRelationManager extends RelationManager
 {
+    use LimitsSearchInput;
     use RequiresServedOwner;
 
     protected static string $relationship = 'phoneNumbers';
@@ -44,19 +52,30 @@ class PhoneNumbersRelationManager extends RelationManager
         return __('Phone numbers');
     }
 
+    /**
+     * The policy hears which client the number is for, so a client the
+     * system does not serve takes no new number even past the tab's own
+     * check (ClientPolicy::create).
+     */
+    protected function getCreateAuthorizationResponse(): Response
+    {
+        return Gate::inspect('create', [ClientPhoneNumber::class, $this->getOwnerRecord()]);
+    }
+
     public function form(Schema $schema): Schema
     {
         return $schema->components([
             TextInput::make('number_e164')
                 ->label(__('Phone number'))
                 ->required()
+                ->maxLength(PhoneNumberRule::RAW_MAX_LENGTH)
                 ->live(onBlur: true)
-                ->rule(fn (): Closure => function (string $attribute, mixed $value, Closure $fail): void {
-                    if (app(PhoneNormalizer::class)->normalize($value) === null) {
-                        $fail(__('This is not a valid phone number.'));
-                    }
-                })
+                ->rule(new PhoneNumberRule)
                 ->dehydrateStateUsing(fn (string $state): string => app(PhoneNormalizer::class)->normalize($state) ?? $state),
+            // Staff may record any number (it still recognises the caller); say what it cannot do.
+            Text::make(fn (Get $get): string => (string) $this->smsRefusalOf($get('number_e164'))?->staffWarning())
+                ->color('warning')
+                ->visible(fn (Get $get): bool => $this->smsRefusalOf($get('number_e164')) !== null),
             Text::make(fn (Get $get): string => __('This number is already on file for :names. If you continue, the phone menu will not recognise the caller from this number, so the PIN check there will not work for any of these clients.', ['names' => app(ClientPhones::class)->holderNames($this->otherHolders($get('number_e164')))]))
                 ->color('warning')
                 ->weight('semibold')
@@ -82,7 +101,8 @@ class PhoneNumbersRelationManager extends RelationManager
             ->pluralModelLabel(__('phone numbers'))
             ->modifyQueryUsing(fn ($query) => $query->with('verifiedBy'))
             ->columns([
-                TextColumn::make('number_e164')->label(__('Number'))->copyable(),
+                TextColumn::make('number_e164')->label(__('Number'))->copyable()
+                    ->description(fn (ClientPhoneNumber $record): ?string => $this->smsRefusalOf($record->number_e164)?->staffNote()),
                 TextColumn::make('label')->label(__('Label'))->placeholder('-'),
                 TextColumn::make('source')->label(__('Source'))->badge()->formatStateUsing(fn (PhoneNumberSource $state): string => $state->label()),
                 IconColumn::make('is_primary')->label(__('Primary'))->boolean(),
@@ -140,7 +160,7 @@ class PhoneNumbersRelationManager extends RelationManager
      */
     private function otherHolders(mixed $number): Collection
     {
-        $e164 = is_string($number) ? app(PhoneNormalizer::class)->normalize($number) : null;
+        $e164 = $this->typedNumber($number);
 
         if ($e164 === null) {
             return new Collection;
@@ -150,6 +170,26 @@ class PhoneNumbersRelationManager extends RelationManager
         $owner = $this->getOwnerRecord();
 
         return app(ClientPhones::class)->otherHolders($e164, $owner);
+    }
+
+    /**
+     * Why no text message may go to the number typed so far, or null when it
+     * may (or when it is not a number yet: the field's own rule says that).
+     */
+    private function smsRefusalOf(mixed $number): ?SmsRefusal
+    {
+        $e164 = $this->typedNumber($number);
+
+        return $e164 === null ? null : app(SmsDestinations::class)->refusal($e164);
+    }
+
+    /**
+     * The number typed so far in E.164, or null while it is none (or longer
+     * than a typed number may be: the field's own rule says that).
+     */
+    private function typedNumber(mixed $number): ?string
+    {
+        return is_string($number) && mb_strlen($number) <= PhoneNumberRule::RAW_MAX_LENGTH ? app(PhoneNormalizer::class)->normalize($number) : null;
     }
 
     private function recordSharedAcknowledgement(ClientPhoneNumber $record): void

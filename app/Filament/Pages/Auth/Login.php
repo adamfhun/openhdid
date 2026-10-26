@@ -12,10 +12,14 @@ use App\Enums\PrincipalType;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\Support\ClientAddress;
+use App\Support\EmailAddressRule;
+use App\Support\RateLimitExemptions;
 use DanHarrin\LivewireRateLimiting\Exceptions\TooManyRequestsException;
 use Filament\Auth\Http\Responses\Contracts\LoginResponse;
 use Filament\Auth\Pages\Login as BaseLogin;
 use Filament\Facades\Filament;
+use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Component;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
@@ -26,6 +30,9 @@ use Illuminate\Validation\ValidationException;
  */
 class Login extends BaseLogin
 {
+    /** The password field takes what the account form takes (UserResource). */
+    public const PASSWORD_MAX_LENGTH = 255;
+
     /**
      * The password form logs in through Filament's own guard call, so the
      * last-login stamp and the audit entry the SSO flows write have to be
@@ -107,6 +114,45 @@ class Login extends BaseLogin
     }
 
     /**
+     * Filament's limit of login attempts per network address (five a
+     * minute, here and in the parent): an address of
+     * HDID_RATE_LIMIT_EXEMPT_NETWORKS is not limited, since a whole company
+     * may sign in from it. The account lockout (LoginLockout) still counts
+     * every wrong password.
+     *
+     * @param  int  $maxAttempts
+     * @param  int  $decaySeconds
+     * @param  string|null  $method
+     * @param  string|null  $component
+     */
+    protected function rateLimit($maxAttempts, $decaySeconds = 60, $method = null, $component = null)
+    {
+        if (app(RateLimitExemptions::class)->covers(request()->ip())) {
+            return;
+        }
+
+        $method ??= debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, limit: 2)[1]['function'];
+
+        parent::rateLimit($maxAttempts, $decaySeconds, $method, $component);
+    }
+
+    /**
+     * The key of Filament's per-address login limit: an IPv6 address counts
+     * by its /64 network (ClientAddress), so a subscriber cannot rotate
+     * through its addresses for fresh attempts.
+     *
+     * @param  string|null  $method
+     * @param  string|null  $component
+     */
+    protected function getRateLimitKey($method, $component = null)
+    {
+        $method ??= debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, limit: 2)[1]['function'];
+        $component ??= static::class;
+
+        return 'livewire-rate-limiter:'.sha1($component.'|'.$method.'|'.ClientAddress::limitKey(request()->ip()));
+    }
+
+    /**
      * Filament's own per-address limit, applied where the parent's check is
      * not reached; true (with the notification sent) when the limit is hit.
      * (Not named isRateLimited: the rate-limiting trait took that name.)
@@ -125,6 +171,28 @@ class Login extends BaseLogin
     }
 
     /**
+     * The address within the standard lengths (EmailAddressRule: 254 in
+     * all, 64 before the @), shown on the field and checked before any
+     * account is looked up; Filament's own field only asks for an e-mail
+     * address, whose rule lets longer ones through.
+     */
+    protected function getEmailFormComponent(): Component
+    {
+        /** @var TextInput $field */
+        $field = parent::getEmailFormComponent();
+
+        return $field->maxLength(EmailAddressRule::MAX_LENGTH)->rule(new EmailAddressRule);
+    }
+
+    protected function getPasswordFormComponent(): Component
+    {
+        /** @var TextInput $field */
+        $field = parent::getPasswordFormComponent();
+
+        return $field->maxLength(self::PASSWORD_MAX_LENGTH);
+    }
+
+    /**
      * The "remember me" box only while remember-me is switched on; hidden, its
      * state is not part of the form data, so a forged value is ignored.
      */
@@ -134,18 +202,36 @@ class Login extends BaseLogin
             ->visible(fn (): bool => app(AccountLogin::class)->rememberMinutes(PrincipalType::User) !== null);
     }
 
+    /**
+     * The typed address, at most as long as an e-mail address can be (RFC
+     * 5321: 254 characters): the early refusals write it to the audit log
+     * before the form is validated, and the field takes whatever the caller
+     * sends.
+     */
     private function attemptedEmail(): ?string
     {
         $email = $this->data['email'] ?? null;
 
-        return is_string($email) && $email !== '' ? mb_strtolower(trim($email)) : null;
+        return is_string($email) && $email !== '' ? mb_strtolower(mb_substr(trim($email), 0, EmailAddressRule::MAX_LENGTH)) : null;
     }
 
+    /**
+     * The account the typed address names exactly (AccountLogin::findByEmail):
+     * an address longer than an e-mail address can be names none, its cut
+     * beginning is only for the audit entry.
+     */
     private function attemptedUser(): ?User
     {
+        $typed = $this->data['email'] ?? null;
         $email = $this->attemptedEmail();
 
-        return $email === null ? null : User::query()->where('email', $email)->first();
+        if ($email === null || ! is_string($typed) || mb_strlen(trim($typed)) > EmailAddressRule::MAX_LENGTH) {
+            return null;
+        }
+
+        $user = app(AccountLogin::class)->findByEmail(PrincipalType::User, $email);
+
+        return $user instanceof User ? $user : null;
     }
 
     /**

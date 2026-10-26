@@ -17,7 +17,7 @@ enum CheckGroup: string
     /**
      * Check keys that belong to the modes block; everything else is operation.
      */
-    private const MODE_KEYS = ['premium_only', 'login_link_preview', 'client_login_emd', 'adfs_debug', 'package_overrides', 'shared_numbers'];
+    private const MODE_KEYS = ['premium_only', 'login_link_preview', 'client_login_emd', 'rate_limit_exemptions', 'adfs_debug', 'package_overrides', 'shared_numbers'];
 
     public static function forKey(string $key): self
     {

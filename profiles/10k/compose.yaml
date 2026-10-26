@@ -7,42 +7,78 @@
 #   COMPOSE_PROFILES=                 # a másik gépen: web és worker
 #   OPENHDID_TLS=off                  # a TLS a terheléselosztón zárul le
 #   TRUSTED_PROXIES=<a terheléselosztó címe>
+#   OPENHDID_MONITORING_ALLOW=<a terheléselosztó címe>   # az élő-próba (/up)
 #   DB_HOST=<külső MariaDB>  REDIS_HOST=<külső Valkey>  REDIS_PASSWORD=…
+#   REDIS_SESSION_HOST=<a munkamenetek külső Valkey-je>  REDIS_SESSION_PASSWORD=…
 #   OPENHDID_NFS_SERVER=<NFS-kiszolgáló>  OPENHDID_NFS_PATH=<exportált útvonal>
 #
-# Gépek: 2 × (4 vCPU, 8 GB RAM) alkalmazásgép; külső MariaDB (elsődleges + replika, 4 vCPU,
-# 16 GB, innodb_buffer_pool_size 4–8G, max_connections 200) és Valkey (1 GB, AOF); NFS a közös
-# storage kötetnek (arculati képek, feltöltések, auditarchívum). A beépített mariadb és valkey
-# szolgáltatás itt nem indul (a db és a redis compose-profil nincs megadva). A migrációt mindkét
-# gép futtatja, a közös Valkey zárja alatt egyszerre csak egy.
+# Méretezés: a normál csúcs (kb. 75 kérés/s) kétszerese, kb. 150 kérés/s, a két gépen
+# megosztva; egy gép kiesésekor a megmaradó a normál csúcsot egyedül viszi. Gépek: 2 × (4 vCPU,
+# 6 GB RAM, 40 GB lemez) alkalmazásgép: a memóriaplafonok összege az elsődlegesen kb. 4,8 GB
+# (web 2688m, worker 384m, sync-worker 448m, scheduler 1g, migrate 384m) és 1 GB az operációs
+# rendszeré; 12 PHP-FPM folyamat (static, 128 MB memory_limit). Külső MariaDB (elsődleges +
+# replika, 2 vCPU, 8 GB, innodb_buffer_pool_size 4G, max_connections 80: a két gép 2 × 12 PHP-FPM
+# folyamata, a worker-ek, az ütemező, a migráció és tartalék, a Kubernetes 10k overlay 5 web
+# podjával is elég). Két külső Valkey: a fő (gyorsítótár, sor, zárak, korlátszámlálók; maxmemory
+# 256mb, maxmemory-policy noeviction, AOF, legalább 768 MB memória) és a munkamenet-tár
+# (maxmemory 576mb, maxmemory-policy allkeys-lru, RDB, legalább 1,25 GB memória; címe a
+# REDIS_SESSION_HOST, REDIS_SESSION_PORT, REDIS_SESSION_PASSWORD, REDIS_SESSION_DB sorban). NFS a
+# közös storage kötetnek (arculati képek, feltöltések, auditarchívum). A beépített mariadb,
+# valkey és valkey-sessions szolgáltatás itt nem indul (a db és a redis compose-profil nincs
+# megadva). A migrációt mindkét gép futtatja, a közös Valkey zárja alatt egyszerre csak egy.
 #
-# Terheléselosztó: élő-próba a http://<gép>:80/up címen, a /health a felügyeleté (30 kérés/perc).
+# A fő Valkey-n a maxmemory-policy noeviction kötelező: a menedzselt szolgáltatások alapértéke
+# gyakran kiszorító (például volatile-lru), és betelt memóriánál csendben elvesznének a
+# korlátszámlálók, az aláírt kérések és a beváltott tokenek visszajátszás-védelme, a zárak és a
+# várakozó feladatok. A munkamenet-táron épp fordítva: allkeys-lru kötelező, hogy egy
+# belépőoldal-áradat a saját munkameneteit szorítsa ki, ne a belépéseket állítsa meg. Munkamenet-
+# tár nélkül (REDIS_SESSION_HOST üres) a munkamenetek a fő Valkey-ben maradnak; a rendszerállapot
+# Munkamenet-tár csempéje ilyenkor sárga. A Valkey egyetlen telepítésé (teszt- vagy staging-
+# példány ne használja ugyanazt, legalább külön adatbázis, ACL-felhasználó és REDIS_PREFIX kell).
+# A rendszerállapot Valkey / Redis csempéje kiszorító politikánál piros, 80 % felett és
+# kiszorított kulcsnál sárga.
+#
+# Terheléselosztó: élő-próba a http://<gép>:80/up címen, a Host fejlécben az APP_URL gépnevével (más
+# névre 444) és az elosztó címével az OPENHDID_MONITORING_ALLOW listában (különben 404); a /health a
+# felügyeleté (30 kérés/perc).
 # Részletek: docs/openhdid-telepitesi-utmutato.pdf és docs/openhdid-uzemeltetesi-kezikonyv.pdf.
 
 services:
   web:
     environment:
       HDID_SIZING_PROFILE: 10k
+      OPENHDID_NGINX_WORKERS: ${OPENHDID_NGINX_WORKERS:-4}
+      # No bundled session Valkey here: the second external one, or the main one until it is set.
+      REDIS_SESSION_HOST: ${REDIS_SESSION_HOST:-}
       OPENHDID_FPM_PM: ${OPENHDID_FPM_PM:-static}
-      OPENHDID_FPM_MAX_CHILDREN: ${OPENHDID_FPM_MAX_CHILDREN:-16}
-      OPENHDID_FPM_START_SERVERS: ${OPENHDID_FPM_START_SERVERS:-16}
+      OPENHDID_FPM_MAX_CHILDREN: ${OPENHDID_FPM_MAX_CHILDREN:-12}
+      OPENHDID_FPM_START_SERVERS: ${OPENHDID_FPM_START_SERVERS:-12}
       OPENHDID_FPM_MIN_SPARE_SERVERS: ${OPENHDID_FPM_MIN_SPARE_SERVERS:-4}
-      OPENHDID_FPM_MAX_SPARE_SERVERS: ${OPENHDID_FPM_MAX_SPARE_SERVERS:-16}
+      OPENHDID_FPM_MAX_SPARE_SERVERS: ${OPENHDID_FPM_MAX_SPARE_SERVERS:-12}
+    # 12 × 150 + 208 + 4 nginx workers × 80 + 256 (/tmp) + 64 ≈ 2648 MB.
+    mem_limit: ${OPENHDID_WEB_MEM_LIMIT:-2688m}
 
   worker:
     environment:
       HDID_SIZING_PROFILE: 10k
+      REDIS_SESSION_HOST: ${REDIS_SESSION_HOST:-}
 
   # Pontosan egy példány az egész telepítésben: az elsődleges gépen (COMPOSE_PROFILES=primary).
   sync-worker:
     profiles: [primary]
     environment:
       HDID_SIZING_PROFILE: 10k
+      REDIS_SESSION_HOST: ${REDIS_SESSION_HOST:-}
 
   scheduler:
     profiles: [primary]
     environment:
       HDID_SIZING_PROFILE: 10k
+      REDIS_SESSION_HOST: ${REDIS_SESSION_HOST:-}
+
+  migrate:
+    environment:
+      REDIS_SESSION_HOST: ${REDIS_SESSION_HOST:-}
 
 # A storage kötet mindkét gépen ugyanaz az NFS-export: a feltöltött képek, a Livewire ideiglenes
 # fájljai, a szinkronfájlok és az auditarchívum így mindkét webpéldányból elérhetők. Az NFS

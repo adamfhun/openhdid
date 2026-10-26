@@ -58,10 +58,16 @@ return [
             'ignore_exceptions' => false,
         ],
 
+        /*
+         * File channels are written owner and group only (0640) whatever the
+         * process umask: the log can hold personal data (ADFS debug claims,
+         * EMD error bodies) and must not be readable by other local accounts.
+         */
         'single' => [
             'driver' => 'single',
             'path' => storage_path('logs/laravel.log'),
             'level' => env('LOG_LEVEL', 'debug'),
+            'permission' => 0640,
             'replace_placeholders' => true,
         ],
 
@@ -70,6 +76,7 @@ return [
             'path' => storage_path('logs/laravel.log'),
             'level' => env('LOG_LEVEL', 'debug'),
             'max_files' => env('LOG_DAILY_DAYS', 30),
+            'permission' => 0640,
             'replace_placeholders' => true,
         ],
 
@@ -78,6 +85,7 @@ return [
             'path' => storage_path('logs/laravel.log'),
             'level' => env('LOG_LEVEL', 'debug'),
             'max_files' => 3,
+            'permission' => 0640,
             'replace_placeholders' => true,
         ],
 

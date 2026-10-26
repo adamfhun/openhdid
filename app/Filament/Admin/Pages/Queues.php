@@ -7,6 +7,7 @@ use App\Filament\Admin\Clusters\System;
 use App\Filament\Admin\Widgets\FailedJobsWidget;
 use App\Filament\Admin\Widgets\OutboundMessagesWidget;
 use App\Filament\Admin\Widgets\PendingJobsWidget;
+use App\System\HealthChecks;
 use App\System\QueueMaintenance;
 use App\System\QueueState;
 use BackedEnum;
@@ -51,6 +52,15 @@ class Queues extends Page
     public static function canAccess(): bool
     {
         return auth()->user()?->can(Permission::SettingsManage->value) ?? false;
+    }
+
+    /**
+     * Another installation in the same Valkey/Redis (HealthChecks): its
+     * workers write the same heartbeats, so "alive" here would say nothing.
+     */
+    public function getSharedStoreWarning(): ?string
+    {
+        return app(HealthChecks::class)->sharedStoreProblem();
     }
 
     public function getMaintenance(): QueueMaintenance

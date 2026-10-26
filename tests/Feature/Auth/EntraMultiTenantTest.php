@@ -210,6 +210,8 @@ it('tolerates both tenant keys filled but says so on the status page', function 
     $check = app(HealthChecks::class)->oidc();
     expect($check->status)->toBe(CheckStatus::Warn)->and($check->detail)->toContain('2 tenant(s)')->toContain('Both the single tenant and the tenant list are set');
 
+    // A domain-filtered tenant is fine as long as the EMD sync files its domain as a client domain.
+    app(Settings::class)->set(SettingKey::SyncClientDomains, ['partner.hu']);
     configureClientEntra(null, '11111111-1111-4111-8111-111111111111,22222222-2222-4222-8222-222222222222:partner.hu');
     $check = app(HealthChecks::class)->oidc();
     expect($check->status)->toBe(CheckStatus::Ok)->and($check->detail)->toContain('22222222-2222-4222-8222-222222222222:partner.hu');
@@ -228,4 +230,15 @@ it('tolerates both tenant keys filled but says so on the status page', function 
 
     $this->actingAs(User::factory()->withRole(Role::Admin)->create());
     $this->get('/admin/system/status')->assertOk();
+});
+
+it('keeps the stricter domain filter of a tenant listed twice and says so', function (): void {
+    $id = '22222222-2222-4222-8222-222222222222';
+
+    $parsed = EntraTenants::parse(null, "{$id}:partner.hu,{$id}");
+
+    expect($parsed->tenants)->toHaveCount(1)
+        ->and($parsed->tenants[0]->domains)->toBe(['partner.hu'])
+        ->and($parsed->tenants[0]->isTrustedForAnyDomain())->toBeFalse()
+        ->and($parsed->note)->toContain('more than once');
 });

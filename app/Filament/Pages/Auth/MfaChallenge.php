@@ -18,6 +18,13 @@ use Livewire\Attributes\Locked;
  */
 class MfaChallenge extends SimplePage
 {
+    /**
+     * A code as typed: StaffMfa::CODE_LENGTH digits, with room for the
+     * spaces or dashes people put between them. Anything longer is refused
+     * here, before the account lock, the slow check and the attempt count.
+     */
+    public const CODE_INPUT_MAX_LENGTH = 12;
+
     protected string $view = 'filament.auth.mfa-challenge';
 
     #[Locked]
@@ -113,6 +120,12 @@ class MfaChallenge extends SimplePage
             return;
         }
 
+        if (($tooLong = self::codeTooLong($code)) !== null) {
+            $this->addError('code', $tooLong);
+
+            return;
+        }
+
         try {
             app(StaffMfa::class)->verify($this->user(), $method, $code);
         } catch (MfaException $e) {
@@ -122,6 +135,16 @@ class MfaChallenge extends SimplePage
         }
 
         $this->redirectIntended(Filament::getUrl());
+    }
+
+    /**
+     * The message for a typed code longer than a code can be; null when it fits.
+     */
+    public static function codeTooLong(string $code): ?string
+    {
+        return mb_strlen($code) > self::CODE_INPUT_MAX_LENGTH
+            ? __('The code may be at most :max characters long.', ['max' => self::CODE_INPUT_MAX_LENGTH])
+            : null;
     }
 
     private function user(): User

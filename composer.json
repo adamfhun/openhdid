@@ -15,10 +15,10 @@
     "require": {
         "php": "^8.4",
         "dedoc/scramble": "^0.13.43",
-        "filament/filament": "^5.8",
-        "firebase/php-jwt": "^7.1",
+        "filament/filament": "^5.10.3",
+        "firebase/php-jwt": "^7.2.1",
         "giggsey/libphonenumber-for-php-lite": "^9.0",
-        "laravel/framework": "^13.17",
+        "laravel/framework": "^13.38",
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^3.0",
         "spatie/laravel-permission": "^8.3",

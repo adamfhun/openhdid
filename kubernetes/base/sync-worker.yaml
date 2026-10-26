@@ -41,16 +41,17 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+          # One PHP process (memory_limit 256M) and the 128 MB /tmp for spreadsheet imports.
           resources:
-            requests: {cpu: 250m, memory: 384Mi}
-            limits: {memory: 1Gi}
+            requests: {cpu: 250m, memory: 448Mi}
+            limits: {memory: 448Mi}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
             - {name: storage, mountPath: /app/storage}
             - {name: ca, mountPath: /etc/openhdid/ca, readOnly: true}
       volumes:
         - name: tmp
-          emptyDir: {medium: Memory, sizeLimit: 256Mi}
+          emptyDir: {medium: Memory, sizeLimit: 128Mi}
         - name: storage
           persistentVolumeClaim:
             claimName: openhdid-storage

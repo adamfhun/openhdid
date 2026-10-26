@@ -20,6 +20,9 @@ final readonly class SkippedRow
 
     public const REASON_DUPLICATE_EMAIL = 'duplicate_email';
 
+    /** The address is not a usable e-mail address (too long or malformed, EmailAddressRule). */
+    public const REASON_INVALID_EMAIL = 'invalid_email';
+
     /**
      * @param  array<string, mixed>  $sample  a few identifying columns of the row, never the whole row
      */

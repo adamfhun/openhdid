@@ -66,6 +66,22 @@ class PhoneNormalizer
     }
 
     /**
+     * The ISO 3166 region of a valid number (HU, AT, …); "001" for a
+     * non-geographic one (satellite, international networks), null when the
+     * number is not valid.
+     */
+    public function regionOf(string $e164): ?string
+    {
+        try {
+            $number = $this->util->parse($e164, $this->defaultRegion);
+        } catch (NumberParseException) {
+            return null;
+        }
+
+        return $this->util->isValidNumber($number) ? $this->util->getRegionCodeForNumber($number) : null;
+    }
+
+    /**
      * @param  iterable<int, string|null>  $raws
      * @return list<string>
      */

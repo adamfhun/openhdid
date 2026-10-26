@@ -3,6 +3,7 @@
 namespace App\Filament\Admin\Widgets;
 
 use App\Auth\Permission;
+use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
 use App\Models\AuditLog;
 use Filament\Widgets\Widget;
 use Illuminate\Support\Facades\Cache;
@@ -13,6 +14,8 @@ use Illuminate\Support\Facades\Cache;
  */
 class AuditEventsWidget extends Widget
 {
+    use AuthorizesEveryRequest;
+
     public const DAYS = 7;
 
     public const CACHE_SECONDS = 300;

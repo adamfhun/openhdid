@@ -5,11 +5,13 @@ namespace App\Settings;
 use App\Audit\AuditArchive;
 use App\Auth\Mfa\StaffMfa;
 use App\Auth\Oidc\OidcProvider;
+use App\Auth\Passwordless\ClientPasswordlessLogin;
 use App\Clients\PackageListImpact;
 use App\Enums\MfaMethod;
 use App\Enums\PrincipalType;
 use App\Identification\AnswerMatcher;
 use App\Identification\PinService;
+use App\Identification\QaRetryLimit;
 use App\Sync\RequestPayload;
 
 /**
@@ -27,10 +29,14 @@ class SettingRules
         return match ($key) {
             SettingKey::ClientLoginMagicLinkTtlMinutes => ['integer', 'min:5', 'max:43200'],
             SettingKey::ClientLoginOtpSmsTtlMinutes => ['integer', 'min:1', 'max:60'],
-            SettingKey::ClientLoginOtpSmsLength => ['integer', 'min:4', 'max:10'],
+            SettingKey::ClientLoginOtpSmsLength => ['integer', 'min:'.ClientPasswordlessLogin::OTP_MIN_LENGTH, 'max:'.ClientPasswordlessLogin::OTP_MAX_LENGTH],
             SettingKey::ClientLoginOtpMaxAttempts => ['integer', 'min:1', 'max:20'],
             SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute => ['integer', 'min:1', 'max:10'],
             SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour => ['integer', 'min:1', 'max:60'],
+            SettingKey::ClientLoginOtpSmsMaxPerNumberPerDay => ['integer', 'min:1', 'max:100'],
+            SettingKey::ClientLoginOtpSmsMaxPerHour => ['integer', 'min:1', 'max:100000'],
+            SettingKey::ClientLoginOtpSmsMaxPerDay => ['integer', 'min:1', 'max:1000000'],
+            SettingKey::ClientLoginMagicLinkMaxPerHour => ['integer', 'min:0', 'max:1000000'],
             SettingKey::ClientLoginRememberDays, SettingKey::UserLoginRememberDays => ['integer', 'min:1', 'max:365'],
             SettingKey::ClientLoginSessionMaxHours, SettingKey::UserLoginSessionMaxHours => ['integer', 'min:1', 'max:720'],
             SettingKey::ClientLoginLockoutMaxAttempts, SettingKey::UserLoginLockoutMaxAttempts => ['integer', 'min:1', 'max:20'],
@@ -42,6 +48,9 @@ class SettingRules
             SettingKey::QaMaxRejectedToFail => ['integer', 'min:1', 'max:20'],
             SettingKey::QaSessionTtlMinutes => ['integer', 'min:1', 'max:1440'],
             SettingKey::QaTypoTolerance => ['integer', 'min:0', 'max:'.AnswerMatcher::MAX_TOLERANCE],
+            SettingKey::QaMaxUnsuccessfulSessions => ['integer', 'min:1', 'max:20'],
+            SettingKey::QaUnsuccessfulWindowHours => ['integer', 'min:1', 'max:'.QaRetryLimit::MAX_WINDOW_HOURS],
+            SettingKey::PhoneAllowedRegions => ['required', 'array', 'min:1', new RegionListRule],
             SettingKey::PinMinLength, SettingKey::PinMaxLength => ['integer', 'min:'.PinService::MIN_ALLOWED_LENGTH, 'max:'.PinService::MAX_ALLOWED_LENGTH],
             SettingKey::PinMaxFailedAttempts => ['integer', 'min:1', 'max:20'],
             SettingKey::PinLockoutMinutes => ['integer', 'min:1', 'max:1440'],

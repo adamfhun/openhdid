@@ -12,6 +12,9 @@ use Illuminate\Console\Command;
  */
 class CreateApiKeyCommand extends Command
 {
+    /** As long as the name field of the API keys page allows. */
+    private const NAME_MAX_LENGTH = 100;
+
     protected $signature = 'hdid:api-key:create {name : Label shown in the panel} {scope : callcenter or mobile_backend}';
 
     protected $description = 'Create a machine API key and print it once';
@@ -26,7 +29,15 @@ class CreateApiKeyCommand extends Command
             return self::FAILURE;
         }
 
-        ['key' => $key, 'plain' => $plain, 'secret' => $secret] = ApiKey::generate((string) $this->argument('name'), $scope);
+        $name = (string) $this->argument('name');
+
+        if (mb_strlen($name) > self::NAME_MAX_LENGTH) {
+            $this->error(__('The name may be at most :max characters long.', ['max' => self::NAME_MAX_LENGTH]));
+
+            return self::FAILURE;
+        }
+
+        ['key' => $key, 'plain' => $plain, 'secret' => $secret] = ApiKey::generate($name, $scope);
 
         $this->components->info("API key \"{$key->name}\" ({$scope->value}) created. Copy it now; it is not shown again.");
         $this->line($plain);

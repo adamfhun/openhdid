@@ -20,5 +20,6 @@ export const loginErrorMessages = {
     sso_subject_mismatch: 'This sign-in comes from a different directory identity than the one bound to the account. Ask an administrator to check the account and clear its sign-in binding.',
     sso_subject_taken: 'This directory identity is already bound to another account. Ask an administrator to check the accounts.',
     tenant_domain_not_allowed: 'The organisation you signed in with may not sign in this account. Please report this to the operator of the system.',
+    demo_account: 'This is a demo account. Demo accounts cannot sign in to a production installation.',
     session_expired: 'Your session has expired. Please sign in again.',
 };

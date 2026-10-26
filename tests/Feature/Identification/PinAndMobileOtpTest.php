@@ -18,6 +18,7 @@ use App\Models\IdSession;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\Installation;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Cache;
@@ -221,7 +222,7 @@ it('holds the global pin lock while it checks uniqueness and writes, so two clie
 
     Event::listen('eloquent.saving: '.Client::class, function (Client $saved) use (&$held): void {
         // A second lock instance can only take the key when nobody holds it.
-        $probe = Cache::lock('hdid:pin-assignment', 1);
+        $probe = Cache::lock(Installation::lockName('hdid:pin-assignment'), 1);
         $free = $probe->get();
         if ($free) {
             $probe->release();

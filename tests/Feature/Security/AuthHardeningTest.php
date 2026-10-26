@@ -147,7 +147,7 @@ it('skips csrf for bearer requests unless the session itself signs a client in',
     $strayCookie = Request::create('/api/v1/client/logout', 'POST', cookies: [config('session.cookie') => 'x'], server: ['HTTP_AUTHORIZATION' => 'Bearer t']);
     $browser = Request::create('/api/v1/client/logout', 'POST', cookies: [config('session.cookie') => 'x']);
 
-    // A session cookie without a login (the web stack sets one on every response) is harmless.
+    // A session cookie without a login (a guest gets one from /sanctum/csrf-cookie or the panel) is harmless.
     expect($exempt($bare))->toBeTrue()
         ->and($exempt($strayCookie))->toBeTrue()
         ->and($exempt($browser))->toBeFalse();
@@ -236,7 +236,9 @@ it('limits ivr checks per call and keys the limiter on the api key', function ()
     }
     $this->withHeaders(['X-Api-Key' => 'key-123'])->postJson('/api/v1/callcenter/ivr/verify-code', ['code' => '11111111', 'call_id' => 'c-1'])->assertStatus(429);
     $this->withHeaders(['X-Api-Key' => 'key-123'])->postJson('/api/v1/callcenter/ivr/verify-code', ['code' => '11111111', 'call_id' => 'c-2'])->assertOk();
-    expect(RateLimiter::attempts(md5('ivr'.'ivr:legacy')))->toBe(11)
+    // The per-call budget is counted after the key check (IvrController), so the refused
+    // eleventh check of c-1 passed the route throttle and counts in the key's bucket.
+    expect(RateLimiter::attempts(md5('ivr'.'ivr:legacy')))->toBe(12)
         ->and(RateLimiter::attempts(md5('ivr'.'ivr:ip:127.0.0.1')))->toBe(0);
 });
 

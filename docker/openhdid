@@ -3,16 +3,19 @@
 # starts one role:
 #
 #   web                 nginx + PHP-FPM (portal, staff panel, APIs)
-#   worker [queues]     queue worker; queues default to "default"
+#   worker [queues]     queue worker; queues default to "<HDID_PRIORITY_QUEUE, else priority>,default"
 #   scheduler           Laravel scheduler (replaces cron), exactly one per installation
 #   migrate             waits for the database, runs migrations and the role seeder
 #   artisan <args>      any artisan command, e.g. artisan hdid:make-admin admin@example.org
 #   key                 prints a new APP_KEY for a new installation (never replace a live key)
 #   reload              re-checks the TLS files and reloads nginx without dropping connections
 #   tls-check           validates the mounted certificate and key, prints a summary
-#   healthcheck         used by the image HEALTHCHECK
+#   healthcheck [live]  used by the image HEALTHCHECK (PHP-FPM answers /up); "live" asks nginx only
 #   version             prints the release version
 set -eu
+# Files written at run time (the config cache with every secret, logs, uploads, the CA bundle)
+# are for this account and its group only; the container has no other account anyway.
+umask 027
 
 APP_DIR=/app
 SHARE=/usr/local/share/openhdid
@@ -67,9 +70,19 @@ warm_caches() {
     fi
 }
 
+# The bundled session Valkey (valkey-sessions, compose.yaml) comes with the bundled main one
+# (REDIS_HOST=valkey). With an external REDIS_HOST the sessions stay there until
+# REDIS_SESSION_HOST names a second server of its own; the Session store card says so.
+session_store() {
+    if [ "${REDIS_SESSION_HOST:-}" = valkey-sessions ] && [ "${REDIS_HOST:-}" != valkey ]; then
+        unset REDIS_SESSION_HOST
+    fi
+}
+
 prepare() {
     role=$1
     load_file_secrets
+    session_store
     prepare_dirs
     prepare_ca_bundle
     printf '%s\n' "$role" > "$RUNTIME/role"
@@ -114,13 +127,21 @@ case "$cmd" in
         run_web
         ;;
     worker)
-        queues=${1:-${OPENHDID_WORKER_QUEUES:-default}}
+        # Default: the priority queue of the sign-in codes and links first, then the default one.
+        priority_queue=${HDID_PRIORITY_QUEUE:-priority}
+        if [ "$priority_queue" = default ]; then
+            default_queues=default
+        else
+            default_queues="${priority_queue},default"
+        fi
+        queues=${1:-${OPENHDID_WORKER_QUEUES:-$default_queues}}
         prepare worker
         log "worker listening on queue(s): $queues"
         # No PHP time limit for the worker: php.ini's 300 s is for web requests, a
         # 20 000-row EMD sync can use more CPU time; the job's own 1200 s timeout
-        # (pcntl) remains the guard against a stuck run.
-        exec php -d max_execution_time=0 artisan queue:work --queue="$queues" --sleep=3 --tries=1 --max-time=3600 --memory=256 --no-interaction
+        # (pcntl) remains the guard against a stuck run. Above 192 MB the worker
+        # restarts after the job, well before memory_limit (256M) would stop one.
+        exec php -d max_execution_time=0 artisan queue:work --queue="$queues" --sleep=3 --tries=1 --max-time=3600 --memory=192 --no-interaction
         ;;
     scheduler)
         prepare scheduler
@@ -160,7 +181,7 @@ case "$cmd" in
         exec php "$SHARE/runtime.php" tls-check
         ;;
     healthcheck)
-        exec php "$SHARE/runtime.php" healthcheck
+        exec php "$SHARE/runtime.php" healthcheck "$@"
         ;;
     version)
         printf '%s\n' "${HDID_VERSION:-unknown}"

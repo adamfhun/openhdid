@@ -3,8 +3,10 @@
 use App\Http\Middleware\AuthenticateApiKey;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\FilePermissions;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Testing\TestResponse;
+use Symfony\Component\HttpFoundation\Request;
 use Tests\TestCase;
 
 pest()->extend(TestCase::class)
@@ -13,6 +15,12 @@ pest()->extend(TestCase::class)
         // Portal access is package-gated; factories give clients the "Premium" package.
         app(Settings::class)->set(SettingKey::PackagesPremium, ['Premium']);
         app(Settings::class)->set(SettingKey::PackagesStandard, ['Basic']);
+        // The file permission tile would read the checkout's own files, whose modes depend on
+        // the machine; a test that is about it hands over files of its own.
+        app()->instance(FilePermissions::class, new FilePermissions([]));
+        // The trusted host list is static on the request class: a test that ran a request
+        // as production (TrustHosts) would leave it set for every later test.
+        Request::setTrustedHosts([]);
     })
     ->in('Feature');
 

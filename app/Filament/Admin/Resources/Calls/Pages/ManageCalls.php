@@ -3,12 +3,15 @@
 namespace App\Filament\Admin\Resources\Calls\Pages;
 
 use App\Filament\Admin\Resources\Calls\CallResource;
+use App\Filament\Concerns\LimitsSearchInput;
 use Filament\Resources\Pages\ManageRecords;
 use Filament\Schemas\Components\Tabs\Tab;
 use Illuminate\Database\Eloquent\Builder;
 
 class ManageCalls extends ManageRecords
 {
+    use LimitsSearchInput;
+
     protected static string $resource = CallResource::class;
 
     /** @return array<int, Tab> */

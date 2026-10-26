@@ -4,6 +4,8 @@ namespace App\Filament\Admin\Resources\Users\Pages;
 
 use App\Filament\Admin\Resources\ExternalRecords\ExternalRecordResource;
 use App\Filament\Admin\Resources\Users\UserResource;
+use App\Filament\Concerns\GuardsManagedAccounts;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\User;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
@@ -12,6 +14,9 @@ use Illuminate\Database\Eloquent\Builder;
 
 class ListUsers extends ListRecords
 {
+    use GuardsManagedAccounts;
+    use LimitsSearchInput;
+
     protected static string $resource = UserResource::class;
 
     protected function getHeaderActions(): array

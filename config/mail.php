@@ -50,6 +50,11 @@ return [
             'password' => env('MAIL_PASSWORD'),
             'timeout' => null,
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
+            // STARTTLS is required: without it a server (or someone in between) that offers
+            // no STARTTLS would receive the password and every e-mail in plain text. Direct
+            // TLS (smtps, port 465) is encrypted anyway. Symfony EsmtpTransportFactory option.
+            // Only an explicit false turns it off: an empty or garbled value keeps it on.
+            'require_tls' => in_array(env('MAIL_REQUIRE_TLS'), [null, ''], true) ? true : (filter_var(env('MAIL_REQUIRE_TLS'), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true),
         ],
 
         'ses' => [
@@ -82,13 +87,12 @@ return [
             'transport' => 'array',
         ],
 
+        // The legs are mailer names (a nested array is not resolved). With EWS as the
+        // first leg, its "no saved copy" marker header may go out on the SMTP leg.
         'failover' => [
             'transport' => 'failover',
             'mailers' => [
-                'ews' => [
-                    'transport' => 'ews',
-                ],
-
+                'ews',
                 'smtp',
                 'log',
             ],
@@ -98,10 +102,7 @@ return [
         'roundrobin' => [
             'transport' => 'roundrobin',
             'mailers' => [
-                'ews' => [
-                    'transport' => 'ews',
-                ],
-
+                'ews',
                 'ses',
                 'postmark',
             ],

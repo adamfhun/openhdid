@@ -7,6 +7,7 @@ use App\Filament\Actions\ExportTableAction;
 use App\Filament\Admin\Pages\AuditArchives;
 use App\Filament\Admin\Resources\AuditLogs\AuditLogResource;
 use App\Filament\Admin\Widgets\AuditEventsWidget;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\AuditLog;
 use App\Support\HuDate;
 use Filament\Actions\Action;
@@ -14,6 +15,8 @@ use Filament\Resources\Pages\ManageRecords;
 
 class ManageAuditLogs extends ManageRecords
 {
+    use LimitsSearchInput;
+
     protected static string $resource = AuditLogResource::class;
 
     /**

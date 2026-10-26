@@ -64,19 +64,20 @@ Ezután lépjen be a `https://<kiszolgáló>/admin` címen, és folytassa az *Ad
 | Szolgáltatás | Parancs | Feladat |
 |---|---|---|
 | `web` | `web` | nginx (mainline, TLS 1.3) és PHP-FPM: portál, munkatársi panel, API-k |
-| `worker` | `worker default` | e-mail, SMS, életjel |
+| `worker` | `worker` | e-mail, SMS, életjel; előbb a belépési kódok elsőbbségi sora (`HDID_PRIORITY_QUEUE`) |
 | `sync-worker` | `worker sync` | a panelről indított ügyféltörzs-átvétel (legfeljebb 20 perc) |
 | `scheduler` | `scheduler` | az ütemező, a cron helyett; pontosan egy példány fusson |
 | `migrate` | `migrate` | minden indításkor egyszer: megvárja az adatbázist, migrál |
 | `mariadb` | – | beépített MariaDB LTS (`db` profil); külső kiszolgáló is használható |
-| `valkey` | – | gyorsítótár, munkamenet és üzenetsor (`redis` profil, alapból bekapcsolva); külső Valkey is használható |
+| `valkey` | – | gyorsítótár, üzenetsor, zárak és korlátszámlálók, memóriakorláttal, kiszorítás nélkül (`redis` profil, alapból bekapcsolva); külső Valkey is használható |
+| `valkey-sessions` | – | a munkamenetek saját Valkey-je (`redis` profil, `allkeys-lru`): egy belépőoldal-áradat a saját munkameneteit szorítja ki, nem a sort vagy a zárakat |
 
 - **Beállítások**: a telepítési értékek környezeti változók (`.env`), az üzleti paraméterek a panelen szerkeszthetők és az adatbázisban élnek. Bármely változó fájlból is jöhet (`DB_PASSWORD_FILE=/run/secrets/db_password`), Docker- vagy Kubernetes-titokként. Módosítás után: `docker compose up -d`.
 - **Naplók**: a szabványos kimenetre kerülnek, az access log tömör JSON (URL, lekérdezés és süti nélkül). Olvasás: `docker compose logs -f web`. A Compose-fájl forgatja őket (`json-file` meghajtó, Dockeren és Podmanon is); központi naplógyűjtéshez a konténermotor naplózó-meghajtója kell.
 - **Rendszerállapot**: `GET /health` (az `OPENHDID_MONITORING_ALLOW` címeiről), `docker compose exec web php artisan hdid:health`, valamint a *Rendszerállapot* oldal.
 - **Frissítés**: mentés (`./backup.sh`), új `OPENHDID_VERSION`, majd `docker compose pull && docker compose up -d`. A migrációk automatikusan és csak előre futnak. Lépésről lépésre, másolható parancsokkal: [UPGRADE.md](UPGRADE.md) (minden kiadás mellékleteként is, a verziószám már beírva).
 - **Hibakeresés**: másolható diagnosztikai parancsok (állapot, proxy, jogosultság, ügyféltörzs-elérés és -belépés, tanúsítvány-lánc, egyszeri bejelentkezés, a belépés elutasításának oka): [TROUBLESHOOTING.md](TROUBLESHOOTING.md), kiadási mellékletként is.
-- **Mentés és visszaállítás** egy paranccsal, root nélkül: `./backup.sh` (a `backup` almappába, időbélyeggel: adatbázis, storage kötet, beállítások, tls), `./backup.sh list`, `./backup.sh restore [név]`. Napi cron: `30 2 * * * /opt/openhdid/backup.sh --quiet`; a mentéseket másolja a gazdagépen kívülre, és csak olyan helyről állítson vissza, ahová illetéktelen nem írhat. Visszaállítás után mindenkinek újra be kell lépnie.
+- **Mentés és visszaállítás** egy paranccsal, root nélkül: `./backup.sh` (a `backup` almappába, időbélyeggel: adatbázis, storage kötet, beállítások, tls), `./backup.sh list`, `./backup.sh restore [név]`, `./backup.sh signout` (mindenki kiléptetése, például külső adatbázis visszaállítása után). Napi cron: `30 2 * * * /opt/openhdid/backup.sh --quiet`; a mentéseket másolja a gazdagépen kívülre, és csak olyan helyről állítson vissza, ahová illetéktelen nem írhat. Visszaállítás után mindenkinek újra be kell lépnie, a mobilalkalmazásban is.
 
 ## Konténer-image
 
@@ -102,7 +103,7 @@ Nem privilegizált felhasználóként (uid 82) fut, csak olvasható gyökér-fá
 Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz. A `v` a telepített verzió (a `.env` `OPENHDID_VERSION` értéke):
 
 ```sh
-v=1.13.1
+v=1.14.0
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \

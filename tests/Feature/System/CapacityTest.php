@@ -7,6 +7,7 @@ use App\Models\Client;
 use App\Models\User;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
+use App\System\RuntimeLimits;
 use App\System\SizingProfile;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Support\Facades\Cache;
@@ -83,4 +84,100 @@ it('includes the audit and capacity tiles with hints in the health report', func
         ->and($keys->has('capacity'))->toBeTrue()
         ->and($keys->get('audit')->hint)->toContain('hdid:prune')
         ->and($keys->get('capacity')->hint)->toContain('HDID_SIZING_PROFILE');
+});
+
+/**
+ * The PHP-FPM pool and container limits as the panel's request would see them.
+ *
+ * @param  array<string, mixed>|null  $status
+ */
+function fakeRuntimeLimits(?array $status, ?int $children, ?int $perRequest, ?int $container): void
+{
+    app()->instance(RuntimeLimits::class, new class($status, $children, $perRequest, $container) extends RuntimeLimits
+    {
+        /**
+         * @param  array<string, mixed>|null  $status
+         */
+        public function __construct(private ?array $status, private ?int $children, private ?int $perRequest, private ?int $container) {}
+
+        public function inFpm(): bool
+        {
+            return true;
+        }
+
+        public function fpmStatus(): ?array
+        {
+            return $this->status;
+        }
+
+        public function fpmMaxChildren(): ?int
+        {
+            return $this->children;
+        }
+
+        public function requestMemoryLimit(): ?int
+        {
+            return $this->perRequest;
+        }
+
+        public function containerMemoryLimit(): ?int
+        {
+            return $this->container;
+        }
+
+        public function opcacheBytes(): int
+        {
+            return 208 * 1_048_576;
+        }
+    });
+}
+
+it('shows the PHP-FPM pool on the panel and warns while requests wait for a free process', function (): void {
+    config()->set('hdid.profile', null);
+    fakeRuntimeLimits(['active-processes' => 3, 'total-processes' => 12, 'listen-queue' => 0, 'max-children-reached' => 2], 12, 128 * 1_048_576, 2688 * 1_048_576);
+
+    $check = app(HealthChecks::class)->capacity();
+    expect($check->status)->toBe(CheckStatus::Ok)
+        ->and($check->detail)->toContain('PHP-FPM 3 of 12 processes busy, 0 waiting, all busy 2 time(s) since start');
+
+    fakeRuntimeLimits(['active-processes' => 12, 'total-processes' => 12, 'listen-queue' => 9, 'max-children-reached' => 40], 12, 128 * 1_048_576, 2688 * 1_048_576);
+    $check = app(HealthChecks::class)->capacity();
+    expect($check->status)->toBe(CheckStatus::Warn)
+        ->and($check->detail)->toContain('9 waiting', 'waiting for a free PHP-FPM process');
+});
+
+it('warns when the PHP-FPM processes may take more memory than the web container has', function (): void {
+    config()->set('hdid.profile', null);
+    // 16 processes × (256 MB + overhead) + opcache is far above a 1.5 GB limit.
+    fakeRuntimeLimits(null, 16, 256 * 1_048_576, 1536 * 1_048_576);
+
+    $check = app(HealthChecks::class)->capacity();
+
+    expect($check->status)->toBe(CheckStatus::Warn)
+        ->and($check->detail)->toContain('16 processes with memory_limit 256,0 MB', '1,5 GB', 'OPENHDID_FPM_MAX_CHILDREN', 'OPENHDID_WEB_MEM_LIMIT');
+
+    // The shipped 5k sizing: 12 × 128 MB within 2688 MB.
+    fakeRuntimeLimits(null, 12, 128 * 1_048_576, 2688 * 1_048_576);
+    expect(app(HealthChecks::class)->capacity()->status)->toBe(CheckStatus::Ok);
+});
+
+it('says nothing about the pool where no PHP-FPM runs the check', function (): void {
+    config()->set('hdid.profile', null);
+
+    expect(app(RuntimeLimits::class)->inFpm())->toBeFalse()
+        ->and(app(RuntimeLimits::class)->fpmStatus())->toBeNull()
+        ->and(app(HealthChecks::class)->capacity()->detail)->not->toContain('PHP-FPM')
+        ->and(RuntimeLimits::bytes('128M'))->toBe(134_217_728)
+        ->and(RuntimeLimits::bytes('1G'))->toBe(1_073_741_824)
+        ->and(RuntimeLimits::bytes('-1'))->toBe(-1);
+});
+
+it('warns when max_connections is below what one web server opens with the workers', function (): void {
+    fakeRuntimeLimits(null, 12, 128 * 1_048_576, null);
+    $problems = fn (int $max): array => (fn (array $connections): array => $this->runtimeLimits($connections))
+        ->call(app(HealthChecks::class), ['used' => 5, 'max' => $max])['problems'];
+
+    expect($problems(15))->toHaveCount(1)
+        ->and($problems(15)[0])->toContain('max_connections is 15', '20 connections', 'OPENHDID_DB_MAX_CONNECTIONS')
+        ->and($problems(40))->toBe([]);
 });

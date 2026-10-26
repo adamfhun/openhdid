@@ -68,12 +68,18 @@ enum SettingKey: string
     case ClientLoginMagicLinkEnabled = 'client_login.magic_link.enabled';
     case ClientLoginMagicLinkTtlMinutes = 'client_login.magic_link.ttl_minutes';
     case ClientLoginMagicLinkPreviewInPanel = 'client_login.magic_link.preview_in_panel';
+    // Login links anonymous requests may send per hour, all clients together (0 = no limit)
+    case ClientLoginMagicLinkMaxPerHour = 'client_login.magic_link.max_per_hour';
     case ClientLoginOtpSmsEnabled = 'client_login.otp_sms.enabled';
     case ClientLoginOtpSmsTtlMinutes = 'client_login.otp_sms.ttl_minutes';
     case ClientLoginOtpSmsLength = 'client_login.otp_sms.length';
     case ClientLoginOtpMaxAttempts = 'client_login.otp_sms.max_attempts';
     case ClientLoginOtpSmsMaxPerNumberPerMinute = 'client_login.otp_sms.max_per_number_per_minute';
     case ClientLoginOtpSmsMaxPerNumberPerHour = 'client_login.otp_sms.max_per_number_per_hour';
+    case ClientLoginOtpSmsMaxPerNumberPerDay = 'client_login.otp_sms.max_per_number_per_day';
+    // SMS login codes anonymous requests may send, all clients together, per hour and per day
+    case ClientLoginOtpSmsMaxPerHour = 'client_login.otp_sms.max_per_hour';
+    case ClientLoginOtpSmsMaxPerDay = 'client_login.otp_sms.max_per_day';
     case ClientLoginOtpSmsEmailFallbackEnabled = 'client_login.otp_sms.email_fallback_enabled';
     case ClientLoginRememberEnabled = 'client_login.remember.enabled';
     case ClientLoginRememberDays = 'client_login.remember.days';
@@ -107,6 +113,10 @@ enum SettingKey: string
     case QaSessionTtlMinutes = 'identification.qa.session_ttl_minutes';
     case QaBlindCheck = 'identification.qa.blind_check';
     case QaTypoTolerance = 'identification.qa.typo_tolerance';
+    // Unsuccessful sessions of one client within a period (failed, undecided, or cancelled or expired
+    // after a shown question that was not accepted), before a new one waits
+    case QaMaxUnsuccessfulSessions = 'identification.qa.max_unsuccessful_sessions';
+    case QaUnsuccessfulWindowHours = 'identification.qa.unsuccessful_window_hours';
 
     // Identification: PIN
     case PinMinLength = 'identification.pin.min_length';
@@ -127,6 +137,10 @@ enum SettingKey: string
 
     // Identification: a client identified on a call proves the number the call came from
     case VerifyPhoneOnIdentifiedCall = 'identification.verify_phone_on_identified_call';
+
+    // Phone numbers: the countries the portal takes numbers of; text messages go
+    // only to their mobile numbers (SmsDestinations)
+    case PhoneAllowedRegions = 'phone.allowed_regions';
 
     // External sync
     case SyncMissedRunsBeforeClose = 'sync.missed_runs_before_close';
@@ -193,6 +207,10 @@ enum SettingKey: string
             self::ClientLoginOtpMaxAttempts,
             self::ClientLoginOtpSmsMaxPerNumberPerMinute,
             self::ClientLoginOtpSmsMaxPerNumberPerHour,
+            self::ClientLoginOtpSmsMaxPerNumberPerDay,
+            self::ClientLoginOtpSmsMaxPerHour,
+            self::ClientLoginOtpSmsMaxPerDay,
+            self::ClientLoginMagicLinkMaxPerHour,
             self::ClientLoginRememberDays,
             self::ClientLoginSessionMaxHours,
             self::ClientLoginLockoutMaxAttempts,
@@ -208,6 +226,8 @@ enum SettingKey: string
             self::QaMaxRejectedToFail,
             self::QaSessionTtlMinutes,
             self::QaTypoTolerance,
+            self::QaMaxUnsuccessfulSessions,
+            self::QaUnsuccessfulWindowHours,
             self::PinMinLength,
             self::PinMaxLength,
             self::PinMaxFailedAttempts,
@@ -252,6 +272,7 @@ enum SettingKey: string
             self::CallsQueueTiers,
             self::ClientsDirectoryFields,
             self::UserLoginMfaMethods,
+            self::PhoneAllowedRegions,
             self::SyncColumnMapping => SettingType::Json,
 
             default => SettingType::Text,
@@ -298,6 +319,10 @@ enum SettingKey: string
             self::ClientLoginOtpMaxAttempts => 5,
             self::ClientLoginOtpSmsMaxPerNumberPerMinute => 1,
             self::ClientLoginOtpSmsMaxPerNumberPerHour => 3,
+            self::ClientLoginOtpSmsMaxPerNumberPerDay => 5,
+            self::ClientLoginOtpSmsMaxPerHour => 60,
+            self::ClientLoginOtpSmsMaxPerDay => 300,
+            self::ClientLoginMagicLinkMaxPerHour => 10000,
             self::ClientLoginOtpSmsEmailFallbackEnabled => true,
             self::ClientLoginRememberEnabled, self::UserLoginRememberEnabled => false,
             self::ClientLoginRememberDays, self::UserLoginRememberDays => 30,
@@ -324,6 +349,8 @@ enum SettingKey: string
             self::QaSessionTtlMinutes => 30,
             self::QaBlindCheck => false,
             self::QaTypoTolerance => 1,
+            self::QaMaxUnsuccessfulSessions => 3,
+            self::QaUnsuccessfulWindowHours => 24,
 
             self::PinMinLength => 6,
             self::PinMaxLength => 10,
@@ -341,6 +368,7 @@ enum SettingKey: string
             self::MobileOtpTtlMinutes => 5,
             self::AgentAttemptsPerHour => 50,
             self::VerifyPhoneOnIdentifiedCall => false,
+            self::PhoneAllowedRegions => ['HU'],
 
             self::SyncMissedRunsBeforeClose => 2,
             self::SyncMinRowsRatioPercent => 50,
@@ -416,9 +444,10 @@ enum SettingKey: string
     public function dependsOn(): ?self
     {
         return match ($this) {
-            self::ClientLoginMagicLinkTtlMinutes, self::ClientLoginMagicLinkPreviewInPanel => self::ClientLoginMagicLinkEnabled,
+            self::ClientLoginMagicLinkTtlMinutes, self::ClientLoginMagicLinkPreviewInPanel, self::ClientLoginMagicLinkMaxPerHour => self::ClientLoginMagicLinkEnabled,
             self::ClientLoginOtpSmsLength, self::ClientLoginOtpSmsTtlMinutes, self::ClientLoginOtpMaxAttempts,
-            self::ClientLoginOtpSmsMaxPerNumberPerMinute, self::ClientLoginOtpSmsMaxPerNumberPerHour,
+            self::ClientLoginOtpSmsMaxPerNumberPerMinute, self::ClientLoginOtpSmsMaxPerNumberPerHour, self::ClientLoginOtpSmsMaxPerNumberPerDay,
+            self::ClientLoginOtpSmsMaxPerHour, self::ClientLoginOtpSmsMaxPerDay,
             self::ClientLoginOtpSmsEmailFallbackEnabled, self::ClientLoginLockoutMaxAttempts, self::ClientLoginLockoutMinutes => self::ClientLoginOtpSmsEnabled,
             self::ClientLoginRememberDays => self::ClientLoginRememberEnabled,
             self::UserLoginMfaMethods, self::UserLoginMfaTrustProvider => self::UserLoginMfaEnabled,
@@ -448,7 +477,7 @@ enum SettingKey: string
             self::UserLoginLockoutMinutes, self::SsoMobileTokenMaxAgeMinutes, self::QaSessionTtlMinutes,
             self::PinLockoutMinutes, self::MobileOtpTtlMinutes => __('setting-unit.minutes'),
             self::ClientLoginSessionMaxHours, self::UserLoginSessionMaxHours, self::SyncExpectedIntervalHours,
-            self::CallsRetentionHours, self::CallsStaleAfterHours => __('setting-unit.hours'),
+            self::CallsRetentionHours, self::CallsStaleAfterHours, self::QaUnsuccessfulWindowHours => __('setting-unit.hours'),
             self::ClientLoginRememberDays, self::UserLoginRememberDays, self::RetentionAuditHotDays => __('setting-unit.days'),
             self::RetentionGeneralYears, self::RetentionShortLivedYears => __('setting-unit.years'),
             self::CallsDashboardPollSeconds => __('setting-unit.seconds'),
@@ -471,6 +500,9 @@ enum SettingKey: string
             self::QaSessionTtlMinutes => __('Session lifetime'),
             self::QaBlindCheck => __('Blind check'),
             self::QaTypoTolerance => __('Allowed typos'),
+            self::QaMaxUnsuccessfulSessions => __('Unsuccessful sessions per client, at most'),
+            self::QaUnsuccessfulWindowHours => __('Unsuccessful sessions counted over'),
+            self::PhoneAllowedRegions => __('Accepted countries (phone numbers)'),
             self::PinMinLength => __('Shortest PIN'),
             self::PinMaxLength => __('Longest PIN'),
             self::PinMaxFailedAttempts => __('Lock after this many wrong PINs'),
@@ -495,6 +527,10 @@ enum SettingKey: string
             self::ClientLoginOtpMaxAttempts => __('Attempts per code'),
             self::ClientLoginOtpSmsMaxPerNumberPerMinute => __('Codes to one number per minute, at most'),
             self::ClientLoginOtpSmsMaxPerNumberPerHour => __('Codes to one number per hour, at most'),
+            self::ClientLoginOtpSmsMaxPerNumberPerDay => __('Codes to one number per day, at most'),
+            self::ClientLoginOtpSmsMaxPerHour => __('Codes per hour in total, at most'),
+            self::ClientLoginOtpSmsMaxPerDay => __('Codes per day in total, at most'),
+            self::ClientLoginMagicLinkMaxPerHour => __('Login links per hour in total, at most'),
             self::ClientLoginOtpSmsEmailFallbackEnabled => __('E-mailed link as a fallback'),
             self::ClientLoginLockoutMaxAttempts => __('Lock after this many wrong codes'),
             self::UserLoginLockoutMaxAttempts => __('Lock after this many wrong passwords or codes'),
@@ -559,6 +595,9 @@ enum SettingKey: string
             self::QaMinAnsweredQuestionsRequired => __('A client can be identified by questions once this many are answered.'),
             self::QaBlindCheck => __('The stored answer is hidden: the agent types what the caller says, and the system compares.'),
             self::QaTypoTolerance => __('How many typos still count as a match (0–:max).', ['max' => AnswerMatcher::MAX_TOLERANCE]),
+            self::QaMaxUnsuccessfulSessions => __('Unsuccessful question-and-answer sessions one client may have within the period below (failed, undecided, or cancelled or expired with a shown question that was not accepted); then no new one starts until the oldest leaves the period.'),
+            self::QaUnsuccessfulWindowHours => __('The period over which the unsuccessful question-and-answer sessions of a client are counted.'),
+            self::PhoneAllowedRegions => __('Clients may add phone numbers of these countries on the portal, and text messages go only to their mobile numbers; the helpdesk and EMD may record any number.'),
             self::PinMinLength, self::PinMaxLength => __('When a PIN is set or replaced (:min–:max digits); existing PINs stay valid.', ['min' => PinService::MIN_ALLOWED_LENGTH, 'max' => PinService::MAX_ALLOWED_LENGTH]),
             self::PinMaxFailedAttempts => __('Wrong PINs in a row before the PIN is locked; a repeated lock doubles the time, up to 24 hours.'),
             self::PinAgentVerificationEnabled => __('Agents may also check the PIN the caller tells them; their role needs the PIN check permission as well.'),
@@ -577,6 +616,10 @@ enum SettingKey: string
             self::ClientLoginOtpSmsEnabled => __('A one-time code by SMS to the client\'s primary phone number.'),
             self::ClientLoginOtpSmsMaxPerNumberPerMinute => __('Codes sent to one number in a minute.'),
             self::ClientLoginOtpSmsMaxPerNumberPerHour => __('Codes sent to one number in an hour.'),
+            self::ClientLoginOtpSmsMaxPerNumberPerDay => __('Codes sent to one number in 24 hours.'),
+            self::ClientLoginOtpSmsMaxPerHour => __('SMS codes the login page may send in an hour, all clients together.'),
+            self::ClientLoginOtpSmsMaxPerDay => __('SMS codes the login page may send in 24 hours, all clients together.'),
+            self::ClientLoginMagicLinkMaxPerHour => __('Login links the login page may send in an hour, all clients together; 0 means no limit.'),
             self::ClientLoginOtpSmsEmailFallbackEnabled => __('When the code does not arrive, the login page offers an e-mailed link once; works only with the login link switched on.'),
             self::ClientLoginLockoutMaxAttempts => __('Wrong SMS codes in a row before the SMS login of the client is locked. Single sign-on and the e-mail link stay usable.'),
             // The second-factor codes count against the same numbers (StaffMfa), so this is not tied to the password switch.
@@ -629,6 +672,8 @@ enum SettingKey: string
             self::ClientsListRelevantOnly => __('The Clients list opens with the relevant accounts only: portal access, closed, or any history (PIN, answers, calls, identifications, links, notes). EMD-only accounts stay reachable through the list filter and the search.'),
             self::ClientsDirectoryFields => __('Columns of EMD that are not mapped to a fixed field arrive as "other columns" of the EMD record. List here the ones the helpdesk should see on the client page and list and be able to export; the key is the column header as EMD sends it, the value is the label shown.'),
             self::QaBlindCheck => __('On: during question-and-answer identification the stored answer is hidden. The agent types what the caller says and the system compares it (case, accents, punctuation and spaces do not count, digits must be the same, a few typos are allowed as set below); the answer is shown only when it matches. A match accepts the question, a clearly different answer rejects it, a close one gets one retry and then counts as "cannot decide". The agent cannot accept or reject by hand, so the caller cannot be led to the answer. Off: the agent sees the stored answer and decides. A switch applies to sessions started afterwards.'),
+            self::QaMaxUnsuccessfulSessions => __('Guards against a caller who knows some of the answers and calls again and again until the random questions suit them. Failed sessions (too many rejected answers) and undecided ones ("cannot decide" until passing was out of reach) count, and so do cancelled and expired sessions in which a question was shown and not accepted (still open, rejected or "cannot decide"), so hanging up on an unknown question is no free retry; whichever agent ran them makes no difference. On the identification page the first question shows as soon as the session starts, so a session cancelled or expired right after the start counts too. Passed sessions do not count, nor do sessions closed because the client\'s account was closed. The attempts on the identification page mark the cancelled and expired sessions that count. Once the limit is reached, the start button on the identification page is disabled and says until when, every refused start is written to the audit log (id_session.qa_refused), and staff with the client management permission can lift the lock on that page (client.qa_unlocked). The PIN, the one-time code and manual identification stay usable. The agents\' hourly limit of failed checks is a separate rule and does not change.'),
+            self::PhoneAllowedRegions => __('Portal: a number of a country not listed here is refused with the reason. A landline or other number of a listed country that cannot receive text messages (premium rate, toll free, shared cost, VoIP) is taken, because it still recognises the caller, and it is marked there as not usable for text messages: it cannot be confirmed by SMS code. Text messages: every one (SMS login code, PIN, number confirmation, staff sign-in code, test message) is checked before it is queued and goes only to a mobile number of a listed country, because the destination sets the price of an SMS; where the numbering plan of a country does not tell every mobile number apart from a landline, the field names that country, because a text message may reach its landlines too. A refused message is listed on the Outbound messages page as cancelled with the reason, and the audit log records message.refused. The helpdesk (Phone numbers tab of the client page) and the EMD sync may record any number; the tab warns about a number of a country not listed here and marks a number that cannot be used for text messages.'),
             self::QaTypoTolerance => __('Blind check only: how many typos (a letter swapped, missing or extra, or two neighbours swapped) still match, 0–:max. Answers shorter than :short characters must match exactly, and digits always.', ['max' => AnswerMatcher::MAX_TOLERANCE, 'short' => AnswerMatcher::EXACT_BELOW]),
             self::PinMinLength, self::PinMaxLength => __('Allowed PIN length when setting or replacing a PIN (:min–:max digits). Existing PINs remain valid. The phone menu checks the PIN only for callers recognised by a registered number, so a PIN needs a phone number.', ['min' => PinService::MIN_ALLOWED_LENGTH, 'max' => PinService::MAX_ALLOWED_LENGTH]),
             self::PinClientChangesEnabled => __('Allows clients to set, replace and remove their own PIN. Disabled: only authorized staff can manage it. PIN uniqueness is controlled separately.'),
@@ -639,6 +684,10 @@ enum SettingKey: string
             self::ClientLoginMagicLinkPreviewInPanel => __('On: after "Send a login link" the panel notification also shows the link itself, so a tester can sign in without the mailbox. Anyone who can send links can then sign in as the client: keep it off in production; the system status page warns while it is on. Debug mode shows the link regardless.'),
             self::ClientLoginOtpSmsMaxPerNumberPerMinute => __('Login codes sent to one phone number per minute; the login page offers the next send after this interval. Keeps a flood of requests from running up the SMS bill. Other text messages are not limited.'),
             self::ClientLoginOtpSmsMaxPerNumberPerHour => __('Login codes sent to one phone number per hour; beyond it no code goes out until the hour has passed (the request is refused silently and audited). The login page offers one re-send, then the e-mailed link or support.'),
+            self::ClientLoginOtpSmsMaxPerNumberPerDay => __('Login codes sent to one phone number in 24 hours (counted on the sent messages); beyond it no code goes out to that number until the oldest is a day old, the request is refused silently and audited (message.refused, sms_limit_per_day). Other text messages are not limited.'),
+            self::ClientLoginOtpSmsMaxPerHour => __('Guards the SMS budget against a flood of anonymous login requests spread over many addresses, numbers and networks. Only codes that go out count, in a window of one hour from the first. Above the limit the login page answers as always, but no code goes out until the window is over: the audit log records login.request_capped with the channel (at most once a minute), the Outbound messages tile of the status page turns yellow and the portal\'s login page tells every visitor that SMS codes cannot be requested now. The networks exempt from the address limits (HDID_RATE_LIMIT_EXEMPT_NETWORKS) count here too. Staff second-factor codes and the other text messages are not counted: none of them can be asked for anonymously.'),
+            self::ClientLoginOtpSmsMaxPerDay => __('The same for a window of 24 hours from the first code: a code refused by the hourly limit does not count here, and a full day is not reopened by a new hour. Set the two near the real need: every code costs money.'),
+            self::ClientLoginMagicLinkMaxPerHour => __('Guards the mailbox against a flood of anonymous login requests spread over many addresses and networks; one address may ask five times in 15 minutes in any case. Only links that go out count, in a window of one hour from the first. Above the limit the login page answers as always, but no link goes out until the window is over: the audit log records login.request_capped with the channel (at most once a minute), the Outbound messages tile turns yellow and the portal\'s login page tells every visitor that links cannot be sent now. Links the helpdesk sends from the client page do not count and are never held back, and company sign-in is not affected. The default (10 000) leaves room for every client of the largest sizing profile signing in within one hour. What actually goes out is set by the mail service: Exchange Online, for example, lets one mailbox send 30 messages a minute and reach 10 000 recipients a day; links beyond that wait in the queue. The short-lived SMS login codes and staff second-factor codes go on the priority queue and are sent first; login links, which live for hours, wait on the default queue with the other mail.'),
             self::ClientLoginOtpSmsEmailFallbackEnabled => __('On: when the SMS code did not arrive after the second send, the login page offers to e-mail a login link once. Works only while "Login link by e-mail" is also on: with the e-mail link login off, this switch has no effect and the page says to contact support, as when the switch is off.'),
             self::ClientLoginRememberEnabled, self::UserLoginRememberEnabled => __('On: a sign-in through single sign-on (and, for staff, the "Remember me" box of the password form) keeps the browser signed in for the days set below, beyond the session limit. Off: no remember-me cookie. The e-mail link and the SMS code never remember.'),
             self::UserLoginMfaEnabled => __('On: every staff sign-in (password, ADFS, Entra, remember-me cookie) asks for a second factor before anything in the panel opens, once per new session. Staff without a factor set one up at their next step; switching on applies to sessions already open too.'),
@@ -662,8 +711,12 @@ enum SettingKey: string
             self::ClientSsoEntraEnabled, self::UserSsoEntraEnabled, self::ClientSsoAdfsEnabled, self::UserSsoAdfsEnabled, self::SsoMobileTokenMaxAgeMinutes => ['SSO', 'OIDC'],
             self::ClientLoginMagicLinkEnabled, self::ClientLoginMagicLinkTtlMinutes, self::ClientLoginMagicLinkPreviewInPanel => ['magic link', 'e-mail link'],
             self::ClientLoginOtpSmsEnabled, self::ClientLoginOtpSmsLength, self::ClientLoginOtpSmsTtlMinutes, self::ClientLoginOtpMaxAttempts => ['OTP'],
+            self::ClientLoginMagicLinkMaxPerHour => ['magic link', 'e-mail link', __('limit')],
+            self::ClientLoginOtpSmsMaxPerHour, self::ClientLoginOtpSmsMaxPerDay, self::ClientLoginOtpSmsMaxPerNumberPerDay => ['OTP', 'SMS', __('limit')],
             self::MobileOtpLength, self::MobileOtpTtlMinutes => [__('dictated code')],
             self::QaMinAnsweredQuestionsRequired, self::QaMaxQuestionsPerSession, self::QaMinAcceptedToPass, self::QaMaxRejectedToFail, self::QaSessionTtlMinutes, self::QaBlindCheck, self::QaTypoTolerance => ['K-V', 'Q-A'],
+            self::QaMaxUnsuccessfulSessions, self::QaUnsuccessfulWindowHours => ['K-V', 'Q-A', __('lock'), __('retry')],
+            self::PhoneAllowedRegions => ['SMS', __('country'), __('premium rate'), __('landline')],
             self::UserLoginMfaEnabled, self::UserLoginMfaMethods, self::UserLoginMfaTrustProvider => ['MFA', '2FA'],
             default => [],
         };

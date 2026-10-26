@@ -32,7 +32,7 @@
 
             <form wire:submit="verify" class="space-y-3">
                 <x-filament::input.wrapper :valid="! $errors->has('code')">
-                    <x-filament::input type="text" wire:model="code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" :placeholder="__('Code')" x-init="$nextTick(() => $el.focus())" />
+                    <x-filament::input type="text" wire:model="code" inputmode="numeric" autocomplete="one-time-code" maxlength="{{ \App\Filament\Pages\Auth\MfaChallenge::CODE_INPUT_MAX_LENGTH }}" :placeholder="__('Code')" x-init="$nextTick(() => $el.focus())" />
                 </x-filament::input.wrapper>
                 @error('code')
                     <p class="text-sm text-danger-600 dark:text-danger-400">{{ $message }}</p>

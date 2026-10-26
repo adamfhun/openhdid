@@ -8,6 +8,7 @@ use App\Clients\ClientTiers;
 use App\Enums\PhoneNumberSource;
 use App\Filament\Admin\NavigationGroup;
 use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\ClientPhoneNumber;
 use App\Support\HuDate;
 use BackedEnum;
@@ -33,6 +34,7 @@ use UnitEnum;
 class SharedPhoneNumbers extends Page implements HasTable
 {
     use InteractsWithTable;
+    use LimitsSearchInput;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedPhoneXMark;
 

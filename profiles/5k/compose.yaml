@@ -4,9 +4,17 @@
 #   COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml
 #   COMPOSE_PROFILES=db,redis
 #
-# Gazdagép: 4 vCPU, 8 GB RAM, 80 GB lemez. Beépített MariaDB és Valkey, két feldolgozó az
-# üzenetekre, egy a panelről indított ügyféltörzs-átvételre. A .env-ben megadott
-# OPENHDID_FPM_* és OPENHDID_DB_* értékek az itteni alapértékeket írják felül.
+# Méretezés: a normál csúcs (kb. 50 kérés/s: portál 30, vezérlőpult 18, gépi API 2) kétszerese,
+# kb. 100 kérés/s; a kétszeres tartalék a korlátokon (nginx-kéréskorlát, útvonal- és
+# azonosítónkénti korlátok) belül maradó rosszindulatú terhelésé, ami fölötte érkezik, azt az
+# nginx 429-cel vagy 503-mal elutasítja. Gazdagép: 4 vCPU, 10 GB RAM, 80 GB lemez. A
+# memóriaplafonok összege kb. 8,8 GB (web 2688m, worker 2 × 384m, sync-worker 448m, scheduler 1g,
+# migrate 384m, MariaDB 2g, Valkey 768m, munkamenet-Valkey 896m), mellette 1 GB az operációs
+# rendszeré. 12 PHP-FPM folyamat (128 MB memory_limit), MariaDB 1 GB pufferrel és 40 kapcsolattal,
+# Valkey 256 MB-tal (kiszorítás nélkül), munkamenet-Valkey 384 MB-tal (allkeys-lru), két
+# feldolgozó az üzenetekre, egy a panelről indított ügyféltörzs-átvételre. A .env-ben megadott
+# OPENHDID_FPM_*, OPENHDID_DB_*, OPENHDID_WEB_MEM_LIMIT és OPENHDID_VALKEY_* értékek az itteni
+# alapértékeket írják felül; a plafont a hozzá tartozó értékkel együtt kell emelni.
 #
 # Részletek: docs/openhdid-telepitesi-utmutato.pdf (2. fejezet) és
 # docs/openhdid-uzemeltetesi-kezikonyv.pdf (9. fejezet).
@@ -15,11 +23,14 @@ services:
   web:
     environment:
       HDID_SIZING_PROFILE: 5k
+      OPENHDID_NGINX_WORKERS: ${OPENHDID_NGINX_WORKERS:-4}
       OPENHDID_FPM_PM: ${OPENHDID_FPM_PM:-dynamic}
-      OPENHDID_FPM_MAX_CHILDREN: ${OPENHDID_FPM_MAX_CHILDREN:-16}
+      OPENHDID_FPM_MAX_CHILDREN: ${OPENHDID_FPM_MAX_CHILDREN:-12}
       OPENHDID_FPM_START_SERVERS: ${OPENHDID_FPM_START_SERVERS:-4}
       OPENHDID_FPM_MIN_SPARE_SERVERS: ${OPENHDID_FPM_MIN_SPARE_SERVERS:-4}
       OPENHDID_FPM_MAX_SPARE_SERVERS: ${OPENHDID_FPM_MAX_SPARE_SERVERS:-8}
+    # 12 × 150 + 208 + 4 nginx workers × 80 + 256 (/tmp) + 64 ≈ 2648 MB.
+    mem_limit: ${OPENHDID_WEB_MEM_LIMIT:-2688m}
 
   worker:
     environment:
@@ -35,6 +46,16 @@ services:
     environment:
       HDID_SIZING_PROFILE: 5k
 
+  # 1024M + 192 + 40 × 20 ≈ 2016 MB.
+  mariadb:
+    mem_limit: ${OPENHDID_DB_MEM_LIMIT:-2g}
+
+  valkey:
+    mem_limit: ${OPENHDID_VALKEY_MEM_LIMIT:-768m}
+
+  valkey-sessions:
+    mem_limit: ${OPENHDID_VALKEY_SESSIONS_MEM_LIMIT:-896m}
+
 configs:
   mariadb-server:
     content: |
@@ -42,5 +63,30 @@ configs:
       character-set-server = utf8mb4
       collation-server = utf8mb4_unicode_ci
       skip-name-resolve
-      innodb_buffer_pool_size = ${OPENHDID_DB_BUFFER_POOL:-2G}
-      max_connections = ${OPENHDID_DB_MAX_CONNECTIONS:-200}
+      # 12 PHP-FPM + 2 workers + EMD worker + scheduler (3) + migrate + 6 spare = 25, with room: 40.
+      innodb_buffer_pool_size = ${OPENHDID_DB_BUFFER_POOL:-1G}
+      max_connections = ${OPENHDID_DB_MAX_CONNECTIONS:-40}
+      key_buffer_size = 16M
+
+  # A compose.yaml valkey beállításával azonos. A maxmemory-policy noeviction kötelező:
+  # kiszorításnál korlátszámlálók, visszajátszás-védelem, zárak és várakozó feladatok vesznének
+  # el csendben. A munkamenetek a valkey-sessions szolgáltatásban vannak.
+  valkey:
+    content: |
+      appendonly yes
+      save ""
+      requirepass "${REDIS_PASSWORD:-}"
+      maxmemory ${OPENHDID_VALKEY_MAXMEMORY:-256mb}
+      maxmemory-policy noeviction
+
+  # A kétszeres terhelés munkamenetei a teljes, 120 perces élettartamra (kb. 13 MB valódi és kb.
+  # 300 MB vendég munkamenet, 20 % tartalékkal); fölötte a legrégebben használtak szorulnak ki.
+  valkey-sessions:
+    content: |
+      appendonly no
+      save 300 1
+      stop-writes-on-bgsave-error no
+      requirepass "${REDIS_PASSWORD:-}"
+      maxmemory ${OPENHDID_VALKEY_SESSIONS_MAXMEMORY:-384mb}
+      maxmemory-policy allkeys-lru
+      maxmemory-samples 10

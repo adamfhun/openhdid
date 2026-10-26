@@ -14,7 +14,9 @@ import Icon from '../components/Icon.vue';
  * presses the button, which posts the token. The token sits in the address
  * fragment, which never reaches the server log; it is cleared from the
  * address bar at once and kept in the history entry's state, so a reload
- * before the button is pressed still finds it.
+ * before the button is pressed still finds it. Only a token of the issued
+ * form (64 letters and digits, see OneTimeCodes::issueToken) is taken: a
+ * damaged or padded link asks for the e-mail again instead of posting it.
  */
 const router = useRouter();
 const token = ref(null);
@@ -30,7 +32,7 @@ function rememberToken(value) {
 }
 
 onMounted(() => {
-    const match = window.location.hash.match(/token=([A-Za-z0-9]+)/);
+    const match = window.location.hash.match(/token=([A-Za-z0-9]{64})(?![A-Za-z0-9])/);
     token.value = match ? match[1] : (history.state?.magicToken ?? null);
     if (window.location.hash || token.value) rememberToken(token.value);
     if (!token.value) error.value = t('This page needs the link from the e-mail: open it again, or ask for a new link on the login page.');

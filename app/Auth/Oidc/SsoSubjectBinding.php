@@ -35,6 +35,9 @@ class SsoSubjectBinding
 
     public const EVENT_UNBOUND = 'sso.subject_unbound';
 
+    /** The binding's columns (issuer, client id, subject) hold this many characters. */
+    public const MAX_VALUE_LENGTH = 255;
+
     public function __construct(
         private readonly Auditor $auditor,
         private readonly AccountLogin $login,
@@ -57,6 +60,14 @@ class SsoSubjectBinding
             }
 
             $this->reject($account, $method, LoginRejection::NoSubjectClaim, $context + ['subject_claim' => SsoSubject::claimOf($config->provider)]);
+        }
+
+        // A value the binding cannot hold is refused, never cut: a cut
+        // subject could match another person's.
+        foreach (['iss' => $subject->issuer, 'client_id' => $subject->clientId, $subject->claim => $subject->subject] as $claim => $value) {
+            if (mb_strlen($value) > self::MAX_VALUE_LENGTH) {
+                $this->reject($account, $method, LoginRejection::InvalidCredentials, $context + ['detail' => 'claim_too_long', 'claim' => $claim, 'length' => mb_strlen($value), 'max_length' => self::MAX_VALUE_LENGTH]);
+            }
         }
 
         // Two sign-ins may race for the first binding; the unique indexes

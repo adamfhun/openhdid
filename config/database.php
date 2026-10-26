@@ -3,6 +3,14 @@
 use Illuminate\Support\Str;
 use Pdo\Mysql;
 
+// The sessions' own Valkey/Redis (REDIS_SESSION_*): a key left empty falls back to its
+// REDIS_* counterpart, so an installation without them keeps the sessions on the main server.
+$sessionRedis = static function (string $key, mixed $fallback): mixed {
+    $value = env('REDIS_SESSION_'.$key);
+
+    return $value === null || $value === '' ? $fallback : $value;
+};
+
 return [
 
     /*
@@ -160,6 +168,22 @@ return [
             'password' => env('REDIS_PASSWORD'),
             'port' => env('REDIS_PORT', '6379'),
             'database' => env('REDIS_DB', '0'),
+            'max_retries' => env('REDIS_MAX_RETRIES', 3),
+            'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
+            'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
+            'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
+        ],
+
+        // Sessions only (SESSION_CONNECTION=session, the default with SESSION_DRIVER=redis): a
+        // flood of sign-in pages fills this store, evicting the least recently used sessions
+        // (allkeys-lru), while the queue, the locks and the rate limits stay on the main one.
+        'session' => [
+            'url' => $sessionRedis('HOST', null) === null ? env('REDIS_URL') : null,
+            'host' => $sessionRedis('HOST', env('REDIS_HOST', '127.0.0.1')),
+            'username' => $sessionRedis('USERNAME', env('REDIS_USERNAME')),
+            'password' => $sessionRedis('PASSWORD', env('REDIS_PASSWORD')),
+            'port' => $sessionRedis('PORT', env('REDIS_PORT', '6379')),
+            'database' => $sessionRedis('DB', env('REDIS_DB', '0')),
             'max_retries' => env('REDIS_MAX_RETRIES', 3),
             'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
             'backoff_base' => env('REDIS_BACKOFF_BASE', 100),

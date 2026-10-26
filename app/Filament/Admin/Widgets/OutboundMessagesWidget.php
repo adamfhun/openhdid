@@ -5,6 +5,8 @@ namespace App\Filament\Admin\Widgets;
 use App\Auth\Permission;
 use App\Enums\OutboundMessageStatus;
 use App\Filament\Admin\Resources\OutboundMessages\OutboundMessageResource;
+use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\OutboundMessage;
 use Filament\Tables\Table;
 use Filament\Widgets\TableWidget;
@@ -17,6 +19,9 @@ use Illuminate\Database\Eloquent\Builder;
  */
 class OutboundMessagesWidget extends TableWidget
 {
+    use AuthorizesEveryRequest;
+    use LimitsSearchInput;
+
     protected int|string|array $columnSpan = 'full';
 
     public static function canView(): bool

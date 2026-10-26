@@ -48,6 +48,7 @@ class Client extends Authenticatable implements Principal
     {
         return [
             'closed_at' => 'datetime',
+            'email_changed_by_admin_at' => 'datetime',
             'last_login_at' => 'datetime',
             'last_seen_at' => 'datetime',
             'pin_set_at' => 'datetime',

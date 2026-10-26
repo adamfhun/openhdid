@@ -6,9 +6,11 @@ use App\Auth\Permission;
 use App\Clients\ClientLinks;
 use App\Clients\ClientTiers;
 use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Filament\Concerns\RequiresServedOwner;
 use App\Models\Client;
 use App\Models\ClientLink;
+use App\Support\InputLimits;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
 use Filament\Notifications\Notification;
@@ -26,6 +28,7 @@ use Illuminate\Validation\ValidationException;
  */
 class LinkedClientsRelationManager extends RelationManager
 {
+    use LimitsSearchInput;
     use RequiresServedOwner;
 
     protected static string $relationship = 'sponsoredLinks';
@@ -35,8 +38,17 @@ class LinkedClientsRelationManager extends RelationManager
         return __('Linked clients');
     }
 
+    /**
+     * The client permission first (the links have no policy of their own,
+     * so Filament's own viewAny check does not apply here), then whether the
+     * client sponsors or ever sponsored anybody.
+     */
     public static function canViewForRecord(Model $ownerRecord, string $pageClass): bool
     {
+        if (! (auth()->user()?->can(Permission::ClientsView->value) ?? false)) {
+            return false;
+        }
+
         return app(ClientLinks::class)->canSponsor($ownerRecord) || $ownerRecord->sponsoredLinks()->exists();
     }
 
@@ -133,12 +145,12 @@ class LinkedClientsRelationManager extends RelationManager
                 Action::make('link')
                     ->label(__('Link a client'))
                     ->icon('heroicon-o-link')
-                    ->authorize(fn () => auth()->user()?->can(Permission::ClientsManage->value) ?? false)
+                    ->authorize(fn () => auth()->user()?->can('update', $this->getOwnerRecord()) ?? false)
                     ->disabled(fn () => ! $links->canSponsor($this->getOwnerRecord()))
                     ->tooltip(fn () => static::linkBlocker($this->getOwnerRecord(), $links))
                     ->schema([
                         Select::make('client_id')->label(__('Client'))->required()->searchable()->allowHtml()
-                            ->getSearchResultsUsing(fn (string $search) => static::linkableClients($this->getOwnerRecord(), $search))
+                            ->getSearchResultsUsing(fn (string $search) => static::linkableClients($this->getOwnerRecord(), InputLimits::search($search)))
                             ->getOptionLabelUsing(fn ($value) => ($c = static::servedClients()->with(['externalRecord', 'phoneNumbers'])->find($value)) ? static::optionLabel($c) : null)
                             ->helperText(__('Only clients without an implicit premium package of their own can be linked, and each client can be linked to one sponsor at a time.')),
                     ])
@@ -154,7 +166,7 @@ class LinkedClientsRelationManager extends RelationManager
             ->recordActions([
                 Action::make('unlink')->label(__('End link'))->icon('heroicon-o-x-mark')->color('danger')->requiresConfirmation()
                     ->modalDescription(__('The link ends now and stays in the list with its end date. The linked account is not closed by this.'))
-                    ->authorize(fn () => auth()->user()?->can(Permission::ClientsManage->value) ?? false)
+                    ->authorize(fn () => auth()->user()?->can('update', $this->getOwnerRecord()) ?? false)
                     ->visible(fn (ClientLink $record) => $record->isActive())
                     ->action(fn (ClientLink $record) => $links->unlink($record, auth()->user())),
             ])

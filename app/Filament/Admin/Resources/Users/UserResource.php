@@ -4,6 +4,8 @@ namespace App\Filament\Admin\Resources\Users;
 
 use App\Auth\Mfa\StaffMfa;
 use App\Auth\Oidc\SsoAccess;
+use App\Auth\Permission;
+use App\Auth\Role;
 use App\Auth\RoleAssignment;
 use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
@@ -17,7 +19,9 @@ use App\Filament\Admin\Resources\Users\Pages\CreateUser;
 use App\Filament\Admin\Resources\Users\Pages\EditUser;
 use App\Filament\Admin\Resources\Users\Pages\ListUsers;
 use App\Models\User;
+use App\Support\EmailAddressRule;
 use App\Support\HuDate;
+use App\System\NotDemoAddressRule;
 use BackedEnum;
 use Closure;
 use Filament\Actions\Action;
@@ -41,6 +45,7 @@ use Filament\Tables\Filters\TrashedFilter;
 use Filament\Tables\Table;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Spatie\Permission\Models\Role as RoleModel;
 
@@ -74,10 +79,16 @@ class UserResource extends BaseResource
         return $schema->components([
             Section::make(__('Account'))->columns(2)->schema([
                 TextInput::make('name')->label(__('Name'))->required()->maxLength(255),
-                TextInput::make('email')->label(__('E-mail'))->email()->required()->unique(ignoreRecord: true)->maxLength(255)
-                    ->helperText(fn (?User $record) => $record?->externalRecord !== null && ! $record->externalRecord->isLocal()
-                        ? __('Must match the e-mail claim of the SSO provider and the EMD record.')
-                        : __('Must match the e-mail claim of the SSO provider and the EMD record. If EMD already holds a staff record with this e-mail, saving links the account at once.')),
+                // The e-mail is the account's identity: on an account linked to EMD or bound
+                // to a company sign-in only the sync changes it (LinksToDirectory).
+                TextInput::make('email')->label(__('E-mail'))->type('email')->required()->unique(ignoreRecord: true)->maxLength(EmailAddressRule::MAX_LENGTH)->rule(new EmailAddressRule)->rule(new NotDemoAddressRule)
+                    ->disabled(fn (?User $record): bool => $record?->manualEmailLock() !== null)
+                    ->dehydrated(fn (?User $record): bool => $record?->manualEmailLock() === null)
+                    ->helperText(fn (?User $record) => match (true) {
+                        $record === null => __('Must match the e-mail claim of the SSO provider and the EMD record. If EMD already holds a staff record with this e-mail, saving links the account at once.'),
+                        $record->manualEmailLock() !== null => EditUser::emailLockText($record),
+                        default => trim(__('Must match the e-mail claim of the SSO provider and the EMD record. Saving a new address signs the account out everywhere (the Save button asks first); if EMD holds a staff record with the new address, the account is linked to it, and the password, second factors and sign-in binding set up before are removed.').' '.(EditUser::handOverNote($record) ?? '')),
+                    }),
                 TextInput::make('password')->label(__('Password'))->password()->revealable()->minLength(12)->maxLength(255)
                     ->dehydrated(fn ($state) => filled($state))
                     ->required(fn (string $operation) => static::passwordRequired($operation))
@@ -85,8 +96,11 @@ class UserResource extends BaseResource
                         ? __('Required: no staff SSO provider is switched on and configured, so a password is the only way to sign in.')
                         : __('Only needed for password login; leave empty for SSO-only accounts.')),
                 Select::make('roles')->label(__('Roles'))->relationship('roles', 'name')->multiple()->preload()->required()
-                    ->disableOptionWhen(fn (string $label) => ! app(RoleAssignment::class)->canGrant(auth()->user(), $label))
-                    ->helperText(fn () => app(RoleAssignment::class)->isSuperAdmin(auth()->user()) ? null : __('The SuperAdmin role can only be granted by a SuperAdmin.'))
+                    // Greyed out: a role the editor may neither grant nor take away (RoleAssignment::canGrant).
+                    ->disableOptionWhen(fn (int|string $value): bool => array_key_exists($value, app(RoleAssignment::class)->lockedRoles(auth()->user())))
+                    // A held role that is greyed out stays in the state, so it must pass the options check.
+                    ->in(fn (Select $component): array => array_keys($component->getOptions()))
+                    ->helperText(fn (?User $record): ?string => static::roleGrantHelp($record))
                     ->rule(fn (?User $record): Closure => function (string $attribute, mixed $value, Closure $fail) use ($record): void {
                         $names = RoleModel::query()->whereKey((array) $value)->pluck('name');
 
@@ -145,6 +159,37 @@ class UserResource extends BaseResource
     }
 
     /**
+     * Under the roles field: the rule of granting, the greyed-out roles with
+     * how many of their permissions the editor lacks, and the held ones the
+     * account keeps whatever the editor sends. Nothing for a SuperAdmin, who
+     * may grant every role.
+     */
+    public static function roleGrantHelp(?User $record): ?string
+    {
+        $roles = app(RoleAssignment::class);
+        $actor = auth()->user();
+
+        if (! $actor instanceof User || $roles->isSuperAdmin($actor)) {
+            return null;
+        }
+
+        $locked = collect($roles->lockedRoles($actor));
+        $lacking = $locked
+            ->reject(fn (array $role): bool => $role['name'] === Role::SuperAdmin->value)
+            ->map(fn (array $role): string => __(':role (missing permissions: :count)', ['role' => $role['name'], 'count' => count($role['missing'])]))
+            ->implode(', ');
+        $kept = $record?->exists
+            ? $record->roles->pluck('name')->intersect($locked->pluck('name'))->implode(', ')
+            : '';
+
+        return implode(' ', array_filter([
+            __('You can only grant or remove a role whose every permission you hold, and only a SuperAdmin can grant the SuperAdmin role.'),
+            $lacking !== '' ? __('Greyed out for you: :roles.', ['roles' => $lacking]) : null,
+            $kept !== '' ? __('Stays on this account as it is: :roles.', ['roles' => $kept]) : null,
+        ]));
+    }
+
+    /**
      * A new account needs a password only while staff cannot sign in any other way.
      */
     public static function passwordRequired(string $operation): bool
@@ -190,19 +235,21 @@ class UserResource extends BaseResource
                 TrashedFilter::make(),
             ])
             ->recordActions([
-                EditAction::make(),
+                // An account the editor may not change (a stronger one) stays listed, its
+                // buttons greyed out with the reason (RoleAssignment::canManage).
+                static::guarded(EditAction::make()),
                 ActionGroup::make([
-                    Action::make('close')->label(__('Close account'))->icon('heroicon-o-lock-closed')->color('danger')->requiresConfirmation()
+                    static::guarded(Action::make('close')->label(__('Close account'))->icon('heroicon-o-lock-closed')->color('danger')->requiresConfirmation()
                         ->modalHeading(fn (User $record) => __('Close the account of :name?', ['name' => $record->name]))
                         ->modalDescription(__('The staff member is signed out of every browser and device at once and cannot sign in by any method; the account can be reopened later.'))
                         ->authorize(fn (User $record) => static::canEdit($record))
                         ->visible(fn (User $record) => ! $record->isClosed())
-                        ->action(fn (User $record) => $record->close('admin')),
-                    Action::make('reopen')->label(__('Reopen'))->icon('heroicon-o-lock-open')->color('success')
+                        ->action(fn (User $record) => $record->close('admin'))),
+                    static::guarded(Action::make('reopen')->label(__('Reopen'))->icon('heroicon-o-lock-open')->color('success')
                         ->authorize(fn (User $record) => static::canEdit($record))
                         ->visible(fn (User $record) => $record->isClosed())
-                        ->action(fn (User $record) => $record->reopen()),
-                    Action::make('resetMfa')->label(__('Reset second factor'))->icon('heroicon-o-shield-exclamation')->color('danger')
+                        ->action(fn (User $record) => $record->reopen())),
+                    static::guarded(Action::make('resetMfa')->label(__('Reset second factor'))->icon('heroicon-o-shield-exclamation')->color('danger')
                         ->authorize(fn (User $record) => static::canEdit($record))
                         ->disabled(fn (User $record) => ! app(StaffMfa::class)->hasAnyFactor($record) && ! app(StaffMfa::class)->isLocked($record))
                         ->tooltip(fn (User $record) => app(StaffMfa::class)->hasAnyFactor($record) || app(StaffMfa::class)->isLocked($record) ? null : __('This staff member has no second factor.'))
@@ -213,13 +260,37 @@ class UserResource extends BaseResource
                             abort_unless(static::canEdit($record), 403);
                             app(StaffMfa::class)->reset($record, auth()->user());
                             Notification::make()->title(__('Second factor reset'))->success()->send();
-                        }),
+                        })),
                     UnlockLoginAction::make(),
                     UnbindSsoAction::make(),
-                    DeleteAction::make(),
-                    RestoreAction::make(),
+                    static::guarded(DeleteAction::make()),
+                    static::guarded(RestoreAction::make()),
                 ])->icon('heroicon-m-ellipsis-vertical')->color('gray')->tooltip(__('More')),
             ]);
+    }
+
+    /**
+     * Greys an account action out with the reason when the editor may not
+     * change the account (it holds a role they could not grant); hidden
+     * stays only for the lack of the permission itself.
+     */
+    public static function guarded(Action $action): Action
+    {
+        return $action
+            ->authorizationTooltip()
+            ->authorizationMessage(fn (?Model $record): ?string => static::manageRefusal($record));
+    }
+
+    /**
+     * Why the signed-in editor may not change the account, or null.
+     */
+    public static function manageRefusal(?Model $record): ?string
+    {
+        $actor = auth()->user();
+
+        return $record instanceof User && $actor instanceof User && $actor->can(Permission::UsersManage->value)
+            ? app(RoleAssignment::class)->manageRefusal($actor, $record)
+            : null;
     }
 
     /**

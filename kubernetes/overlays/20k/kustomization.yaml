@@ -1,7 +1,12 @@
 # OpenHDID – 20k profil: legfeljebb 20 000 ügyfél, 1 000–1 600 egyidejű portálhasználó, 20–30
-# ügyintéző. Web 3–6 pod (1 vCPU, 1,5–2 GB, 12 PHP-FPM folyamat), 3 feldolgozó, 1 ügyféltörzs-
-# feldolgozó, 1 ütemező; menedzselt MariaDB (8 vCPU, 32 GB, innodb_buffer_pool_size 8–16G,
-# max_connections 300) és Valkey (2 GB); node pool 3 × (4 vCPU, 16 GB); RWX kötet 50 GB.
+# ügyintéző. Méretezés: a normál csúcs (kb. 130 kérés/s) kétszerese, kb. 260 kérés/s. Web 3–6 pod
+# (8 PHP-FPM folyamat, 1 vCPU kérés, 2Gi memória kérés = korlát), 3 feldolgozó (384Mi),
+# 1 ügyféltörzs-feldolgozó (448Mi), 1 ütemező (1Gi); a korlátok összege a HPA maximumán, a
+# frissítés többletpodjával kb. 17 GiB. Csomópontkészlet: 3 × (4 vCPU, 12 GB); egy csomópont
+# kiesésekor is elfér. Menedzselt MariaDB (4 vCPU, 16 GB, innodb_buffer_pool_size 8G,
+# max_connections 120) és két Valkey: a fő 256mb maxmemory-val, maxmemory-policy noeviction
+# kötelező, legalább 768 MB-os példány; a munkamenet-tár 1gb maxmemory-val, maxmemory-policy
+# allkeys-lru kötelező, legalább 2,25 GB-os példány (lásd base/kustomization.yaml); RWX kötet 50 GB.
 #
 #   kubectl apply -k kubernetes/overlays/20k
 apiVersion: kustomize.config.k8s.io/v1beta1

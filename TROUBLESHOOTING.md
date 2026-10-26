@@ -170,10 +170,15 @@ docker compose exec web php -r 'echo gethostbyname($argv[1]), PHP_EOL;' "$name" 
 ```
 
 **Ha a név csak a gazdagép `/etc/hosts`-ában van** (teszt gépen gyakori): `extra_hosts` a `compose.yaml` mellé tett
-`compose.override.yaml`-ban, minden külső rendszert hívó szolgáltatásnak; utána `docker compose up -d`. Tartósan
-jobb, ha a név bekerül a belső DNS-be. / **If the name is only in the host's `/etc/hosts`** (common on a test
+`compose.override.yaml`-ban, minden külső rendszert hívó szolgáltatásnak; a `.env` `COMPOSE_FILE` sora miatt a
+Compose ezt a fájlt magától nem olvassa, ezért a sor végére kell írni
+(`COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml:compose.override.yaml`, 10k-nál `profiles/10k/compose.yaml`);
+utána `docker compose config --quiet && docker compose up -d`. Tartósan jobb, ha a név bekerül a belső DNS-be. / **If the name is only in the host's `/etc/hosts`** (common on a test
 machine): `extra_hosts` in a `compose.override.yaml` next to `compose.yaml`, for every service that calls external
-systems; then `docker compose up -d`. In the long run, add the name to the internal DNS.
+systems; because of the `COMPOSE_FILE` line of `.env`, Compose does not read that file on its own, so add it to the
+end of the line (`COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml:compose.override.yaml`, for 10k
+`profiles/10k/compose.yaml`); then `docker compose config --quiet && docker compose up -d`. In the long run, add the
+name to the internal DNS.
 
 ```yaml
 x-hosts: &hosts
@@ -407,6 +412,19 @@ a szkript nem ír bele: ilyen mentést ne állítson vissza. / "A backup or rest
 `kill -9`) is lifted by the next run. A restore stopping on an "unexpected file" means the backup's
 configuration archive holds something the script never writes: do not restore that backup.
 
+Visszaállítás után mindenki kilép (a mobilalkalmazásban is), a munkamenet- és a gyorsítótár a Valkey-ben is
+üres; külső adatbázis külön visszaállítása után ugyanez: `./backup.sh signout` (mindkettő az alkalmazás
+`hdid:sign-out-all` parancsát futtatja; kézzel csak leállított `worker`, `sync-worker` és `scheduler` mellett:
+`docker compose run --rm --no-deps web artisan hdid:sign-out-all`). A kiléptetés nyoma az auditnaplóban: / After
+a restore everyone is signed out (in the mobile app too), the session store and the cache are empty, in Valkey
+too; after restoring an external database separately do the same with `./backup.sh signout` (both run the
+application's `hdid:sign-out-all` command; by hand only with `worker`, `sync-worker` and `scheduler` stopped:
+`docker compose run --rm --no-deps web artisan hdid:sign-out-all`). The sign-out in the audit log:
+
+```sh
+docker compose exec web php artisan tinker --execute 'App\Models\AuditLog::query()->where("event", "access.revoked_all")->latest()->take(3)->get()->each(fn ($e) => print($e->created_at." ".json_encode($e->context).PHP_EOL));'
+```
+
 ## 15. Használati profil fájlja / Usage profile file
 
 ```
@@ -460,3 +478,113 @@ sed -i '/^COMPOSE_FILE=/d' .env
 cp profiles/5k/compose.yaml compose.override.yaml      # ha már van saját compose.override.yaml, abba kell beolvasztani
 docker compose config --quiet && docker compose up -d
 ```
+
+## 16. Demóadat éles környezetben / Demo data in production
+
+A `migrate` 64-es kóddal kilép, a hiba szerint az adatbázisban demóadat van (`.test` tartományú fiókok és
+ügyféltörzstételek, demóhívások), ezért a `web`, a `worker` és az ütemező nem indul. Éles telepítéshez üres
+adatbázis kell; a demókötetet a feltöltött fájlokkal együtt törölni kell. / `migrate` exits with code 64, the
+error says the database holds demo data (accounts and master-data records under `.test`, demo calls), so
+`web`, `worker` and the scheduler do not start. A production installation needs an empty database; remove the
+demo volumes, uploaded files included.
+
+```sh
+docker compose logs migrate | grep -i 'demo data'
+docker compose down -v          # a kötetek törlődnek / the volumes are deleted
+docker compose up -d
+docker compose exec web php artisan hdid:make-admin admin@example.org --name="Rendszergazda"
+```
+
+Ha csak néhány valódi fióknak van `.test` címe (téves felismerés), nem kell törölni: átmenetileg
+`APP_ENV=staging`, a címek javítása, majd vissza `production`. / If only a few real accounts carry a `.test`
+address (a false match), there is no need to delete anything: set `APP_ENV=staging` for a while, fix the
+addresses, then go back to `production`.
+
+## 17. „Ismeretlen kiszolgálónév” (400) / "Unknown host name" (400)
+
+Az alkalmazás csak az `APP_URL` gépnevére, a `localhost` névre és az `OPENHDID_EXTRA_HOSTS` neveire szóló
+kérést fogadja. / The application only accepts requests for the host of `APP_URL`, `localhost` and the names
+in `OPENHDID_EXTRA_HOSTS`.
+
+```sh
+grep -E '^(APP_URL|OPENHDID_EXTRA_HOSTS)=' .env
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: masik.example.org' https://hdid.example.org/up -k
+```
+
+Javítás a `.env`-ben, majd `docker compose up -d`. Az `OPENHDID_EXTRA_HOSTS` nevei gépi hívásra valók
+(telefonközpont, mobil háttérrendszer): böngészőből a panel és a portál csak az `APP_URL` címén működik. /
+Fix `.env`, then `docker compose up -d`. The names in `OPENHDID_EXTRA_HOSTS` are for machine calls (call
+centre, mobile backend): in a browser the panel and the portal work on the `APP_URL` address only.
+
+## 18. Sok 429 vagy 503 / Many 429 or 503 answers
+
+A 429 („Túl sok kérés érkezett erről a címről…”, `Retry-After: 5`) az nginx kliens-címenkénti korlátja
+(alapból 20 kérés/s, 100-as löket, 16 egyidejű kérés; IPv6-on a /64-es hálózat a kulcs; a mentesített hálózatokra nem hat); az 503 („A
+szolgáltatás most túlterhelt…”, `Retry-After: 10`) azt jelenti, hogy nincs szabad PHP-FPM folyamat, és a
+várakozó sor is tele. / A 429 ("Too many requests from this address…", `Retry-After: 5`) is nginx's limit per
+client address (20 requests/s, a burst of 100, 16 concurrent requests by default; the /64 network is the key on
+IPv6; exempt networks are not limited); a 503 ("The service is busy right now…", `Retry-After: 10`) means no PHP-FPM process is free and the
+waiting queue is full too.
+
+```sh
+docker compose logs --since 1h --no-log-prefix web | grep -E 'limiting (requests|connections)' | tail -20
+docker compose logs --since 1h --no-log-prefix web | grep -c '"status":429'
+docker compose logs --since 1h --no-log-prefix web | grep -c '"status":503'
+docker compose logs web | grep -E 'nginx: (at most|no request)'      # a korlát az indításkor / the limit at start
+```
+
+- Minden kérés ugyanarról a címről látszik (az access log `ip` mezője az átjáró vagy az elosztó címe): előbb a
+  valódi kliens-cím (rootless Docker: `slirp4netns`; terheléselosztó: `OPENHDID_TLS=off` és `TRUSTED_PROXIES`;
+  IPv6-NAT). / Every request seems to come from one address (the `ip` field is the gateway or the load
+  balancer): restore the real client address first.
+- Vállalati NAT mögötti felhasználók: `HDID_RATE_LIMIT_EXEMPT_NETWORKS=203.0.113.0/24` (elemenként legfeljebb
+  /8, illetve /32), majd `docker compose up -d`; érvénytelen elemmel a konténer nem indul. / Users behind a
+  company NAT: `HDID_RATE_LIMIT_EXEMPT_NETWORKS=203.0.113.0/24` (at most /8 or /32 per entry), then
+  `docker compose up -d`; an invalid entry stops the container.
+- Csak mérő- vagy tesztpéldányon: `OPENHDID_NGINX_RATE_LIMIT=0`, `OPENHDID_NGINX_CONN_LIMIT=0`. / Only on a
+  load-test or test instance: `OPENHDID_NGINX_RATE_LIMIT=0`, `OPENHDID_NGINX_CONN_LIMIT=0`.
+- Tartós 503: a Rendszerállapot Kapacitás kártyája; több PHP-FPM folyamat (`OPENHDID_FPM_MAX_CHILDREN`) csak
+  nagyobb `OPENHDID_WEB_MEM_LIMIT` mellett, vagy a következő használati profil. / Lasting 503: the Capacity
+  tile; more PHP-FPM processes only with a larger `OPENHDID_WEB_MEM_LIMIT`, or the next usage profile.
+
+## 19. SMTP: „TLS required” / SMTP: "TLS required"
+
+SMTP-n a STARTTLS kötelező (`MAIL_REQUIRE_TLS`, alapból `true`): ha a kiszolgáló nem kínálja, a levél nem megy
+ki, a Levelezés kártya piros. / STARTTLS is mandatory on SMTP (`MAIL_REQUIRE_TLS`, `true` by default): when the
+server does not offer it, the mail is not sent and the Mail tile is red.
+
+```sh
+grep -E '^MAIL_(MAILER|HOST|PORT|SCHEME|REQUIRE_TLS)=' .env
+docker compose exec web php artisan hdid:test-mail cim@example.org --now
+```
+
+Megoldás: STARTTLS a kiszolgálón, vagy `MAIL_SCHEME=smtps` és `MAIL_PORT=465`; `MAIL_REQUIRE_TLS=false` csak
+titkosítás nélküli helyi próbakiszolgálóhoz. Utána `docker compose up -d`. / Fix: STARTTLS on the server, or
+`MAIL_SCHEME=smtps` with `MAIL_PORT=465`; `MAIL_REQUIRE_TLS=false` only for an unencrypted local test server.
+Then `docker compose up -d`.
+
+## 20. Valkey memória és munkamenet-tár / Valkey memory and session store
+
+```sh
+docker compose exec valkey valkey-cli -a "$REDIS_PASSWORD" INFO memory | grep -E 'used_memory_human|maxmemory_human|maxmemory_policy'
+docker compose exec valkey valkey-cli -a "$REDIS_PASSWORD" INFO stats | grep evicted_keys
+docker compose exec valkey-sessions valkey-cli -a "$REDIS_PASSWORD" INFO memory | grep -E 'used_memory_human|maxmemory_human|maxmemory_policy'
+docker compose exec valkey-sessions valkey-cli -a "$REDIS_PASSWORD" INFO stats | grep evicted_keys
+```
+
+A fő Valkey politikája `noeviction` legyen (kiszorításnál a korlátszámlálók, a zárak és a várakozó feladatok
+csendben elvesznének), a munkamenet-Valkey-é `allkeys-lru`. 80 % fölött az `OPENHDID_VALKEY_MAXMEMORY` és az
+`OPENHDID_VALKEY_MEM_LIMIT` (a munkamenet-tárnál az `OPENHDID_VALKEY_SESSIONS_*`) emelése, majd
+`docker compose up -d`. A munkamenet-tár kiszorításai áradatra vagy kicsi tárra utalnak; a kiszorított
+munkamenetek tulajdonosai újra belépnek. / The main Valkey's policy must be `noeviction` (eviction would
+silently drop rate counters, locks and queued jobs), the session Valkey's `allkeys-lru`. Above 80 % raise
+`OPENHDID_VALKEY_MAXMEMORY` and `OPENHDID_VALKEY_MEM_LIMIT` (`OPENHDID_VALKEY_SESSIONS_*` for the session
+store), then `docker compose up -d`. Evictions in the session store mean a flood or a store too small; owners of
+evicted sessions sign in again.
+
+Ha az ütemező és a sor kártyája „másik telepítés” miatt piros, egy másik telepítés ugyanazt a Valkey-t és
+kulcselőtagot használja: saját Valkey, vagy legalább saját adatbázis, ACL-felhasználó és
+`REDIS_PREFIX`/`CACHE_PREFIX` kell (az előtag csak üres sor mellett cserélhető: üzemeltetési kézikönyv 6.
+fejezet). / If the scheduler and queue tiles are red because of "another installation", another installation
+uses the same Valkey and key prefix: give each its own Valkey, or at least its own database, ACL user and
+`REDIS_PREFIX`/`CACHE_PREFIX` (change the prefix only while the queue is empty: operations manual, chapter 6).

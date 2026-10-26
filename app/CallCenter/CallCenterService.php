@@ -18,6 +18,7 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Support\PhoneNormalizer;
+use App\System\Installation;
 use Closure;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -32,6 +33,23 @@ use Illuminate\Validation\ValidationException;
  */
 class CallCenterService
 {
+    /**
+     * The lock of one call, under this installation's name: the external
+     * call id comes from the phone exchange, so two installations sharing a
+     * Valkey/Redis may see the same one.
+     */
+    public static function callLockName(string $externalCallId): string
+    {
+        return Installation::lockName('hdid:call:'.$externalCallId);
+    }
+
+    /** The partner's metadata of one call, merged over its events, holds at most this many keys. */
+    public const METADATA_MAX_KEYS = 50;
+
+    public const METADATA_KEY_MAX_LENGTH = 100;
+
+    public const METADATA_VALUE_MAX_LENGTH = 255;
+
     public function __construct(
         private readonly PhoneNormalizer $phones,
         private readonly PinService $pins,
@@ -54,7 +72,7 @@ class CallCenterService
     {
         $apply = fn (): Call => $this->applyCallEvent($externalCallId, $callerNumber, $status, $queue, $metadata, $arrivedAt, $knownClient, $callerNumberProvided);
 
-        return Cache::lock('hdid:call:'.$externalCallId, 10)->block(5, function () use ($apply): Call {
+        return Cache::lock(self::callLockName($externalCallId), 10)->block(5, function () use ($apply): Call {
             try {
                 return $apply();
             } catch (UniqueConstraintViolationException) {
@@ -90,10 +108,21 @@ class CallCenterService
         $alreadyOver = $call->ended_at !== null;
         $effectiveStatus = $alreadyOver && ! $status->isOver() ? $call->status : $status;
 
+        // Each event merges into what earlier ones sent: without a bound on
+        // the merged object, events with new keys would grow it without end.
+        // Only an event that brings a new key is refused over the bound: a
+        // call that gathered more keys before the bound existed still takes
+        // its status events.
+        $mergedMetadata = $metadata + ($call->metadata ?? []);
+        $addsKeys = array_diff_key($metadata, $call->metadata ?? []) !== [];
+        if ($addsKeys && count(array_diff_key($mergedMetadata, ['ambiguous_number' => true])) > self::METADATA_MAX_KEYS) {
+            throw ValidationException::withMessages(['metadata' => __('The call would carry more than :max metadata keys; send fewer keys or reuse the existing ones.', ['max' => self::METADATA_MAX_KEYS])]);
+        }
+
         $call->fill([
             'status' => $effectiveStatus,
             'queue' => $queue ?? $call->queue,
-            'metadata' => $metadata + ($call->metadata ?? []),
+            'metadata' => $mergedMetadata,
             'arrived_at' => $call->arrived_at ?? $arrivedAt ?? now(),
             'ended_at' => $call->ended_at ?? ($status->isOver() ? now() : null),
         ]);
@@ -133,7 +162,7 @@ class CallCenterService
      */
     public function endCall(string $externalCallId, bool $missed = false): ?Call
     {
-        return Cache::lock('hdid:call:'.$externalCallId, 10)->block(5, function () use ($externalCallId, $missed): ?Call {
+        return Cache::lock(self::callLockName($externalCallId), 10)->block(5, function () use ($externalCallId, $missed): ?Call {
             $call = Call::query()->where('external_call_id', $externalCallId)->first();
 
             if ($call === null) {
@@ -156,7 +185,7 @@ class CallCenterService
      */
     private function underCallLock(Call $call, Closure $write): Call
     {
-        return Cache::lock('hdid:call:'.$call->external_call_id, 10)->block(5, function () use ($call, $write): Call {
+        return Cache::lock(self::callLockName((string) $call->external_call_id), 10)->block(5, function () use ($call, $write): Call {
             $call->refresh();
 
             return $write($call);

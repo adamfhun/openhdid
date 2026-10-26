@@ -68,19 +68,20 @@ Then sign in at `https://<your host>/admin` and continue with *Administration �
 | Service | Command | Purpose |
 |---|---|---|
 | `web` | `web` | nginx (mainline, TLS 1.3) and PHP-FPM: portal, staff panel, APIs |
-| `worker` | `worker default` | e-mail, SMS, heartbeats |
+| `worker` | `worker` | e-mail, SMS, heartbeats; the priority queue of sign-in codes first (`HDID_PRIORITY_QUEUE`) |
 | `sync-worker` | `worker sync` | EMD sync started from the panel (runs up to 20 minutes) |
 | `scheduler` | `scheduler` | the Laravel scheduler, replaces cron; run exactly one |
 | `migrate` | `migrate` | one-off at every start: waits for the database, applies migrations |
 | `mariadb` | – | bundled MariaDB LTS (profile `db`); an external server works as well |
-| `valkey` | – | cache, sessions and queue (profile `redis`, on by default); an external Valkey works too |
+| `valkey` | – | cache, queue, locks and rate counters, with a memory limit and no eviction (profile `redis`, on by default); an external Valkey works too |
+| `valkey-sessions` | – | the sessions' own Valkey (profile `redis`, `allkeys-lru`): a flood of sign-in pages pushes out its own sessions, not the queue or the locks |
 
 - **Configuration** lives in environment variables (`.env`); business settings are edited in the panel and stored in the database. Any variable can come from a file instead (`DB_PASSWORD_FILE=/run/secrets/db_password`) for Docker or Kubernetes secrets. After a change: `docker compose up -d`.
 - **Logs** go to standard output in a compact JSON access log (no URLs, queries or cookies): `docker compose logs -f web`. The Compose file rotates them (`json-file` driver, on Docker and Podman alike); ship them to your log platform with the engine's logging driver.
 - **Health**: `GET /health` (from the addresses in `OPENHDID_MONITORING_ALLOW`), `docker compose exec web php artisan hdid:health`, and the *System status* page.
 - **Upgrades**: back up (`./backup.sh`), set the new `OPENHDID_VERSION`, then `docker compose pull && docker compose up -d`. Migrations run automatically and only move forward. Step by step, with copyable commands: [UPGRADE.md](UPGRADE.md) (also attached to every release, with its version filled in).
 - **Troubleshooting**: copyable diagnostic commands (state, proxy, permissions, master-data reachability and login, certificate chain, single sign-on, why a sign-in was refused): [TROUBLESHOOTING.md](TROUBLESHOOTING.md), also attached to every release.
-- **Backup and restore** in one command, without root: `./backup.sh` (into the `backup` folder, time-stamped: database, storage volume, settings, tls), `./backup.sh list`, `./backup.sh restore [name]`. Daily cron: `30 2 * * * /opt/openhdid/backup.sh --quiet`; copy the backups off the host, and restore only from storage that no unauthorised party can write to. After a restore everyone signs in again.
+- **Backup and restore** in one command, without root: `./backup.sh` (into the `backup` folder, time-stamped: database, storage volume, settings, tls), `./backup.sh list`, `./backup.sh restore [name]`, `./backup.sh signout` (signs everyone out, for example after restoring an external database). Daily cron: `30 2 * * * /opt/openhdid/backup.sh --quiet`; copy the backups off the host, and restore only from storage that no unauthorised party can write to. After a restore everyone signs in again, in the mobile app too.
 
 ## Container image
 
@@ -100,7 +101,7 @@ The image contains only what runs the application: Alpine Linux, PHP-FPM with th
 Every image is signed and carries a build provenance and an SBOM attestation. Set `v` to the version you install (the `OPENHDID_VERSION` of your `.env`):
 
 ```sh
-v=1.13.1
+v=1.14.0
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \

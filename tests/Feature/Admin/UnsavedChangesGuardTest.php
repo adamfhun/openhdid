@@ -18,6 +18,7 @@ use App\Settings\SettingTab;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 use Livewire\Livewire;
 
 beforeEach(function (): void {
@@ -159,6 +160,21 @@ it('follows only this site\'s own addresses', function (string $url, bool $follo
     'user info' => ['{site}@evil.example/x', false],
     'longer host' => ['{site}.evil.example/x', false],
     'script' => ['javascript:alert(1)', false],
+]);
+
+it('follows the panel\'s own links when the configured root is written differently from the request', function (string $root): void {
+    URL::forceRootUrl($root);
+    $own = rtrim(url('/'), '/').'/admin/clients';
+
+    try {
+        expect(ManageSettings::safeLeaveUrl($own))->toBe($own)
+            ->and(ManageSettings::safeLeaveUrl('https://evil.example/admin/clients'))->toBe(Filament::getUrl());
+    } finally {
+        URL::forceRootUrl(null);
+    }
+})->with([
+    'a written-out :443 port' => ['https://hdid.example.test:443'],
+    'https while the request is http' => ['https://localhost'],
 ]);
 
 it('lets a panel form go on after a save that needed a confirmation', function (): void {

@@ -19,7 +19,9 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Exceptions\InvalidSignatureException;
 use Illuminate\Support\Arr;
+use Symfony\Component\HttpFoundation\Exception\SuspiciousOperationException;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -30,7 +32,17 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         // Trusted proxies come from config/trustedproxy.php: this callback runs
-        // before .env and config are loaded, so nothing may be read here.
+        // before .env and config are loaded, so it reads nothing itself; only
+        // closures that run per request (like the host list below) call config().
+        // Trusted hosts: the APP_URL host, the extra names (hdid.extra_hosts)
+        // and "localhost" for the container's internal liveness probe; any other
+        // Host or X-Forwarded-Host is refused with 400. The closure runs per
+        // request, after config is loaded; the framework skips the check in
+        // local development and in tests.
+        $middleware->trustHosts(at: fn (): array => array_map(
+            fn (string $host): string => str_starts_with($host, '*.') ? '^.+\.'.preg_quote(substr($host, 2)).'$' : '^'.preg_quote($host).'$',
+            array_values(array_filter([parse_url((string) config('app.url'), PHP_URL_HOST), 'localhost', ...(array) config('hdid.extra_hosts', [])], 'is_string')),
+        ), subdomains: false);
         $middleware->append(SecurityHeaders::class);
         $middleware->statefulApi();
         $middleware->web(append: [SetLocale::class, EnforceAuthSessions::class, TouchLastSeen::class]);
@@ -79,6 +91,21 @@ return Application::configure(basePath: dirname(__DIR__))
             }
 
             return null;
+        });
+
+        // A request naming a host the deployment does not serve (trusted hosts
+        // above) is told so, instead of a bare "Bad request.": a wrong APP_URL
+        // or a missing extra host name is then easy to spot.
+        $exceptions->render(function (BadRequestHttpException $e, Request $request) {
+            if (! $e->getPrevious() instanceof SuspiciousOperationException || ! str_contains($e->getPrevious()->getMessage(), 'Host "')) {
+                return null;
+            }
+
+            $message = __('Unknown host name: this address is not set up for the application.');
+
+            return $request->is('api', 'api/*') || $request->expectsJson()
+                ? response()->json(['message' => $message, 'reason' => 'unknown_host'], 400)
+                : response($message, 400, ['Content-Type' => 'text/plain; charset=UTF-8']);
         });
 
         // A refused login is an expected answer, audited as login.rejected;

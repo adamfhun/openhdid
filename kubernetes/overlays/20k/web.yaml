@@ -11,7 +11,7 @@ spec:
           env:
             - {name: HDID_SIZING_PROFILE, value: 20k}
           resources:
-            requests: {cpu: "1", memory: 1536Mi}
+            requests: {cpu: "1", memory: 2Gi}
             limits: {memory: 2Gi}
 ---
 apiVersion: apps/v1
@@ -39,8 +39,8 @@ spec:
           env:
             - {name: HDID_SIZING_PROFILE, value: 20k}
           resources:
-            requests: {cpu: 500m, memory: 512Mi}
-            limits: {memory: 1536Mi}
+            requests: {cpu: 500m, memory: 448Mi}
+            limits: {memory: 448Mi}
 ---
 apiVersion: apps/v1
 kind: Deployment

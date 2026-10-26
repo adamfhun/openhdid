@@ -9,9 +9,11 @@ use App\Models\SyncIdListItem;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\Installation;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -328,12 +330,13 @@ it('removes the replaced branding image from the public disk', function (): void
     Storage::disk('public')->put('branding/old-logo.png', 'x');
     app(Settings::class)->set(SettingKey::BrandingLogo, 'branding/old-logo.png');
 
+    // A real upload: a path typed into the field is refused (SettingsImagePathTest).
     Livewire::test(ManageSettings::class)
-        ->fillForm([ManageSettings::fieldName(SettingKey::BrandingLogo) => ['branding/new-logo.png']])
+        ->fillForm([ManageSettings::fieldName(SettingKey::BrandingLogo) => [UploadedFile::fake()->image('new-logo.png')]])
         ->call('save')
         ->assertHasNoFormErrors();
 
-    expect(app(Settings::class)->string(SettingKey::BrandingLogo))->toBe('branding/new-logo.png')
+    expect(app(Settings::class)->string(SettingKey::BrandingLogo))->toStartWith('branding/')->not->toBe('branding/old-logo.png')
         ->and(Storage::disk('public')->exists('branding/old-logo.png'))->toBeFalse();
 });
 
@@ -348,7 +351,7 @@ it('never seeds the shared settings cache from an uncommitted transaction', func
 
             // The pending value must not reach the cache every other process
             // reads; only the committed state may.
-            expect(Cache::get('hdid.settings.'.Cache::get('hdid.settings.version')))->toBeNull();
+            expect(Cache::get((fn (): string => $this->cacheKey())->call($settings)))->toBeNull();
 
             throw new RuntimeException('rollback');
         });
@@ -379,7 +382,7 @@ it('does not let a read from before a save put the old values back in the cache'
 
 it('saves the settings one at a time and gives up with a word when another save holds on', function (): void {
     Sleep::fake(syncWithCarbon: true);
-    $other = Cache::lock('hdid:settings-save', 60);
+    $other = Cache::lock(Installation::lockName('hdid:settings-save'), 60);
     $other->get();
 
     Livewire::test(ManageSettings::class)

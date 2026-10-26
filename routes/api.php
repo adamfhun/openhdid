@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\BrandingController;
 use App\Http\Controllers\Api\V1\CallCenter\CallController;
 use App\Http\Controllers\Api\V1\CallCenter\IvrController;
 use App\Http\Controllers\Api\V1\Mobile\IvrCodeController;
+use App\Http\Requests\Api\V1\CallCenter\CallEventRequest;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->name('api.v1.')->group(function (): void {
@@ -17,8 +18,11 @@ Route::prefix('v1')->name('api.v1.')->group(function (): void {
 
     Route::prefix('callcenter')->name('callcenter.')->middleware(['throttle:machine', 'api-key:callcenter'])->group(function (): void {
         Route::match(['get', 'post'], 'calls', [CallController::class, 'upsert'])->name('calls.upsert');
-        Route::get('calls/{callId}', [CallController::class, 'show'])->name('calls.show');
-        Route::match(['get', 'post'], 'calls/{callId}/end', [CallController::class, 'end'])->name('calls.end');
+        // A call id in the path is as long as one in a call event at most:
+        // a longer one names no call (404) and never reaches the call lock.
+        $callId = '[^/]{1,'.CallEventRequest::CALL_ID_MAX_LENGTH.'}';
+        Route::get('calls/{callId}', [CallController::class, 'show'])->where('callId', $callId)->name('calls.show');
+        Route::match(['get', 'post'], 'calls/{callId}/end', [CallController::class, 'end'])->where('callId', $callId)->name('calls.end');
         Route::get('lookup', [CallController::class, 'lookup'])->withoutMiddleware('throttle:machine')->middleware('throttle:ivr')->name('lookup');
         Route::match(['get', 'post'], 'ivr/verify-pin', [IvrController::class, 'verifyPin'])->withoutMiddleware('throttle:machine')->middleware('throttle:ivr')->name('ivr.verify-pin');
         Route::match(['get', 'post'], 'ivr/verify-code', [IvrController::class, 'verifyCode'])->withoutMiddleware('throttle:machine')->middleware('throttle:ivr')->name('ivr.verify-code');

@@ -11,9 +11,11 @@ use App\Identification\ClientAnswers;
 use App\Identification\ClientSearch;
 use App\Models\Call;
 use App\Models\Client;
+use App\Support\InputLimits;
 use BackedEnum;
 use Filament\Pages\Page;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Str;
 use Livewire\Attributes\Url;
 use UnitEnum;
 
@@ -57,7 +59,7 @@ class SearchClients extends Page
      */
     public function getFoundProperty(): Collection
     {
-        return app(ClientSearch::class)->search($this->q, self::LIMIT + 1);
+        return app(ClientSearch::class)->search(InputLimits::search($this->q), self::LIMIT + 1);
     }
 
     /**
@@ -74,19 +76,51 @@ class SearchClients extends Page
     }
 
     /**
+     * A search opened from the address (?q=…, a link or a bookmark) is cut
+     * and recorded like a typed one: otherwise it would leave no trail.
+     */
+    public function mount(): void
+    {
+        $this->recordSearch($this->q);
+    }
+
+    /**
      * Who searched for what is part of the trail (results are not: they
      * are visible through the client.viewed entries anyway).
      */
     public function updatedQ(string $value): void
     {
-        if (mb_strlen(trim($value)) >= 3) {
-            app(Auditor::class)->record('client.searched', null, ['term' => trim($value), 'call_id' => $this->call]);
+        $this->recordSearch($value);
+    }
+
+    private function recordSearch(string $value): void
+    {
+        // The box takes at most the search limit; a longer value sent past
+        // it is cut here, for the query and the audit log alike.
+        if (mb_strlen($value) > InputLimits::SEARCH) {
+            $this->q = mb_substr($value, 0, InputLimits::SEARCH);
+        }
+
+        $term = InputLimits::search($value);
+
+        if (mb_strlen($term) >= 3) {
+            app(Auditor::class)->record('client.searched', null, ['term' => $term, 'call_id' => $this->callId()]);
         }
     }
 
     public function getCallRecordProperty(): ?Call
     {
-        return $this->call ? Call::query()->find($this->call) : null;
+        return ($id = $this->callId()) !== null ? Call::query()->find($id) : null;
+    }
+
+    /**
+     * The call from the address, when it is a UUID at all; anything else
+     * names no call (and would not even compare with the UUID column on
+     * MariaDB).
+     */
+    private function callId(): ?string
+    {
+        return is_string($this->call) && Str::isUuid($this->call) ? $this->call : null;
     }
 
     public function tierOf(Client $client): ?ClientTier
@@ -101,6 +135,6 @@ class SearchClients extends Page
 
     public function identifyUrl(Client $client): string
     {
-        return Identify::getUrl(array_filter(['client' => $client->id, 'call' => $this->call]));
+        return Identify::getUrl(array_filter(['client' => $client->id, 'call' => $this->callId()]));
     }
 }

@@ -53,7 +53,18 @@ const retrySeconds = computed(() => Math.max(0, Math.ceil((retryAt.value - clock
 const canResend = computed(() => otpSent.value && otpSends.value < 2);
 const offerFallback = computed(() => otpSent.value && otpSends.value >= 2 && otpPolicy.value.email_fallback && methods.value.magic_link && !fallbackSent.value);
 const otpExhausted = computed(() => otpSent.value && otpSends.value >= 2 && !offerFallback.value);
-const showSupport = computed(() => store.support && (errorReason.value === 'not_entitled' || isPremium.value || otpExhausted.value));
+// A system-wide limit of the login links or SMS codes turns requests away now: the
+// same notice for every visitor, so it says nothing about any one account.
+const linkCapped = computed(() => methods.value.magic_link && store.loginCaps.magic_link);
+const smsCapped = computed(() => methods.value.otp_sms && store.loginCaps.otp_sms);
+const capNotice = computed(() => {
+    const capped = mode.value === 'magic' ? linkCapped.value : smsCapped.value;
+    if (!showPasswordless.value || !capped) return null;
+    const otherWay = hasSso.value || (mode.value === 'magic' ? methods.value.otp_sms && !smsCapped.value : methods.value.magic_link && !linkCapped.value);
+    return t(mode.value === 'magic' ? 'Login links cannot be sent by e-mail right now.' : 'SMS codes cannot be requested right now.')
+        + ' ' + t(otherWay ? 'Please sign in another way, or contact support.' : 'Please try again later, or contact support.');
+});
+const showSupport = computed(() => store.support && (errorReason.value === 'not_entitled' || isPremium.value || otpExhausted.value || capNotice.value !== null));
 
 const perks = [
     { icon: 'question', text: 'Answer a few personal questions the agent can check.' },
@@ -90,7 +101,7 @@ async function requestMagicLink() {
     try {
         const r = await post('/client/auth/magic-link', { email: email.value });
         notice.value = r.message;
-    } catch (e) { error.value = e.message; } finally { busy.value = false; }
+    } catch (e) { error.value = e.firstError ?? e.message; } finally { busy.value = false; store.refreshLoginCaps(); }
 }
 
 async function requestOtp() {
@@ -101,7 +112,7 @@ async function requestOtp() {
         notice.value = r.message; otpSent.value = true; otpSends.value += 1;
         startCountdown();
         setTimeout(() => codeInput.value?.focus(), 50);
-    } catch (e) { error.value = e.message; } finally { busy.value = false; }
+    } catch (e) { error.value = e.firstError ?? e.message; } finally { busy.value = false; store.refreshLoginCaps(); }
 }
 
 async function requestFallbackLink() {
@@ -109,7 +120,7 @@ async function requestFallbackLink() {
     try {
         const r = await post('/client/auth/magic-link', { email: email.value });
         notice.value = r.message; fallbackSent.value = true;
-    } catch (e) { error.value = e.message; } finally { busy.value = false; }
+    } catch (e) { error.value = e.firstError ?? e.message; } finally { busy.value = false; store.refreshLoginCaps(); }
 }
 
 async function verifyOtp() {
@@ -119,7 +130,7 @@ async function verifyOtp() {
         await store.refreshUser();
         router.push(route.query.next ?? '/');
     } catch (e) {
-        error.value = e instanceof ApiError && e.reason ? t(errorMessages[e.reason] ?? e.message) : e.message;
+        error.value = e instanceof ApiError && e.reason ? t(errorMessages[e.reason] ?? e.message) : (e.firstError ?? e.message);
     } finally { busy.value = false; }
 }
 </script>
@@ -164,19 +175,20 @@ async function verifyOtp() {
                 </template>
 
                 <div v-if="showPasswordless" class="space-y-4">
+                    <p v-if="capNotice" class="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status">{{ capNotice }}</p>
                     <div v-if="methods.magic_link && methods.otp_sms" class="flex gap-1 rounded-xl bg-slate-100 p-1 text-sm" role="tablist">
                         <button type="button" role="tab" :aria-selected="mode === 'magic'" class="flex-1 rounded-lg py-1.5 font-medium" :class="mode === 'magic' ? 'bg-white shadow-sm' : 'text-ink-muted'" @click="mode = 'magic'">{{ t('E-mail link') }}</button>
                         <button type="button" role="tab" :aria-selected="mode === 'otp'" class="flex-1 rounded-lg py-1.5 font-medium" :class="mode === 'otp' ? 'bg-white shadow-sm' : 'text-ink-muted'" @click="mode = 'otp'">{{ t('SMS code') }}</button>
                     </div>
 
                     <form v-if="mode === 'magic' && methods.magic_link" class="space-y-3" @submit.prevent="requestMagicLink">
-                        <div><label class="label" for="email">{{ t('E-mail address') }}</label><input id="email" v-model="email" type="email" required class="input" autocomplete="email" autofocus /></div>
+                        <div><label class="label" for="email">{{ t('E-mail address') }}</label><input id="email" v-model="email" type="email" required maxlength="254" class="input" autocomplete="email" autofocus /></div>
                         <button class="btn-primary w-full" :disabled="busy"><Icon name="mail" class="h-4 w-4" />{{ busy ? t('Sending…') : t('Send me a login link') }}</button>
                     </form>
 
                     <form v-else-if="methods.otp_sms" class="space-y-3" @submit.prevent="otpSent ? verifyOtp() : requestOtp()">
-                        <div><label class="label" for="email2">{{ t('E-mail address') }}</label><input id="email2" v-model="email" type="email" required class="input" :disabled="otpSent" autocomplete="email" /></div>
-                        <div v-if="otpSent"><label class="label" for="code">{{ t('Code from the SMS') }}</label><input id="code" ref="codeInput" v-model="code" inputmode="numeric" required class="input tracking-[0.4em]" autocomplete="one-time-code" /></div>
+                        <div><label class="label" for="email2">{{ t('E-mail address') }}</label><input id="email2" v-model="email" type="email" required maxlength="254" class="input" :disabled="otpSent" autocomplete="email" /></div>
+                        <div v-if="otpSent"><label class="label" for="code">{{ t('Code from the SMS') }}</label><input id="code" ref="codeInput" v-model="code" inputmode="numeric" pattern="[0-9]*" :minlength="otpPolicy.code_length" :maxlength="otpPolicy.code_length" required class="input tracking-[0.4em]" autocomplete="one-time-code" @input="code = code.replace(/\D/g, '')" /></div>
                         <button class="btn-primary w-full" :disabled="busy"><Icon name="chat" class="h-4 w-4" />{{ otpSent ? t('Sign in') : t('Send me a code') }}</button>
                         <template v-if="otpSent">
                             <button v-if="canResend" type="button" class="w-full text-center text-xs text-ink-muted hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-60" :disabled="busy || retrySeconds > 0" @click="requestOtp">{{ retrySeconds > 0 ? t('Did not get the code? You can ask for a new one in {seconds} s.', { seconds: retrySeconds }) : t('Did not get the code? Send a new one') }}</button>

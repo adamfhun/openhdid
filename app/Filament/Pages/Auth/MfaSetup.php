@@ -86,9 +86,11 @@ class MfaSetup extends SimplePage
         return array_map(fn (MfaMethod $method): array => [
             'method' => $method,
             'enrolled' => $mfa->hasFactor($user, $method),
-            'blocker' => $method === MfaMethod::Sms && $mfa->smsNumbers($user) === []
-                ? __('Your EMD record has no mobile number; SMS codes go only to a mobile number of the EMD record.')
-                : null,
+            'blocker' => match (true) {
+                $method !== MfaMethod::Sms || $mfa->smsNumbers($user) !== [] => null,
+                $mfa->smsNumbersOutsideAcceptedCountries($user) !== [] => __('The mobile number of your EMD record is not of a country accepted for phone numbers (Settings › Identification › Phone numbers), so no SMS code goes to it. Ask an administrator, or choose another factor.'),
+                default => __('Your EMD record has no mobile number; SMS codes go only to a mobile number of the EMD record.'),
+            },
         ], $mfa->allowedMethods());
     }
 
@@ -174,6 +176,14 @@ class MfaSetup extends SimplePage
 
         if ($method === null) {
             return;
+        }
+
+        foreach (['code' => $code, 'emailCode' => $emailCode] as $field => $typed) {
+            if (($tooLong = MfaChallenge::codeTooLong($typed)) !== null) {
+                $this->addError($field, $tooLong);
+
+                return;
+            }
         }
 
         try {

@@ -13,6 +13,7 @@ use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Support\PhoneNormalizer;
 use App\Sync\Contracts\SourceReader;
+use App\System\Installation;
 use Closure;
 use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Support\Facades\Cache;
@@ -70,7 +71,7 @@ class SyncExternalRecords
         }
 
         // Two overlapping runs would mark each other's records as missing.
-        $lock = Cache::lock('hdid:sync', 3600);
+        $lock = Cache::lock(Installation::lockName('hdid:sync'), 3600);
 
         if (! $lock->get()) {
             throw new RuntimeException(__('Another EMD sync is already running; try again when it has finished.'));
@@ -151,7 +152,7 @@ class SyncExternalRecords
         $run->fill([
             'source' => $reader->source(),
             'status' => SyncRunStatus::Running,
-            'file_name' => $reader->label(),
+            'file_name' => SourceLabel::of($reader->label()),
             'started_at' => now(),
             'triggered_by_user_id' => $triggeredBy?->id,
             'dry_run' => $dryRun,
@@ -164,13 +165,22 @@ class SyncExternalRecords
     {
         $stats = ['read' => 0, 'skipped' => 0, 'created' => 0, 'updated' => 0, 'missing' => 0, 'closed' => 0, 'provisioned' => 0];
         $stats['current'] = ['users' => User::query()->open()->count(), 'clients' => Client::query()->open()->count()];
-        $stats['incoming'] = ['users' => 0, 'clients' => 0, 'unclassified' => 0, 'invalid_row' => 0, 'duplicate' => 0, 'duplicate_email' => 0];
+        $stats['incoming'] = ['users' => 0, 'clients' => 0, 'unclassified' => 0, 'invalid_row' => 0, 'invalid_email' => 0, 'duplicate' => 0, 'duplicate_email' => 0];
         $stats['domains'] = $this->classifier->domainLists();
         $stats['preview'] = [];
         $stats['invalid_phones'] = 0;
         $stats['phone_warnings'] = [];
+        $stats['truncated'] = 0;
+        $stats['truncated_samples'] = [];
+        $stats['invalid_email_kept'] = 0;
+        $stats['invalid_email_kept_samples'] = [];
         $stats['email_conflicts'] = 0;
         $stats['email_conflict_samples'] = [];
+        $stats['holder_data_removed'] = 0;
+        $stats['holder_data_removed_samples'] = [];
+        $stats['reissued'] = 0;
+        $stats['reissued_samples'] = [];
+        $stats['demo_conflicts'] = 0;
         $stats['kind_pending'] = 0;
         $stats['kind_changed'] = 0;
         $stats['changes'] = 0;
@@ -199,6 +209,7 @@ class SyncExternalRecords
 
                     if ($item instanceof SkippedRow) {
                         $this->noteSkipped($stats, $skipped, $item);
+                        $this->keepRecordWithUnusableAddress($item, $run, $stats, $seen);
 
                         continue;
                     }
@@ -225,7 +236,12 @@ class SyncExternalRecords
                     // The e-mail is the account's key: two rows with one address
                     // would bind the same client to each of them in turn, run after
                     // run. The first row wins here too; the repeat is reported.
-                    $email = mb_strtolower(trim($item->email));
+                    // The key is the provisioner's exact comparison: an address the
+                    // database collation merely equates with another (accents, width)
+                    // passes on and is refused there as a conflict, so a look-alike row
+                    // placed first can neither take the account nor push the owner's
+                    // row out of the run (its record would go missing and close).
+                    $email = AccountProvisioner::emailKey($item->email);
                     if (isset($seenEmails[$email])) {
                         $this->noteSkipped($stats, $skipped, SkippedRow::fromDto(SkippedRow::REASON_DUPLICATE_EMAIL, $item));
 
@@ -235,10 +251,30 @@ class SyncExternalRecords
 
                     $record = ExternalRecord::query()->withTrashed()->firstOrNew(['external_id' => $item->externalId]);
                     $isNew = ! $record->exists;
+
+                    // In production a record the demo data created (published
+                    // password, PIN and answers) is never handed to the real
+                    // person who has its id: the row is reported as an e-mail
+                    // conflict and not written, so the demo record goes missing
+                    // and its account closes like any absent record's.
+                    if (! $isNew && $this->provisioner->refusesDemoTakeover($record, $item->email)) {
+                        $stats['incoming'][$kind === PrincipalType::User ? 'users' : 'clients']++;
+                        $stats['demo_conflicts']++;
+                        $this->collectEmailConflicts($stats);
+
+                        continue;
+                    }
+
                     $this->changes->focus($record);
                     [$kind, $oldKind] = $this->settleKind($record, $kind, $kindThreshold, $stats, $samples, $item);
 
                     $stats['incoming'][$kind === PrincipalType::User ? 'users' : 'clients']++;
+                    if ($item->truncated !== []) {
+                        $stats['truncated']++;
+                        if (count($stats['truncated_samples']) < self::CHANGE_SAMPLE_SIZE) {
+                            $stats['truncated_samples'][] = ['external_id' => $item->externalId, 'fields' => implode(', ', $item->truncated)];
+                        }
+                    }
                     if (count($stats['preview']) < 10) {
                         $stats['preview'][] = [
                             'external_id' => $item->externalId, 'name' => $item->name,
@@ -288,13 +324,13 @@ class SyncExternalRecords
                         $stats['provisioned']++;
                     }
 
-                    foreach ($this->provisioner->takeEmailConflicts() as $conflict) {
-                        $stats['email_conflicts']++;
-                        if (count($stats['email_conflict_samples']) < self::SKIPPED_SAMPLE_SIZE) {
-                            $stats['email_conflict_samples'][] = $conflict;
-                        }
-                    }
+                    $this->collectEmailConflicts($stats);
                 }
+
+                // A client moved between two records: hand-over or reissue, now that
+                // it is known whether the old record is still in the source.
+                $this->provisioner->settleRebounds($run);
+                $this->collectEmailConflicts($stats);
 
                 if ($stats['read'] === 0) {
                     throw new EmptySourceException('The source returned no rows; refusing to close every account.');
@@ -309,6 +345,7 @@ class SyncExternalRecords
                 [$stats['missing'], $stats['closed'], $samples['closed']] = $this->handleMissing($run);
                 [$stats['closing_next'], $samples['closing_next']] = $this->closingAtNextRun();
             } finally {
+                $this->provisioner->discardPendingRebounds();
                 $stats['changes'] = $this->changes->end();
                 if ($transactionStarted) {
                     DB::rollBack();
@@ -328,6 +365,38 @@ class SyncExternalRecords
         }
 
         return $run;
+    }
+
+    /**
+     * The e-mail conflicts, the hand-overs and the reissues the provisioner
+     * noted so far, into the run's counts and samples.
+     *
+     * @param  array<string, mixed>  $stats
+     */
+    private function collectEmailConflicts(array &$stats): void
+    {
+        foreach ($this->provisioner->takeEmailConflicts() as $conflict) {
+            $stats['email_conflicts']++;
+            if (count($stats['email_conflict_samples']) < self::SKIPPED_SAMPLE_SIZE) {
+                $stats['email_conflict_samples'][] = $conflict;
+            }
+        }
+
+        // Accounts handed to another person's record, cleared of the previous holder's data.
+        foreach ($this->provisioner->takeHolderDataRemovals() as $removal) {
+            $stats['holder_data_removed']++;
+            if (count($stats['holder_data_removed_samples']) < self::CHANGE_SAMPLE_SIZE) {
+                $stats['holder_data_removed_samples'][] = $removal;
+            }
+        }
+
+        // Records reissued to the same person under a new external id: the account moved over with its data.
+        foreach ($this->provisioner->takeReissues() as $reissue) {
+            $stats['reissued']++;
+            if (count($stats['reissued_samples']) < self::CHANGE_SAMPLE_SIZE) {
+                $stats['reissued_samples'][] = $reissue;
+            }
+        }
     }
 
     /** @param array<string, mixed> $stats
@@ -494,6 +563,41 @@ class SyncExternalRecords
     /**
      * @return array{0: int, 1: int, 2: list<string>} [newly missing, accounts closed, sample of closed names]
      */
+    /**
+     * A row of a record already known whose address the import cannot use
+     * (malformed or too long, EmailAddressRule): earlier imports took such
+     * addresses without checking, so a record could have one. The row is not
+     * imported, but the record counts as seen, keeping its data, its old
+     * address and its account, instead of going missing and closing the
+     * account a few runs later. The run reports it separately. A new record
+     * with such an address is skipped as before.
+     *
+     * @param  array<string, mixed>  $stats
+     * @param  array<int, true>  $seen
+     */
+    private function keepRecordWithUnusableAddress(SkippedRow $row, SyncRun $run, array &$stats, array &$seen): void
+    {
+        $externalId = (string) ($row->sample['external_id'] ?? '');
+
+        if ($row->reason !== SkippedRow::REASON_INVALID_EMAIL || preg_match(ExternalRecordDto::EXTERNAL_ID_PATTERN, $externalId) !== 1 || isset($seen[(int) $externalId])) {
+            return;
+        }
+
+        $record = ExternalRecord::query()->fromDirectory()->where('external_id', (int) $externalId)->whereNull('missing_since')->first();
+
+        if ($record === null) {
+            return;
+        }
+
+        $seen[(int) $externalId] = true;
+        $record->forceFill(['last_seen_run_id' => $run->id, 'last_seen_at' => now(), 'missed_runs' => 0])->save();
+        $stats['invalid_email_kept']++;
+
+        if (count($stats['invalid_email_kept_samples']) < self::CHANGE_SAMPLE_SIZE) {
+            $stats['invalid_email_kept_samples'][] = ['external_id' => (int) $externalId, 'email' => (string) ($row->sample['email'] ?? ''), 'kept' => $record->email];
+        }
+    }
+
     private function handleMissing(SyncRun $run): array
     {
         $threshold = max(1, $this->settings->int(SettingKey::SyncMissedRunsBeforeClose));
@@ -515,6 +619,10 @@ class SyncExternalRecords
                     if ($record->missing_since === null && $record->missed_runs >= $threshold) {
                         $record->missing_since = now();
                         $missing++;
+                        // The accounts as stored now, not as the chunk loaded them: an
+                        // earlier record of this chunk may have closed one meanwhile (a
+                        // sponsor's closure closes its linked clients), and that reason stays.
+                        $record->load(['user', 'client']);
                         $closedNow = $this->provisioner->closeAccounts($record);
                         $closed += $closedNow;
                         if ($closedNow > 0 && count($sample) < self::CHANGE_SAMPLE_SIZE) {

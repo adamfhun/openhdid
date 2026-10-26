@@ -7,6 +7,8 @@ use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
 use App\Filament\Admin\Pages\Identify;
 use App\Filament\Admin\Pages\SearchClients;
+use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\Call;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
@@ -22,6 +24,9 @@ use Illuminate\Database\Eloquent\Builder;
  */
 class MissedCallsWidget extends TableWidget
 {
+    use AuthorizesEveryRequest;
+    use LimitsSearchInput;
+
     protected int|string|array $columnSpan = 'full';
 
     protected static ?int $sort = 2;

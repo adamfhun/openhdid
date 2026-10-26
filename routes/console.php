@@ -5,12 +5,12 @@ use App\Clients\ClientLinks;
 use App\Clients\PackageOverrides;
 use App\Identification\QaSessionEngine;
 use App\Jobs\QueueHeartbeat;
-use App\Jobs\SendOutboundMessage;
+use App\Messaging\Messenger;
 use App\Messaging\SmsDeliveryChecks;
 use App\Models\OutboundMessage;
 use App\System\HealthChecks;
+use App\System\Installation;
 use App\System\QueueMaintenance;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schedule;
 
 if ($cron = config('hdid.sync.cron')) {
@@ -54,22 +54,28 @@ Schedule::command('hdid:prune')
     ->onOneServer()
     ->runInBackground();
 
-// One heartbeat per configured queue: the default worker and, when the EMD
-// sync runs on its own queue, that worker too (unique per queue while waiting).
+// One heartbeat per configured queue: the default worker and, when the sign-in
+// messages (HDID_PRIORITY_QUEUE) or the EMD sync run on their own queue, those
+// queues too (unique per queue while waiting).
+// The scheduler heartbeat names this installation: another one writing the
+// same key means a shared Valkey/Redis and key prefix (see Installation).
 Schedule::call(function (): void {
-    Cache::put(HealthChecks::SCHEDULER_HEARTBEAT_KEY, now()->toIso8601String(), now()->addHours(6));
+    Installation::beat(HealthChecks::SCHEDULER_HEARTBEAT_KEY, 'scheduler');
 
     foreach (app(QueueMaintenance::class)->configuredQueues() as $queue) {
         QueueHeartbeat::dispatch($queue);
     }
 })->everyMinute()->name('hdid:heartbeat');
 
-// Fallback for messages no worker picked up: re-dispatch them.
+// Fallback for messages no worker picked up: re-dispatch them, a sign-in
+// message on the priority queue again.
 Schedule::call(function (): void {
-    OutboundMessage::query()->stale()->orderBy('id')->limit(200)->pluck('id')
-        ->each(function (string $id): void {
-            OutboundMessage::query()->whereKey($id)->update(['status' => 'queued', 'updated_at' => now()]);
-            SendOutboundMessage::dispatch($id);
+    $messenger = app(Messenger::class);
+
+    OutboundMessage::query()->stale()->orderBy('id')->limit(200)->get(['id', 'meta'])
+        ->each(function (OutboundMessage $message) use ($messenger): void {
+            OutboundMessage::query()->whereKey($message->id)->update(['status' => 'queued', 'updated_at' => now()]);
+            $messenger->dispatch($message);
         });
 })->everyMinute()->name('hdid:requeue-messages')->withoutOverlapping();
 

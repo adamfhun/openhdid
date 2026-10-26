@@ -17,9 +17,12 @@ use App\Models\ClientPhoneNumber;
 use App\Models\OneTimeCode;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\Sms\SmsDestinations;
 use App\Support\PhoneNormalizer;
+use App\Support\PhoneNumberRule;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
@@ -29,10 +32,18 @@ use Illuminate\Validation\ValidationException;
  * directory sync or an admin cannot be changed here. A self-added number is
  * unverified until the client confirms a code sent to it by SMS; unverified
  * numbers still help the caller lookup, but verified ones outrank them.
+ * Only numbers of the accepted countries are taken (phone.allowed_regions):
+ * any other is refused with a machine-readable reason, while the helpdesk
+ * can still record it. A landline or other number of an accepted country
+ * that no text message may go to is taken (it recognises the caller), and
+ * the resource flags it (sms_capable), so it cannot be confirmed by SMS.
  */
 class PhoneNumbersController extends Controller
 {
-    private const VERIFY_CODE_LENGTH = 6;
+    /** The machine-readable reason of the 422 for a number of a country not accepted. */
+    public const REASON_REGION_NOT_ACCEPTED = 'phone_region_not_accepted';
+
+    public const VERIFY_CODE_LENGTH = 6;
 
     private const VERIFY_TTL_MINUTES = 10;
 
@@ -44,12 +55,13 @@ class PhoneNumbersController extends Controller
         private readonly OneTimeCodes $codes,
         private readonly Messenger $messenger,
         private readonly Auditor $auditor,
+        private readonly SmsDestinations $destinations,
     ) {}
 
     public function store(Request $request): ClientResource
     {
         $data = $request->validate([
-            'number' => ['required', 'string', 'max:50'],
+            'number' => ['required', 'string', new PhoneNumberRule],
             'label' => ['nullable', 'string', 'max:50'],
         ]);
 
@@ -68,6 +80,8 @@ class PhoneNumbersController extends Controller
         if ($existing !== null && ! $existing->trashed()) {
             return new ClientResource($client->load('phoneNumbers'));
         }
+
+        $this->refuseOutsideAcceptedCountries($e164);
 
         $max = $this->settings->int(SettingKey::PortalMaxPhoneNumbersPerClient);
 
@@ -127,6 +141,8 @@ class PhoneNumbersController extends Controller
         abort_unless($phoneNumber->client_id === $client->id, 404);
         abort_unless($this->verificationEnabled(), 403, __('Phone number verification is not available.'));
         abort_if($phoneNumber->verified_at !== null, 409, __('This number is already verified.'));
+        // A landline of an accepted country, or a number whose country is no longer accepted.
+        $this->refuseWithoutSms($phoneNumber->number_e164);
         // A dead gateway would queue a message nobody receives while the page says "sent".
         abort_if(app(HealthChecks::class)->sms()->status === CheckStatus::Fail, 503, __('The verification SMS cannot be sent right now. Please try again later, or ask the helpdesk to confirm the number.'));
 
@@ -207,6 +223,46 @@ class PhoneNumbersController extends Controller
             'message' => $pinCleared ? __('Phone number removed. It was your last registered number, so your PIN was removed too: the phone menu could no longer use it.') : __('Phone number removed.'),
             'pin_cleared' => $pinCleared,
         ]);
+    }
+
+    /**
+     * 422 with the reason phone_region_not_accepted when the number is not
+     * of an accepted country; the portal shows it in its words.
+     *
+     * @throws HttpResponseException
+     */
+    private function refuseOutsideAcceptedCountries(string $e164): void
+    {
+        if (! $this->destinations->acceptsRegionOf($e164)) {
+            $this->refuse(self::REASON_REGION_NOT_ACCEPTED, __('Phone numbers of this country cannot be added here. The helpdesk can record the number for you.'));
+        }
+    }
+
+    /**
+     * 422 with the reason (sms_not_mobile, sms_region_not_allowed) when no
+     * text message may go to the number; the portal shows it in its words.
+     *
+     * @throws HttpResponseException
+     */
+    private function refuseWithoutSms(string $e164): void
+    {
+        $refusal = $this->messenger->smsRefusal($e164);
+
+        if ($refusal !== null) {
+            $this->refuse($refusal->portalReason(), $refusal->portalMessage());
+        }
+    }
+
+    /**
+     * @throws HttpResponseException
+     */
+    private function refuse(string $reason, string $message): never
+    {
+        throw new HttpResponseException(response()->json([
+            'message' => $message,
+            'reason' => $reason,
+            'errors' => ['number' => [$message]],
+        ], 422));
     }
 
     private function verificationEnabled(): bool

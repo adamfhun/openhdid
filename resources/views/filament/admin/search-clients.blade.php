@@ -15,6 +15,7 @@
             <x-filament::input
                 type="search"
                 wire:model.live.debounce.300ms="q"
+                maxlength="{{ \App\Support\InputLimits::SEARCH }}"
                 placeholder="{{ __('Name, e-mail, company, phone number or external id…') }}"
                 autofocus
             />

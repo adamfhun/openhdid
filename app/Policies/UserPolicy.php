@@ -8,8 +8,10 @@ use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * users.manage covers every account except a SuperAdmin's: that one only
- * another SuperAdmin may edit, close, delete or restore.
+ * users.manage covers the accounts whose every role the editor could grant
+ * (RoleAssignment::canManage, decision of 2026-10-26); a SuperAdmin's only
+ * another SuperAdmin may edit, close, delete or restore. The Users list
+ * greys the buttons of the others out with the reason.
  */
 class UserPolicy extends PermissionPolicy
 {

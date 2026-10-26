@@ -13,6 +13,14 @@ require __DIR__.'/vendor/autoload.php';
 /** @var Application $app */
 $app = require_once __DIR__.'/bootstrap/app.php';
 
+// Before the cached config, services and packages are loaded: a cache file another
+// account wrote must not run with the rights of whoever starts artisan (App\System\CacheOwnership).
+if (($refusal = App\System\CacheOwnership::refusal($app)) !== null) {
+    fwrite(STDERR, $refusal.PHP_EOL);
+
+    exit(78);
+}
+
 $status = $app->handleCommand(new ArgvInput);
 
 exit($status);

@@ -20,7 +20,9 @@ export const store = reactive({
     branding: window.__BRANDING__ ?? { app_name: 'Helpdesk ID', primary_color: '#36495d', palette: {}, tiers: {} },
     loginMethods: { magic_link: false, otp_sms: false, adfs: false, entra: false },
     // How the login page paces the SMS code (from /branding).
-    otpSms: { retry_after_seconds: 60, max_per_hour: 3, email_fallback: false },
+    otpSms: { code_length: 6, retry_after_seconds: 60, max_per_hour: 3, email_fallback: false },
+    // A system-wide limit of the login links or SMS codes turns requests away now (from /branding).
+    loginCaps: { magic_link: false, otp_sms: false },
     newsOnOverview: true,
     user: null,
     booted: false,
@@ -79,6 +81,7 @@ export const store = reactive({
             this.branding = info.branding;
             this.loginMethods = info.login_methods;
             if (info.otp_sms) this.otpSms = info.otp_sms;
+            if (info.login_caps) this.loginCaps = info.login_caps;
             this.newsOnOverview = info.news_on_overview ?? true;
             document.title = this.branding.app_name;
         } catch {
@@ -95,6 +98,16 @@ export const store = reactive({
         }
         this.booted = true;
         this.applyTheme();
+    },
+
+    /** Ask again whether a system-wide limit of the login messages holds (the login page, after a request). */
+    async refreshLoginCaps() {
+        try {
+            const info = await get('/branding');
+            if (info.login_caps) this.loginCaps = info.login_caps;
+        } catch {
+            /* keep what we knew */
+        }
     },
 
     /** Try the start-up again after a connection problem. */

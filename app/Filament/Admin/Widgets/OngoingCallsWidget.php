@@ -12,6 +12,8 @@ use App\Filament\Actions\TakeCallAction;
 use App\Filament\Admin\Pages\Identify;
 use App\Filament\Admin\Pages\SearchClients;
 use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\Call;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
@@ -32,6 +34,9 @@ use Illuminate\Validation\ValidationException;
  */
 class OngoingCallsWidget extends TableWidget
 {
+    use AuthorizesEveryRequest;
+    use LimitsSearchInput;
+
     protected int|string|array $columnSpan = 'full';
 
     public static function canView(): bool
@@ -99,7 +104,7 @@ class OngoingCallsWidget extends TableWidget
                     ->requiresConfirmation(fn (Call $call) => $call->isHeldBySomeoneElse(auth()->user()))
                     ->modal(fn (Call $record): bool => $record->isHeldBySomeoneElse(auth()->user()))
                     ->modalHeading(fn (Call $call) => __(':name has already taken this call.', ['name' => $call->agent?->name ?? '?']))
-                    ->modalDescription(__('Take it over only if you are the one actually talking to the caller. The hand-over is recorded.'))
+                    ->modalDescription(__("Take it over only if you are the one actually talking to the caller. The hand-over is recorded. A question-and-answer session your colleague has open on this call closes, and it counts as unsuccessful in the client's question-and-answer limit if a question was shown and not accepted."))
                     ->modalSubmitActionLabel(__('Take over'))
                     ->action(function (Call $call, array $arguments): void {
                         // The holder the button was drawn for (see TakeCallAction): a

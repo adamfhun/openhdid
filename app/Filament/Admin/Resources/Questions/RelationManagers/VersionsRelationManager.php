@@ -2,6 +2,7 @@
 
 namespace App\Filament\Admin\Resources\Questions\RelationManagers;
 
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\QuestionVersion;
 use Filament\Resources\RelationManagers\RelationManager;
 use Filament\Tables\Columns\IconColumn;
@@ -12,6 +13,8 @@ use Illuminate\Database\Eloquent\Model;
 
 class VersionsRelationManager extends RelationManager
 {
+    use LimitsSearchInput;
+
     protected static string $relationship = 'versions';
 
     public static function getTitle(Model $ownerRecord, string $pageClass): string

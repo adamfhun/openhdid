@@ -9,12 +9,14 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Notifications\Livewire\Notifications;
 use Illuminate\Cookie\CookieValuePrefix;
 use Illuminate\Http\Client\Events\RequestSending;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Livewire\Livewire;
 use Tests\Support\FakeOidc;
 
 beforeEach(function (): void {
@@ -199,7 +201,9 @@ it('tells a rejected staff user the reason on the panel login page, in their lan
     completeSso('user', 'adfs', ['aud' => 'user-app', 'email' => 'agent@corp.hu'])
         ->assertRedirect(route('filament.admin.auth.login'));
 
-    $this->get(route('filament.admin.auth.login'))->assertOk()
+    // The login page pulls the waiting notification with a Livewire request once loaded.
+    $this->get(route('filament.admin.auth.login'))->assertOk();
+    Livewire::test(Notifications::class)->call('pullNotificationsFromSession')
         ->assertSee('A belépés nem sikerült.')
         ->assertSee('Ez a fiók nem szerepel az ügyféltörzsben.');
 });
@@ -219,7 +223,8 @@ it('refuses an enabled provider without configuration instead of failing', funct
         return;
     }
     $response->assertRedirect(route('filament.admin.auth.login'));
-    $this->get(route('filament.admin.auth.login'))->assertOk()->assertSee('Ez a belépési mód nem elérhető.');
+    $this->get(route('filament.admin.auth.login'))->assertOk();
+    Livewire::test(Notifications::class)->call('pullNotificationsFromSession')->assertSee('Ez a belépési mód nem elérhető.');
 })->with([PrincipalType::User, PrincipalType::Client]);
 
 it('reports an unreachable identity provider as unavailable, not as an error page', function (string $failure): void {

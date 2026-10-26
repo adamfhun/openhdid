@@ -1,0 +1,26 @@
+# A web podok 8080-as portját csak az ingress-vezérlő érheti el. A TRUSTED_PROXIES az ingress-
+# vezérlő pod-hálózata, és az nginx az onnan érkező X-Forwarded-For fejlécből veszi a kliens címét:
+# a házirend nélkül a fürt bármely podja közvetlenül, a szolgáltatáson át hamis kliens-címet adhatna
+# (cím szerinti korlátok, naplók, a /health felügyeleti engedélye). A házirend csak olyan hálózati
+# bővítménnyel hat, amely ismeri (Calico, Cilium, Antrea…; a flannel önmagában nem).
+# Más ingress-vezérlőnél a névtér nevét kell átírni (saját overlay-javítással); ha a felügyelet
+# nem az ingressen át, hanem közvetlenül a szolgáltatáson kérdezi a /health címet, a felügyelet
+# névtere egy második namespaceSelector-elemként vehető fel.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openhdid-web
+  labels:
+    app.kubernetes.io/component: web
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: web
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - {protocol: TCP, port: 8080}

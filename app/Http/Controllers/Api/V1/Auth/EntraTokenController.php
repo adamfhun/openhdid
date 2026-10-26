@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Auth;
 use App\Auth\LoginRejectedException;
 use App\Auth\LoginRejection;
 use App\Auth\Oidc\MobileTokenExchange;
+use App\Auth\Oidc\OidcClient;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -27,7 +28,7 @@ class EntraTokenController extends Controller
     public function __invoke(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'id_token' => ['required', 'string'],
+            'id_token' => ['required', 'string', 'max:'.OidcClient::MAX_TOKEN_LENGTH],
             'device_name' => ['required', 'string', 'max:100'],
         ]);
 

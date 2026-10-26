@@ -18,14 +18,27 @@ class ValidateCsrfTokenUnlessBearer extends PreventRequestForgery
     {
         // A bearer request can only be forged from a browser page when the
         // session itself signs someone in (a client or a staff member); a
-        // stray session cookie that carries no login (every response on the
-        // web stack sets one) is harmless, so the mobile app is not locked
-        // out by it.
+        // stray session cookie that carries no login (a guest gets one from
+        // /sanctum/csrf-cookie or the panel) is harmless, so the mobile app
+        // is not locked out by it.
         if ($request instanceof Request && $request->bearerToken() !== null && ! $this->sessionSignsSomeoneIn($request)) {
             return true;
         }
 
         return parent::inExceptArray($request);
+    }
+
+    /**
+     * No XSRF cookie on an answer whose session is not kept
+     * (StartSessionWhenNeeded): it would carry a token nobody stores.
+     */
+    protected function addCookieToResponse($request, $response)
+    {
+        if ($request instanceof Request && StartSessionWhenNeeded::isNotNeeded($request)) {
+            return $response;
+        }
+
+        return parent::addCookieToResponse($request, $response);
     }
 
     /**

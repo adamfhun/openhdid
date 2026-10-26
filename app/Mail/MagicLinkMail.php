@@ -3,11 +3,13 @@
 namespace App\Mail;
 
 use App\Branding\Branding;
+use App\Mail\Transport\EwsTransport;
 use App\Models\Client;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
+use Illuminate\Mail\Mailables\Headers;
 use Illuminate\Queue\SerializesModels;
 
 /**
@@ -39,5 +41,14 @@ class MagicLinkMail extends Mailable
         }
 
         return new Content(markdown: 'mail.magic-link', with: ['branding' => app(Branding::class)->toArray()]);
+    }
+
+    /**
+     * The link signs in whoever opens it, so no copy may stay in the Sent
+     * Items of an Exchange mailbox: no keep-a-copy marker (EwsTransport).
+     */
+    public function headers(): Headers
+    {
+        return new Headers;
     }
 }

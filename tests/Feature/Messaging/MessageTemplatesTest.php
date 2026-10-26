@@ -5,7 +5,9 @@ use App\Filament\Admin\Resources\MessageTemplates\MessageTemplateResource;
 use App\Filament\Admin\Resources\MessageTemplates\Pages\EditMessageTemplate;
 use App\Mail\TemplatedMail;
 use App\Messaging\MessageKey;
+use App\Messaging\Messenger;
 use App\Messaging\TemplateRenderer;
+use App\Models\Client;
 use App\Models\MessageTemplate;
 use App\Models\OutboundMessage;
 use App\Models\User;
@@ -16,6 +18,7 @@ use App\Sms\SmsSender;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 
@@ -24,7 +27,7 @@ it('renders the code default with placeholders substituted and escaped', functio
         'name' => 'Anna <b>x</b>', 'link' => 'https://x.hu/l?a=1&b=2', 'days' => '3', 'app_name' => 'HDID',
     ]);
 
-    expect($rendered->subject)->toBe('Belépési link – HDID')
+    expect($rendered->subject)->toBe('Belépési hivatkozás – HDID')
         ->and($rendered->body)->toContain('Kedves Anna &lt;b&gt;x&lt;/b&gt;!')
         ->and($rendered->body)->toContain('href="https://x.hu/l?a=1&amp;b=2"')
         ->and($rendered->body)->toContain('<!doctype html>')
@@ -96,6 +99,12 @@ it('lets an admin edit, preview, test-send and reset a template', function (): v
         ->and($sms->lastTo('+36301234567'))->toBe('Új PIN: 1234')
         ->and(OutboundMessage::query()->count())->toBe(1);
 
+    // A landline receives no SMS: the test send says it did not go, not that it was queued.
+    Livewire::test(EditMessageTemplate::class, ['record' => $template->id])
+        ->callAction('sendTest', ['phone' => '+3612345678'])
+        ->assertNotified(__('Test message not sent to :to', ['to' => '+3612345678']));
+    expect($sms->lastTo('+3612345678'))->toBeNull();
+
     Livewire::test(EditMessageTemplate::class, ['record' => $template->id])
         ->callAction('resetToDefault');
     expect($template->fresh()->isCustomised())->toBeFalse();
@@ -107,4 +116,19 @@ it('lets an admin edit, preview, test-send and reset a template', function (): v
 
     expect(MessageTemplateResource::smsLengthHint('Árvíztűrő'))->toContain('UCS-2')
         ->and(MessageTemplateResource::smsLengthHint('plain'))->toContain('GSM-7');
+});
+
+it('stores the largest allowed template inside the layout, and its subject cut to the column', function (): void {
+    Queue::fake();
+    $html = '<p>'.str_repeat('x', MessageTemplateResource::STORED_BODY_MAX_BYTES - 40).' {{ link }}</p>';
+    MessageTemplate::query()->create(['key' => 'magic_link', 'locale' => 'hu', 'subject' => str_repeat('S', 200).' {{ name }}', 'body' => $html]);
+    $client = Client::factory()->synced()->create(['name' => str_repeat('N', 255), 'locale' => 'hu']);
+
+    $message = app(Messenger::class)->sendTemplate(MessageKey::MagicLink, $client, ['link' => 'https://hdid.test/l', 'minutes' => '720', 'hours' => '12', 'days' => '1'], $client->email);
+    $stored = OutboundMessage::query()->findOrFail($message->id);
+
+    // MariaDB strict mode refuses what does not fit: TEXT holds 65 535 bytes, MEDIUMTEXT 16 777 215.
+    expect(strlen((string) $stored->body))->toBeGreaterThan(65_535, 'the layout makes it longer than a TEXT column')
+        ->and(strlen((string) $stored->body))->toBeLessThan(16_777_215)
+        ->and(mb_strlen((string) $stored->subject))->toBeLessThanOrEqual(255);
 });

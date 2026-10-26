@@ -38,6 +38,7 @@
             <x-filament::input
                 type="search"
                 x-model="q"
+                maxlength="{{ \App\Support\InputLimits::SEARCH }}"
                 x-on:input="open = true"
                 x-on:focus="open = true"
                 autocomplete="off"

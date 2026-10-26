@@ -15,6 +15,7 @@ use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Support\Str;
 use Livewire\Attributes\Url;
 use UnitEnum;
 
@@ -62,6 +63,13 @@ class VerifyCode extends Page
     public function mount(): void
     {
         $this->call ??= ClientResource::currentCallId();
+
+        // A call id is a UUID; anything else in the address names no call
+        // (and would not even compare with the UUID column on MariaDB).
+        if ($this->call !== null && ! Str::isUuid($this->call)) {
+            $this->call = null;
+        }
+
         $this->form->fill(['code' => '']);
     }
 
@@ -88,6 +96,8 @@ class VerifyCode extends Page
     public function verify(): void
     {
         $code = (string) ($this->form->getState()['code'] ?? '');
+        abort_if($this->call !== null && ! Str::isUuid($this->call), 403);
+
         try {
             $session = app(CallCenterService::class)->verifyCodeForAgent($code, auth()->user(), $this->call);
         } catch (IdentificationException $e) {
@@ -117,6 +127,6 @@ class VerifyCode extends Page
 
     public function getCall(): ?Call
     {
-        return $this->call === null ? null : app(CallCenterService::class)->attachableCallForAgent($this->call, auth()->user());
+        return $this->call === null || ! Str::isUuid($this->call) ? null : app(CallCenterService::class)->attachableCallForAgent($this->call, auth()->user());
     }
 }

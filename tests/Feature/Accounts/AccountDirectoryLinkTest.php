@@ -16,6 +16,7 @@ use App\Settings\Settings;
 use App\Sync\AccountProvisioner;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
+use Filament\Notifications\NotificationMailbox;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role as RoleModel;
 use Tests\Support\FakeOidc;
@@ -28,11 +29,15 @@ beforeEach(function (): void {
 });
 
 /**
- * The page tells the link outcome in the body of its created/saved notification.
+ * The page tells the link outcome in the body of its created/saved notification
+ * (since Filament 5.10 sent notifications wait in the notification mailbox).
  */
 function notifiedBodies(): array
 {
-    return collect(session()->get('filament.notifications', []))->pluck('body')->all();
+    $mailbox = app(NotificationMailbox::class);
+    $mailbox->flush();
+
+    return collect($mailbox->pull())->pluck('body')->all();
 }
 
 function enableStaffSso(): void
@@ -128,9 +133,12 @@ it('links an unlinked account when its e-mail is corrected, and leaves linked ac
     $record = ExternalRecord::factory()->user()->create(['external_id' => 6060, 'email' => 'helyes@corp.hu']);
     $user = User::factory()->withRole(Role::Agent)->create(['email' => 'elirt@corp.hu']);
 
+    // A new e-mail asks first (it signs the account out and hands it to the record's person).
     Livewire::test(EditUser::class, ['record' => $user->id])
         ->fillForm(['email' => 'helyes@corp.hu'])
-        ->call('save')
+        ->mountAction('save')
+        ->assertMountedActionModalSee('6060')
+        ->callMountedAction()
         ->assertHasNoFormErrors();
     expect(notifiedBodies())->toContain(__('Linked to EMD record :id at once.', ['id' => 6060]));
     expect($user->fresh()->external_record_id)->toBe($record->id);

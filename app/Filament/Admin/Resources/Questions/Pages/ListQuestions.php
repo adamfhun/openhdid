@@ -3,6 +3,7 @@
 namespace App\Filament\Admin\Resources\Questions\Pages;
 
 use App\Filament\Admin\Resources\Questions\QuestionResource;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Identification\QuestionCatalog;
 use Filament\Actions\Action;
 use Filament\Forms\Components\TextInput;
@@ -11,6 +12,8 @@ use Filament\Resources\Pages\ListRecords;
 
 class ListQuestions extends ListRecords
 {
+    use LimitsSearchInput;
+
     protected static string $resource = QuestionResource::class;
 
     protected function getHeaderActions(): array

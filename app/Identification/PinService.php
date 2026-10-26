@@ -15,6 +15,7 @@ use App\Models\IdSession;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\Installation;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -125,7 +126,7 @@ class PinService
             throw ValidationException::withMessages(['pin' => __('The PIN must be :min to :max digits.', ['min' => $this->minLength(), 'max' => $this->maxLength()])]);
         }
 
-        Cache::lock('hdid:pin-assignment', 30)->block(5, function () use ($client, $pin): void {
+        Cache::lock(Installation::lockName('hdid:pin-assignment'), 30)->block(5, function () use ($client, $pin): void {
             // Outside the transaction, so that the refusal's audit row stays.
             if ($this->uniquenessRequired()) {
                 $this->refuseTakenPin($client, $pin);

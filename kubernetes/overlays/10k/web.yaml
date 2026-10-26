@@ -10,11 +10,8 @@ spec:
         - name: web
           env:
             - {name: HDID_SIZING_PROFILE, value: 10k}
-            - {name: OPENHDID_FPM_MAX_CHILDREN, value: "16"}
-            - {name: OPENHDID_FPM_START_SERVERS, value: "16"}
-            - {name: OPENHDID_FPM_MAX_SPARE_SERVERS, value: "16"}
           resources:
-            requests: {cpu: "1", memory: 1536Mi}
+            requests: {cpu: "1", memory: 2Gi}
             limits: {memory: 2Gi}
 ---
 apiVersion: apps/v1

@@ -5,6 +5,8 @@ namespace App\Filament\Admin\Widgets;
 use App\Audit\Auditor;
 use App\Auth\Permission;
 use App\Filament\Admin\Resources\OutboundMessages\OutboundMessageResource;
+use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\FailedJob;
 use App\Models\OutboundMessage;
 use App\System\QueueMaintenance;
@@ -27,6 +29,9 @@ use Illuminate\Support\Str;
  */
 class FailedJobsWidget extends TableWidget
 {
+    use AuthorizesEveryRequest;
+    use LimitsSearchInput;
+
     protected int|string|array $columnSpan = 'full';
 
     public static function canView(): bool
@@ -59,6 +64,7 @@ class FailedJobsWidget extends TableWidget
             ])
             ->recordActions([
                 Action::make('details')->label(__('Details'))->icon('heroicon-o-eye')->iconButton()->color('gray')
+                    ->authorize(fn (): bool => static::canView())
                     ->modalHeading(__('Error details'))
                     ->modalContent(fn (FailedJob $record): HtmlString => new HtmlString('<pre class="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-50 p-3 text-xs text-gray-700 dark:bg-white/5 dark:text-gray-200">'.e($record->exception).'</pre>'))
                     ->modalSubmitAction(false)

@@ -3,12 +3,15 @@
 namespace App\Filament\Admin\Resources\ExternalRecords\Pages;
 
 use App\Filament\Admin\Resources\ExternalRecords\ExternalRecordResource;
+use App\Filament\Concerns\LimitsSearchInput;
 use Filament\Resources\Pages\ManageRecords;
 use Filament\Schemas\Components\Tabs\Tab;
 use Illuminate\Database\Eloquent\Builder;
 
 class ManageExternalRecords extends ManageRecords
 {
+    use LimitsSearchInput;
+
     protected static string $resource = ExternalRecordResource::class;
 
     protected function getHeaderActions(): array

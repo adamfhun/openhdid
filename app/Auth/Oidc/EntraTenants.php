@@ -34,6 +34,7 @@ final readonly class EntraTenants
         $list = trim((string) $list);
         $tenants = [];
         $problems = [];
+        $repeated = [];
 
         foreach (array_filter(array_map('trim', explode(',', $list)), fn (string $entry): bool => $entry !== '') as $entry) {
             [$id, $domains] = array_pad(explode(':', $entry, 2), 2, '');
@@ -52,10 +53,26 @@ final readonly class EntraTenants
                 }
             }
 
-            $tenants[mb_strtolower($id)] = new EntraTenant($id, array_values(array_unique($domainList)));
+            $key = mb_strtolower($id);
+
+            // The same tenant twice: the stricter filter wins (the domains of both),
+            // trusted for any domain only when no entry names one, and it is reported.
+            if (isset($tenants[$key])) {
+                $earlier = $tenants[$key];
+                $repeated[] = $id;
+                $tenants[$key] = new EntraTenant($earlier->id, array_values(array_unique([...$earlier->domains, ...$domainList])));
+
+                continue;
+            }
+
+            $tenants[$key] = new EntraTenant($id, array_values(array_unique($domainList)));
         }
 
         $notes = [];
+
+        foreach (array_unique($repeated) as $id) {
+            $notes[] = __('The tenant :tenant is listed more than once in CLIENT_ENTRA_TENANTS; its domains are taken together, so it is trusted for any domain only when no entry names one. Keep one entry.', ['tenant' => $id]);
+        }
 
         if ($single !== '') {
             if (($problem = self::idProblem($single)) !== null) {

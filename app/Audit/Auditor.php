@@ -19,6 +19,25 @@ class Auditor
     private const GUARDS = ['web', 'client', 'sanctum'];
 
     /**
+     * Longest text an entry keeps of a value that came in with a request,
+     * like the user agent: what an anonymous caller types into a login form
+     * (a megabyte "address" five times a minute) must not grow the log, the
+     * archive and the backups without bound. 500 also keeps a provider's
+     * error description whole, which the SSO return clips to the same length.
+     */
+    public const REQUEST_VALUE_MAX_LENGTH = 500;
+
+    /**
+     * Events whose context carries what an unauthenticated caller sent (the
+     * address of a refused or throttled login, a provider's error text, the
+     * path of a refused machine call); their texts are clipped. Other events
+     * keep their values whole (a changed setting, a message template).
+     *
+     * @var list<string>
+     */
+    private const REQUEST_INPUT_EVENT_PREFIXES = ['login.', 'api_key.rejected'];
+
+    /**
      * Where a bulk job sends the entries it keeps elsewhere (see divert()).
      * Static on purpose: the auditor is resolved anew by every caller, the
      * diversion must hold for the whole process while the job runs.
@@ -43,6 +62,10 @@ class Auditor
     ): AuditLog {
         $actor ??= $this->currentActor();
 
+        if (self::carriesRequestInput($event)) {
+            $context = self::clipTexts($context);
+        }
+
         $attributes = [
             'event' => $event,
             'actor_type' => $actor instanceof Model ? $actor->getMorphClass() : null,
@@ -62,6 +85,33 @@ class Auditor
         }
 
         return AuditLog::query()->create($attributes);
+    }
+
+    private static function carriesRequestInput(string $event): bool
+    {
+        foreach (self::REQUEST_INPUT_EVENT_PREFIXES as $prefix) {
+            if (str_starts_with($event, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Every text in the context, nested ones included, cut to
+     * REQUEST_VALUE_MAX_LENGTH characters; other values stay as they are.
+     *
+     * @param  array<array-key, mixed>  $context
+     * @return array<array-key, mixed>
+     */
+    private static function clipTexts(array $context): array
+    {
+        return array_map(fn (mixed $value): mixed => match (true) {
+            is_string($value) => mb_substr($value, 0, self::REQUEST_VALUE_MAX_LENGTH),
+            is_array($value) => self::clipTexts($value),
+            default => $value,
+        }, $context);
     }
 
     /**

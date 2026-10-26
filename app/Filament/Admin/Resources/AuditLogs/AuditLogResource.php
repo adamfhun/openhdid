@@ -56,6 +56,13 @@ use Spatie\Permission\Models\Role;
 
 class AuditLogResource extends BaseResource
 {
+    /** audit_log.event is varchar(100), request_id too; the ids are UUIDs. */
+    public const EVENT_MAX_LENGTH = 100;
+
+    public const REQUEST_ID_MAX_LENGTH = 100;
+
+    public const UUID_LENGTH = 36;
+
     protected static ?string $model = AuditLog::class;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedClipboardDocumentList;
@@ -129,10 +136,13 @@ class AuditLogResource extends BaseResource
                 TextColumn::make('ip_address')->label(__('IP address'))->placeholder('-')->toggleable(),
             ])
             ->filters([
-                Filter::make('event')->label(__('Event'))->schema([TextInput::make('event')->label(__('Event'))])->query(fn (Builder $query, array $data) => $query->when($data['event'], fn ($q, $v) => $q->where('event', 'like', $v.'%'))),
-                Filter::make('subject_id')->schema([TextInput::make('subject_id')->label(__('Subject id'))])->query(fn (Builder $query, array $data) => $query->when($data['subject_id'], fn ($q, $v) => $q->where('subject_id', $v))),
-                Filter::make('actor_id')->schema([TextInput::make('actor_id')->label(__('Actor id'))])->query(fn (Builder $query, array $data) => $query->when($data['actor_id'], fn ($q, $v) => $q->where('actor_id', $v))),
-                Filter::make('request_id')->schema([TextInput::make('request_id')->label(__('Request id'))])->query(fn (Builder $query, array $data) => $query->when($data['request_id'], fn ($q, $v) => $q->where('request_id', $v))),
+                // Filter values are not validated (they apply as typed), so each
+                // query takes at most the column's length, and an id that is no
+                // UUID matches nothing instead of reaching the UUID column.
+                Filter::make('event')->label(__('Event'))->schema([TextInput::make('event')->label(__('Event'))->maxLength(self::EVENT_MAX_LENGTH)])->query(fn (Builder $query, array $data) => $query->when(is_string($data['event'] ?? null) && $data['event'] !== '' ? mb_substr($data['event'], 0, self::EVENT_MAX_LENGTH) : null, fn ($q, $v) => $q->where('event', 'like', $v.'%'))),
+                Filter::make('subject_id')->schema([TextInput::make('subject_id')->label(__('Subject id'))->maxLength(self::UUID_LENGTH)])->query(fn (Builder $query, array $data) => static::whereUuid($query, 'subject_id', $data['subject_id'] ?? null)),
+                Filter::make('actor_id')->schema([TextInput::make('actor_id')->label(__('Actor id'))->maxLength(self::UUID_LENGTH)])->query(fn (Builder $query, array $data) => static::whereUuid($query, 'actor_id', $data['actor_id'] ?? null)),
+                Filter::make('request_id')->schema([TextInput::make('request_id')->label(__('Request id'))->maxLength(self::REQUEST_ID_MAX_LENGTH)])->query(fn (Builder $query, array $data) => $query->when(is_string($data['request_id'] ?? null) && $data['request_id'] !== '' ? mb_substr($data['request_id'], 0, self::REQUEST_ID_MAX_LENGTH) : null, fn ($q, $v) => $q->where('request_id', $v))),
                 Filter::make('period')->label(__('Period'))->schema([
                     DatePicker::make('from')->label(__('From')),
                     DatePicker::make('until')->label(__('Until')),
@@ -142,6 +152,22 @@ class AuditLogResource extends BaseResource
             ])
             ->recordActions([ViewAction::make()])
             ->defaultSort('id', 'desc');
+    }
+
+    /**
+     * An id filter: a typed UUID narrows to it, anything else (a typo, a
+     * pasted fragment) matches no entry.
+     *
+     * @param  Builder<AuditLog>  $query
+     * @return Builder<AuditLog>
+     */
+    public static function whereUuid(Builder $query, string $column, mixed $value): Builder
+    {
+        if (! is_string($value) || trim($value) === '') {
+            return $query;
+        }
+
+        return Str::isUuid(trim($value)) ? $query->where($column, trim($value)) : $query->whereRaw('1 = 0');
     }
 
     /**

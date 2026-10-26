@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use App\Audit\Auditor;
 use App\Enums\ApiKeyScope;
 use App\Models\ApiKey;
+use App\Support\ClientAddress;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -35,12 +36,23 @@ class AuthenticateApiKey
     /** Set (true) when the request was authenticated by the legacy static key. */
     public const LEGACY_ATTRIBUTE = 'api_key_legacy';
 
+    /**
+     * A presented key longer than this (or a configured legacy key, if that
+     * is longer) is refused before it is hashed. Issued keys are 45
+     * characters ("hdid_" and 40 letters and digits).
+     */
+    public const MAX_KEY_LENGTH = 255;
+
     public function __construct(private readonly Auditor $auditor) {}
 
     public function handle(Request $request, Closure $next, string $scope): Response
     {
         $scope = ApiKeyScope::from($scope);
         $given = $this->givenKey($request, $scope);
+
+        if ($given === null) {
+            $this->reject($request, $scope, 'malformed', 'Invalid API key.');
+        }
 
         if ($given === '') {
             $this->reject($request, $scope, 'missing', 'Missing API key.');
@@ -98,8 +110,8 @@ class AuthenticateApiKey
 
         $given = (new self(app(Auditor::class)))->givenKey($request, ApiKeyScope::CallCenter);
 
-        if ($given === '') {
-            return 'ip:'.$request->ip();
+        if ($given === null || $given === '') {
+            return 'ip:'.ClientAddress::limitKey($request->ip());
         }
 
         $legacy = (string) config('hdid.callcenter.api_key');
@@ -107,25 +119,41 @@ class AuthenticateApiKey
         return $legacy !== '' && hash_equals($legacy, $given) ? 'legacy' : 'presented:'.substr(hash('sha256', $given), 0, 24);
     }
 
-    private function givenKey(Request $request, ApiKeyScope $scope): string
+    /**
+     * The key the request presents: '' when none, null when what it
+     * presents cannot be a key (not text, or longer than any key).
+     */
+    private function givenKey(Request $request, ApiKeyScope $scope): ?string
     {
         $header = (string) $request->header('X-Api-Key', '');
 
         if ($header !== '') {
-            return $header;
+            return self::bounded($header);
         }
 
         $bearer = (string) $request->bearerToken();
 
         if ($bearer !== '') {
-            return $bearer;
+            return self::bounded($bearer);
         }
 
         if ($scope !== ApiKeyScope::CallCenter) {
             return '';
         }
 
-        return (string) ($request->input('api_key') ?? $request->query('api_key') ?? '');
+        $parameter = $request->input('api_key') ?? $request->query('api_key') ?? '';
+
+        // The legacy partner may send a digits-only key as a JSON number.
+        if (is_int($parameter)) {
+            $parameter = (string) $parameter;
+        }
+
+        return is_string($parameter) ? self::bounded($parameter) : null;
+    }
+
+    private static function bounded(string $given): ?string
+    {
+        return strlen($given) <= max(self::MAX_KEY_LENGTH, strlen((string) config('hdid.callcenter.api_key'))) ? $given : null;
     }
 
     private function matchesLegacyCallCenterKey(Request $request, string $given): bool

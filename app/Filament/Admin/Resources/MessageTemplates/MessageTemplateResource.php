@@ -11,6 +11,7 @@ use App\Messaging\Channel;
 use App\Messaging\MessageKey;
 use App\Messaging\TemplateRenderer;
 use App\Models\MessageTemplate;
+use App\Support\InputLimits;
 use BackedEnum;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\RichEditor;
@@ -27,6 +28,7 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\HtmlString;
+use Illuminate\Support\Number;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -36,6 +38,9 @@ use Illuminate\Validation\ValidationException;
  */
 class MessageTemplateResource extends BaseResource
 {
+    /** The body column (TEXT) holds 65,535 bytes. */
+    public const STORED_BODY_MAX_BYTES = 65535;
+
     protected static ?string $model = MessageTemplate::class;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedEnvelopeOpen;
@@ -93,10 +98,13 @@ class MessageTemplateResource extends BaseResource
                         ->live(onBlur: true),
                     $isEmail ? RichEditor::make('body')->label(__('Body'))
                         ->toolbarButtons(['bold', 'italic', 'underline', 'link', 'h2', 'h3', 'bulletList', 'orderedList', 'blockquote', 'undo', 'redo'])
+                        ->maxLength(InputLimits::TEXT_CHARS)
+                        ->helperText(__('At most :max characters of text.', ['max' => Number::format(InputLimits::TEXT_CHARS)]))
+                        ->rule(fn () => fn (string $attribute, mixed $value, \Closure $fail) => static::checkStoredSize($value, $fail))
                         ->rule(fn (MessageTemplate $record) => fn (string $attribute, mixed $value, \Closure $fail) => static::checkPlaceholders($record->key, $value, 'body', $fail))
                         ->live(onBlur: true)
                         ->columnSpanFull()
-                    : Textarea::make('body')->label(__('Body'))->rows(4)
+                    : Textarea::make('body')->label(__('Body'))->rows(4)->maxLength(InputLimits::SMS_BODY)
                         ->placeholder(fn (MessageTemplate $record) => $record->key->defaultBody($record->locale))
                         ->rule(fn (MessageTemplate $record) => fn (string $attribute, mixed $value, \Closure $fail) => static::checkPlaceholders($record->key, $value, 'body', $fail))
                         ->live(onBlur: true)
@@ -155,6 +163,17 @@ class MessageTemplateResource extends BaseResource
             app(TemplateRenderer::class)->assertPlaceholdersKnown($key, is_string($value) ? $value : null, $field);
         } catch (ValidationException $e) {
             $fail($e->errors()[$field][0]);
+        }
+    }
+
+    /**
+     * The HTML of an e-mail body has to fit its TEXT column (65,535 bytes):
+     * the field counts the text, the markup comes on top of it.
+     */
+    public static function checkStoredSize(mixed $value, \Closure $fail): void
+    {
+        if (is_string($value) && strlen($value) > self::STORED_BODY_MAX_BYTES) {
+            $fail(__('The text with its formatting is too long to store; shorten it.'));
         }
     }
 

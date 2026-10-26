@@ -24,6 +24,21 @@ const sourceLabel = { sync: 'from Enterprise Master Data', admin: 'added by the 
 
 const verifiedOnCall = computed(() => store.user?.phone_verification_on_call === true);
 const canVerify = (phone) => verificationEnabled.value && phone.source === 'self' && !phone.verified;
+/** A landline (or a number of a country no longer accepted): kept to recognise the caller, but no SMS reaches it. */
+const noSms = (phone) => phone.sms_capable === false;
+/** The countries whose numbers can be added, named by the server in the portal's language. */
+const countries = computed(() => store.user?.phone_countries ?? []);
+
+/** Refused numbers (the server's 422 reason): said in the portal's words, and kept on screen longer. */
+const smsRefusals = {
+    phone_region_not_accepted: 'Phone numbers of this country cannot be added here. The helpdesk can record the number for you.',
+    sms_region_not_allowed: 'We do not send text messages to phone numbers of this country, so this number cannot be confirmed by SMS code. The helpdesk can confirm it for you.',
+    sms_not_mobile: 'This number cannot receive text messages (it is not a mobile number), so it cannot be confirmed by SMS code. The helpdesk can confirm it for you.',
+};
+function showError(e) {
+    const refusal = smsRefusals[e?.reason];
+    store.toast(refusal ? t(refusal) : (e.firstError ?? e.message), 'error', refusal ? 8000 : 4000);
+}
 
 async function makePrimary(phone) {
     busy.value = true;
@@ -40,7 +55,7 @@ async function add() {
         store.user = r.data; number.value = label.value = '';
         const added = (r.data?.phone_numbers ?? []).some((phone) => !before.has(phone.id));
         store.toast(added ? t('Phone number added.') : t('This number is already on your list.'));
-    } catch (e) { store.toast(e.firstError ?? e.message, 'error'); } finally { busy.value = false; }
+    } catch (e) { showError(e); } finally { busy.value = false; }
 }
 
 async function remove(phone) {
@@ -63,7 +78,7 @@ async function requestVerification(phone) {
         verifyNotice.value = r.message;
         await nextTick();
         document.getElementById(`verify-${phone.id}`)?.focus();
-    } catch (e) { store.toast(e.firstError ?? e.message, 'error'); } finally { busy.value = false; }
+    } catch (e) { showError(e); } finally { busy.value = false; }
 }
 
 async function verify(phone) {
@@ -91,6 +106,8 @@ async function verify(phone) {
                             <span v-if="phone.shared" class="badge bg-amber-50 text-amber-700">{{ t('shared') }}</span>
                         </div>
                         <div class="text-xs text-slate-500">{{ phone.label ? phone.label + ' · ' : '' }}{{ t(sourceLabel[phone.source]) }}<span v-if="phone.is_primary" class="font-semibold text-brand-deep"> · {{ t('primary') }}</span></div>
+                        <p v-if="noSms(phone)" class="mt-1 text-xs text-amber-800">{{ t('Cannot be used for text messages (confirmation, sign-in).') }}</p>
+                        <p v-if="phone.sms_target && !phone.is_primary" class="mt-1 text-xs text-ink-muted">{{ t('Text messages to you (the sign-in code, the PIN) go to this number, because the primary one cannot receive them.') }}</p>
                         <p v-if="phone.shared" class="mt-1 text-xs text-amber-800">{{ t('This number is also on file for another client, so the phone menu cannot recognise you from it. Use the one-time identification code, or contact the helpdesk.') }}</p>
                     </div>
                     <div v-if="removingId === phone.id" class="flex items-center gap-2 text-sm">
@@ -99,7 +116,7 @@ async function verify(phone) {
                         <button class="btn-secondary !py-1.5" @click="removingId = null">{{ t('Cancel') }}</button>
                     </div>
                     <div v-else class="flex flex-wrap justify-end gap-2">
-                        <button v-if="canVerify(phone) && verifyingId !== phone.id" class="btn-primary !py-1.5" :disabled="busy" @click="requestVerification(phone)"><Icon name="chat" class="h-4 w-4" />{{ t('Verify') }}</button>
+                        <button v-if="canVerify(phone) && verifyingId !== phone.id" class="btn-primary !py-1.5" :disabled="busy || noSms(phone)" :title="noSms(phone) ? t('This number cannot receive text messages, so it cannot be confirmed by SMS code. The helpdesk can confirm it for you.') : null" @click="requestVerification(phone)"><Icon name="chat" class="h-4 w-4" />{{ t('Verify') }}</button>
                         <button v-if="!phone.is_primary" class="btn-secondary" :disabled="busy" @click="makePrimary(phone)">{{ t('Make primary') }}</button>
                         <button v-if="phone.source === 'self'" class="btn-danger" :disabled="busy" :aria-label="t('Remove')" @click="removingId = phone.id"><Icon name="trash" class="h-4 w-4" />{{ t('Remove') }}</button>
                     </div>
@@ -128,10 +145,11 @@ async function verify(phone) {
         <p v-if="phones.length" class="text-xs text-ink-muted">{{ t('Removing your last registered number also removes your PIN: the phone menu could no longer use it.') }}</p>
 
         <form class="card grid gap-3 p-5 sm:grid-cols-[1fr_1fr_auto]" @submit.prevent="add">
-            <div><label class="label" for="number">{{ t('Phone number') }}</label><input id="number" v-model="number" class="input" placeholder="+36 30 123 4567" required autocomplete="tel" :disabled="atCap" /></div>
+            <div><label class="label" for="number">{{ t('Phone number') }}</label><input id="number" v-model="number" class="input" placeholder="+36 30 123 4567" required maxlength="32" autocomplete="tel" :disabled="atCap" /></div>
             <div><label class="label" for="label">{{ t('Label (optional)') }}</label><input id="label" v-model="label" class="input" :placeholder="t('mobile, office…')" maxlength="50" :disabled="atCap" /></div>
             <div class="self-end"><button class="btn-primary w-full" :disabled="busy || atCap">{{ t('Add') }}</button></div>
             <p v-if="atCap" class="text-xs text-ink-muted sm:col-span-3">{{ t('You can keep at most {n} phone numbers. Remove one to add another.', { n: maxNumbers }) }}</p>
+            <p v-else-if="countries.length" class="text-xs text-ink-muted sm:col-span-3">{{ t('Phone numbers of these countries can be added: {countries}.', { countries: countries.join(', ') }) }}</p>
         </form>
     </div>
 </template>

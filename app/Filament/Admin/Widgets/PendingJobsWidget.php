@@ -3,6 +3,8 @@
 namespace App\Filament\Admin\Widgets;
 
 use App\Auth\Permission;
+use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\QueuedJob;
 use App\Support\HuDate;
 use App\System\QueueMaintenance;
@@ -22,6 +24,9 @@ use Illuminate\Database\Eloquent\Collection;
  */
 class PendingJobsWidget extends TableWidget
 {
+    use AuthorizesEveryRequest;
+    use LimitsSearchInput;
+
     protected int|string|array $columnSpan = 'full';
 
     public static function canView(): bool

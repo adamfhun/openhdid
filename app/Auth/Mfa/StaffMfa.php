@@ -11,6 +11,7 @@ use App\Messaging\Messenger;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\Sms\SmsDestinations;
 use App\Support\HuDate;
 use App\Support\PhoneNormalizer;
 use Filament\Auth\MultiFactor\App\AppAuthentication;
@@ -39,6 +40,9 @@ class StaffMfa
 {
     public const CODE_LENGTH = 6;
 
+    /** The longest code input taken at all (spaces between the digits allowed); longer is refused before the lock, the hash work and the count. */
+    public const CODE_INPUT_MAX_LENGTH = 12;
+
     public const CODE_TTL_MINUTES = 10;
 
     /** Tries per sent code, below the account lockout. */
@@ -66,6 +70,7 @@ class StaffMfa
         private readonly Auditor $auditor,
         private readonly Messenger $messenger,
         private readonly PhoneNormalizer $phones,
+        private readonly SmsDestinations $smsDestinations,
     ) {}
 
     public function isEnabled(): bool
@@ -124,11 +129,35 @@ class StaffMfa
     }
 
     /**
-     * Mobile numbers of the user's EMD record, the only ones SMS codes go to.
+     * Mobile numbers of the user's EMD record in an accepted country
+     * (Settings › Phone numbers), the only ones SMS codes go to: the
+     * Messenger would refuse any other, so it is not offered either, and
+     * a factor set up on a number whose country was taken off the list
+     * stops counting, like a number gone from the record.
      *
      * @return list<string>
      */
     public function smsNumbers(User $user): array
+    {
+        return array_values(array_filter($this->recordMobileNumbers($user), fn (string $number): bool => $this->smsDestinations->allows($number)));
+    }
+
+    /**
+     * Mobile numbers of the user's EMD record that no SMS code may go to,
+     * because their country is not on the accepted list: the setup page
+     * names why the SMS factor is not offered.
+     *
+     * @return list<string>
+     */
+    public function smsNumbersOutsideAcceptedCountries(User $user): array
+    {
+        return array_values(array_diff($this->recordMobileNumbers($user), $this->smsNumbers($user)));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function recordMobileNumbers(User $user): array
     {
         $record = $user->externalRecord;
 
@@ -242,9 +271,10 @@ class StaffMfa
 
         // SMS in Hungarian only (house rule), e-mail in the language of the staff member's panel.
         $text = fn (string $locale): string => __('Your sign-in code: :code. Valid for :minutes minutes. Do not give it to anyone.', ['code' => $code, 'minutes' => self::CODE_TTL_MINUTES], $locale);
+        // A sign-in message: on the priority queue, and never sent once expired or replaced.
         $method === MfaMethod::Sms
-            ? $this->messenger->sendRaw(Channel::Sms, $destination, null, $text('hu'), carriesSecret: true)
-            : $this->messenger->sendRaw(Channel::Email, $destination, __('Sign-in code'), $text(app()->getLocale()), carriesSecret: true);
+            ? $this->messenger->sendRaw(Channel::Sms, $destination, null, $text('hu'), carriesSecret: true, validUntil: $expires, forUserId: (string) $user->getKey())
+            : $this->messenger->sendRaw(Channel::Email, $destination, __('Sign-in code'), $text(app()->getLocale()), carriesSecret: true, validUntil: $expires, forUserId: (string) $user->getKey());
 
         $masked = self::mask($destination);
         $this->auditor->record('mfa.code_sent', $user, ['method' => $method->value, 'purpose' => $purpose, 'to' => $masked], $user);
@@ -260,6 +290,8 @@ class StaffMfa
      */
     public function verify(User $user, MfaMethod $method, string $code): void
     {
+        self::assertCodeInput($code);
+
         $this->underAccountLock($user, function () use ($user, $method, $code): void {
             $this->assertNotLocked($user, $method);
 
@@ -311,6 +343,7 @@ class StaffMfa
      */
     public function confirmAppSetup(User $user, string $code, ?string $emailCode = null): void
     {
+        self::assertCodeInput($code, $emailCode);
         $this->assertCanManage($user, MfaMethod::App);
 
         $this->underAccountLock($user, function () use ($user, $code, $emailCode): void {
@@ -338,6 +371,7 @@ class StaffMfa
      */
     public function confirmSentSetup(User $user, MfaMethod $method, string $code): void
     {
+        self::assertCodeInput($code);
         $this->assertCanManage($user, $method);
 
         $this->underAccountLock($user, function () use ($user, $method, $code): void {
@@ -585,6 +619,22 @@ class StaffMfa
      *
      * @throws MfaException
      */
+    /**
+     * An over-long code is a typing slip or junk, never a try: refused here,
+     * before the account lock, the hash work and the failure count, for
+     * every caller (the pages check the same first, with a field error).
+     *
+     * @throws MfaException
+     */
+    private static function assertCodeInput(string $code, ?string $other = null): void
+    {
+        foreach ([$code, $other] as $value) {
+            if ($value !== null && mb_strlen($value) > self::CODE_INPUT_MAX_LENGTH) {
+                throw new MfaException(__('The code may be at most :max characters long.', ['max' => self::CODE_INPUT_MAX_LENGTH]));
+            }
+        }
+    }
+
     private function underAccountLock(User $user, callable $work): mixed
     {
         try {

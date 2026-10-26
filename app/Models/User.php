@@ -10,6 +10,7 @@ use App\Enums\ClientTier;
 use App\Enums\PrincipalType;
 use App\Models\Concerns\HasAccountLifecycle;
 use App\Models\Concerns\HasUuidKey;
+use App\System\DemoData;
 use Database\Factories\UserFactory;
 use Filament\Auth\MultiFactor\App\Contracts\HasAppAuthentication;
 use Filament\Models\Contracts\FilamentUser;
@@ -71,6 +72,7 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
             'mfa_email_enabled_at' => 'datetime',
             'failed_mfa_attempts' => 'integer',
             'mfa_locked_until' => 'datetime',
+            'email_changed_by_admin_at' => 'datetime',
         ];
     }
 
@@ -98,9 +100,14 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
         return PrincipalType::User;
     }
 
+    /**
+     * Asked on every panel request, so a demo account (DemoData) whose
+     * session or remember cookie dates from before the switch to
+     * production loses the panel too, not only its next sign-in.
+     */
     public function canAccessPanel(Panel $panel): bool
     {
-        if ($this->isClosed()) {
+        if ($this->isClosed() || (DemoData::refusedHere() && DemoData::isDemoAccount($this))) {
             return false;
         }
 

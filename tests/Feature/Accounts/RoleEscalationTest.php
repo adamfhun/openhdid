@@ -7,6 +7,7 @@ use App\Filament\Admin\Resources\Users\Pages\ListUsers;
 use App\Models\AuditLog;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Hash;
 use Livewire\Livewire;
@@ -104,7 +105,7 @@ it('keeps an admin from closing a super-admin account from the users list', func
 
     // A hand-crafted Livewire request skips the visibility check of callTableAction.
     Livewire::test(ListUsers::class)
-        ->assertTableActionHidden('close', $super)
+        ->assertActionDisabled(TestAction::make('close')->table($super))
         ->mountTableAction('close', $super)
         ->callMountedTableAction();
 

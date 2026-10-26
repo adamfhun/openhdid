@@ -9,17 +9,24 @@ use App\Auth\Permission;
 use App\Enums\ApiKeyScope;
 use App\Http\Controllers\HealthController;
 use App\Http\Middleware\AuthenticateApiKey;
+use App\Http\Middleware\StartSessionWhenNeeded;
+use App\Http\Middleware\ThrottleRequestsUnlessExempt;
 use App\Localization\RememberClientLocale;
 use App\Mail\Transport\EwsTransport;
 use App\Models\User;
+use App\Policies\RolePolicy;
 use App\Settings\Settings;
 use App\Sms\LogSmsSender;
 use App\Sms\OzekiSmsSender;
 use App\Sms\SmsSender;
 use App\Support\ApiSignatureDocs;
+use App\Support\ClientAddress;
 use App\Support\HuDate;
 use App\Support\OutboundProxy;
 use App\Support\PhoneNormalizer;
+use App\System\InstallationCommandMutex;
+use App\System\InstallationEventMutex;
+use App\System\InstallationSchedulingMutex;
 use Dedoc\Scramble\Scramble;
 use Dedoc\Scramble\Support\Generator\OpenApi;
 use Dedoc\Scramble\Support\Generator\SecurityScheme;
@@ -30,25 +37,54 @@ use Filament\Tables\Table;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Console\CommandMutex;
+use Illuminate\Console\Scheduling\EventMutex;
+use Illuminate\Console\Scheduling\SchedulingMutex;
+use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Http\Request;
+use Illuminate\Mail\Markdown;
+use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
+use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Session\SessionManager;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route as RouteFacade;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use libphonenumber\PhoneNumberUtil;
+use Spatie\Permission\Models\Role as RoleModel;
 
 class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
         $this->app->singleton(Settings::class);
+
+        // The scheduler's and the isolated commands' mutexes carry this installation's
+        // id, so two installations sharing a Valkey/Redis both run their tasks (G31c).
+        $this->app->bind(EventMutex::class, InstallationEventMutex::class);
+        $this->app->bind(SchedulingMutex::class, InstallationSchedulingMutex::class);
+        $this->app->bind(CommandMutex::class, InstallationCommandMutex::class);
+
+        // Every route throttle ("throttle:n,m,bucket", Livewire's upload limit too) leaves
+        // the addresses of HDID_RATE_LIMIT_EXEMPT_NETWORKS alone; bound in the framework
+        // class's place, so withoutMiddleware(ThrottleRequests::class) still switches it off.
+        $this->app->bind(ThrottleRequests::class, ThrottleRequestsUnlessExempt::class);
+
+        // The web group, the Filament panel and Sanctum's stateful API stack
+        // all name StartSession; the bound one stores no session a guest does
+        // not need and bounds the stored addresses (G14a).
+        $this->app->singleton(StartSession::class, fn ($app): StartSession => new StartSessionWhenNeeded(
+            $app->make(SessionManager::class),
+            fn () => $app->make(CacheFactory::class),
+        ));
 
         $this->app->singleton(PhoneNormalizer::class, fn (): PhoneNormalizer => new PhoneNormalizer(
             PhoneNumberUtil::getInstance(),
@@ -72,9 +108,18 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->useHungarianDateFormats();
+        $this->useConfiguredRootUrl();
 
         // A long-running worker must not keep the settings of a past request.
         Queue::before(fn () => $this->app->make(Settings::class)->forgetLocal());
+
+        // Markdown mails (the fallback login link mail prints the client's
+        // name): echoed data stays text, a link or image in it is not rendered.
+        // The secured encoding escapes only \ [ ] < >, not quotes or &: inside an
+        // attribute (<x-mail::button :url>, <x-mail::header :url>) only a value the
+        // application built itself may stand, never outside data; if one must,
+        // escape it with e() and hand it over as an HTML string object.
+        Markdown::withSecuredEncoding();
 
         // Every outbound request (master data, Exchange, SMS gateway, ADFS,
         // Entra) goes through the configured proxy, or explicitly direct.
@@ -93,24 +138,33 @@ class AppServiceProvider extends ServiceProvider
         // are keyed on the authenticated key, plus a tight budget per call.
         // The per-address ceiling caps unauthenticated noise (the throttle
         // runs before the key is verified, and an unknown key is not a bucket).
-        $ipCeiling = fn (Request $request): Limit => Limit::perMinute(1000)->by('machine-ip:'.$request->ip());
-        $callId = fn (Request $request): ?string => is_string($id = $request->input('call_id')) && $id !== '' ? $id : null;
+        // The per-call budget (IvrController) is counted only once the key and
+        // its signature passed: a guessed call id hammered with forged keys, or
+        // with a stolen key but no signing secret, must not block the phone menu.
+        // An IPv6 address counts by its /64 network (ClientAddress).
+        $ipCeiling = fn (Request $request): Limit => Limit::perMinute(1000)->by('machine-ip:'.ClientAddress::limitKey($request->ip()));
 
         RateLimiter::for('machine', fn (Request $request): array => [
             $ipCeiling($request),
             Limit::perMinute(600)->by('machine:'.AuthenticateApiKey::identityOf($request)),
         ]);
 
-        RateLimiter::for('ivr', fn (Request $request): array => array_values(array_filter([
+        // The per-call budget (10 a minute) is counted by the IVR controller, after the
+        // key and its signature passed: a request that ends in 401 must not use up the
+        // partner's budget for a call, even with a stolen key but no signing secret.
+        RateLimiter::for('ivr', fn (Request $request): array => [
             $ipCeiling($request),
             Limit::perMinute(300)->by('ivr:'.AuthenticateApiKey::identityOf($request)),
-            $callId($request) !== null ? Limit::perMinute(10)->by('ivr-call:'.$callId($request)) : null,
-        ])));
+        ]);
 
         RateLimiter::for('api-key', fn (Request $request): array => [
             $ipCeiling($request),
             Limit::perMinute(120)->by('api-key:'.AuthenticateApiKey::identityOf($request)),
         ]);
+
+        // Spatie's Role lives outside App\Models, so policy discovery never finds
+        // RolePolicy; without it the panel would let every staff user edit roles.
+        Gate::policy(RoleModel::class, RolePolicy::class);
 
         // The interface documents need the second factor too, like the panel they are linked from.
         Gate::define('viewApiDocs', fn (?User $user): bool => ($user?->can(Permission::AdminAccess->value) ?? false)
@@ -123,6 +177,29 @@ class AppServiceProvider extends ServiceProvider
             $this->app->make(Cache::class),
             config('hdid.ews'),
         ));
+    }
+
+    /**
+     * Every generated address (the login link in mails, the SSO return
+     * address, redirects, asset and form URLs) starts with APP_URL, never with
+     * the Host or X-Forwarded-Host of the request, which the client or a
+     * forwarding proxy may set. An https APP_URL keeps https behind a proxy
+     * that forwards plain http. Local development keeps the address it was
+     * opened on.
+     */
+    private function useConfiguredRootUrl(): void
+    {
+        $root = rtrim((string) config('app.url'), '/');
+
+        if ($this->app->environment('local') || preg_match('#^https?://[^/]+#i', $root) !== 1) {
+            return;
+        }
+
+        URL::forceRootUrl($root);
+
+        if (str_starts_with(strtolower($root), 'https://')) {
+            URL::forceScheme('https');
+        }
     }
 
     /**

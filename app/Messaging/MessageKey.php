@@ -124,7 +124,7 @@ enum MessageKey: string
         }
 
         return match ([$this, $locale]) {
-            [self::MagicLink, 'hu'] => 'Belépési link – {{ app_name }}',
+            [self::MagicLink, 'hu'] => 'Belépési hivatkozás – {{ app_name }}',
             default => 'Your {{ app_name }} login link',
         };
     }
@@ -134,7 +134,7 @@ enum MessageKey: string
         return match ([$this, $this->locale($locale)]) {
             [self::MagicLink, 'hu'] => <<<'HTML'
 <h2>Kedves {{ name }}!</h2>
-<p>Az alábbi gombra kattintva beléphet a(z) {{ app_name }} ügyfélfelületére. A link {{ hours }} óráig érvényes, és egyszer használható fel.</p>
+<p>Az alábbi gombra kattintva beléphet a(z) {{ app_name }} ügyfélfelületére. A hivatkozás {{ hours }} óráig érvényes, és egyszer használható fel.</p>
 <p><a class="button" href="{{ link }}">Belépés</a></p>
 <p>Ha a gomb nem működik, másolja be ezt a címet a böngészőbe:<br>{{ link }}</p>
 <p>Ha nem Ön kérte a belépést, ezt a levelet figyelmen kívül hagyhatja.</p>

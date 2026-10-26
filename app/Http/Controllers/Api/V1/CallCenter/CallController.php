@@ -38,6 +38,12 @@ class CallController extends Controller
      * IVR knows whether it may ask for a PIN.
      * Omitting `caller_number` preserves both stored number fields; an explicit
      * null clears them. A new value is stored raw and normalized again.
+     *
+     * `metadata` is a flat object of at most 50 keys (each up to 100
+     * characters) with text, number or true/false values of up to 255
+     * characters. Every event merges its metadata into what the call already
+     * carries; an event that would take the merged object beyond 50 keys is
+     * refused with 422. `client_external_id` has one to seven digits.
      */
     public function upsert(CallEventRequest $request): CallResource
     {
@@ -62,7 +68,9 @@ class CallController extends Controller
      *
      * Use it any time after the call event: `client` is null while the caller
      * is unknown; `identified` tells whether an identification already passed
-     * on this call (by PIN, code or an agent).
+     * on this call (by PIN, code or an agent). A `callId` longer than 100
+     * characters (the longest `call_id` a call event takes) names no call and
+     * is answered with 404.
      */
     public function show(string $callId): CallResource|JsonResponse
     {

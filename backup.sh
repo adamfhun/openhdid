@@ -10,11 +10,13 @@
 #   ./backup.sh list                 a mentések listája
 #   ./backup.sh restore              visszaállítás a legutóbbi mentésből (megerősítést kér)
 #   ./backup.sh restore <név>        visszaállítás egy adott mentésből
+#   ./backup.sh signout              mindenki kiléptetése (megerősítést kér, rövid leállással),
+#                                    például egy külső adatbázis visszaállítása után
 #
 # Kapcsolók:
 #   --keep N                  mentés után a legutóbbi N mentés marad (alapból 14; 0 = mind marad)
 #   --quiet                   csak a hibák (ütemezett futtatáshoz)
-#   --yes                     visszaállítás megerősítés nélkül
+#   --yes                     visszaállítás és kiléptetés megerősítés nélkül
 #   --no-safety-backup        visszaállítás előtt nem készül biztonsági mentés a jelenlegi állapotról
 #
 # Egy mentés tartalma (a mappa 700-as, a fájlok 600-as jogúak):
@@ -37,9 +39,24 @@
 # az alkalmazás saját felhasználója (uid 82) olvassa és írja, így rootful és rootless
 # Dockerrel is a konténer által látott tulajdonos áll vissza.
 #
-# A visszaállítás után mindenkinek újra be kell lépnie: a munkamenetek és a gyorsítótár
-# kiürülnek, hogy a mentés óta visszavont belépések ne éledjenek újra. A visszaállítás előtti
-# biztonsági mentésekből a legutóbbi 3 marad (--keep 0 mellett mind).
+# A visszaállítás után mindenkinek újra be kell lépnie, a mobilalkalmazásban is, hogy a mentés
+# óta visszavont munkamenetek és tokenek ne éledjenek újra: minden fiók munkamenet-korszaka eggyel
+# nő, az emlékező tokenek és a mobil tokenek törlődnek, a még élő belépési hivatkozások és kódok
+# (a mentés kori, azóta már beváltott vagy visszavontak is) érvényüket vesztik, a munkamenetek és a
+# gyorsítótár kiürülnek (az adatbázisban, a storage kötetben és a Valkey-ben is). A Valkey-nél ez a
+# munkamenet-tár adatbázisának (a munkamenet-Valkey REDIS_SESSION_DB-je, ennek híján a fő Valkey
+# REDIS_DB-je) és a gyorsítótár-adatbázisnak (REDIS_CACHE_DB) teljes kiürítése. Ha a munkamenetek a
+# fő Valkey-ben vannak (REDIS_SESSION_HOST üres), a sorral közös adatbázisban várakozó sorfeladatok is
+# elvesznek; saját munkamenet-Valkey mellett a sor megmarad. Ha egy másik telepítés ugyanazt a Valkey-
+# adatbázist használja, annak munkamenetei és gyorsítótára is (egy Valkey egy telepítésé). A ki nem
+# küldött üzeneteket az ütemező legfeljebb öt percen belül újra sorba állítja (a küldés közben
+# megszakadtakat 30 perc után). A kiléptetés az auditnaplóba is bekerül (access.revoked_all).
+# A mentés óta tett egyéb biztonsági lépéseket viszont a visszaállított adatbázis nem ismeri: a
+# fiókok lezárását, az API-kulcsok visszavonását, a szerepkör- és jogelvételt, a jelszó- és a
+# második lépés visszaállítását meg kell ismételni (a visszaállítás előtti biztonsági mentés
+# auditnaplójában láthatók). Külső adatbázisnál a kiléptetés a jelenlegi adatbázison fut: ha azt
+# csak a szkript után állítják vissza, utána: ./backup.sh signout
+# A visszaállítás előtti biztonsági mentésekből a legutóbbi 3 marad (--keep 0 mellett mind).
 #
 # Napi mentés cronnal (2:30-kor):  30 2 * * * /opt/openhdid/backup.sh --quiet
 # A mentéseket rendszeresen másolja a gazdagépen kívülre, titkosítva.
@@ -75,7 +92,7 @@ die() {
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        list | restore) COMMAND=$1; shift ;;
+        list | restore | signout) COMMAND=$1; shift ;;
         --keep) [[ ${2:-} =~ ^[0-9]+$ ]] || die "A --keep után szám kell."; KEEP=$2; shift 2 ;;
         --quiet) QUIET=1; shift ;;
         --yes) YES=1; shift ;;
@@ -102,6 +119,19 @@ db=${MARIADB_DATABASE:?}
 [ -n "$u" ] && [ -n "$p" ] || { echo "a migrációs fiók (db.env: DB_USERNAME, DB_PASSWORD) nincs megadva" >&2; exit 1; }
 export MYSQL_PWD="$p"
 '
+
+# Every account signs out through the application's own command (php artisan hdid:sign-out-all,
+# App\System\SignOutEveryone), run in a one-off web container: the application's own connection
+# settings reach the session store and the cache wherever they are (the database, the storage
+# volume, a bundled or an external Valkey). A restored dump brings back the session epochs,
+# remember-me tokens and mobile tokens of the backup time, and a session kept in Valkey would
+# match that epoch again: every epoch moves on, the tokens go, every live one-time secret (login
+# link, SMS, mobile and IVR code) is used up, the stores start empty. The command's last line,
+# "signed-out <staff> <clients> <tokens> <codes> <session store> <cache store> <shared|separate>",
+# is what the script reports; the last word says whether the sessions shared the queue's Valkey
+# (whose database the flush then emptied, waiting jobs too). The same command serves the classic
+# installation after a restore (operations manual, chapter 4).
+SIGN_OUT_COMMAND=(artisan hdid:sign-out-all --force --reason=backup_restore)
 
 # Command output is read into a variable before it is searched: under pipefail a
 # "cmd | grep -q" fails when grep quits at the first match and cmd still writes (SIGPIPE).
@@ -177,6 +207,46 @@ config_archive() {
 # Docker) and is not readable for the operator: that user reads it, without root.
 tls_archive() {
     run_web --entrypoint sh web -c 'tar czf - -C /etc/openhdid/tls .' </dev/null
+}
+
+confirm() {
+    local answer
+    [[ $YES != 1 ]] || return 0
+    [[ -t 0 ]] || die "Megerősítés kellene, de nincs terminál; nem interaktív futtatáshoz: --yes"
+    read -r -p "    Folytatja? Írja be: igen > " answer || answer=""
+    [[ $answer == igen ]] || die "Megszakítva, semmi nem változott."
+}
+
+# Every account signs in again (SIGN_OUT_COMMAND above), through the application's own user and
+# settings in a one-off web container. A bundled Valkey is started first, so the step does
+# not depend on what was running before. The argument completes the advice on failure.
+sign_out_everyone() {
+    local after=${1:-} services out staff clients tokens codes session_store cache_store sessions_place
+    services=$(docker compose config --services 2>/dev/null) || die "A compose nem olvasható (docker compose config)."
+    if grep -qx mariadb <<<"$services"; then
+        docker compose up -d --wait --wait-timeout 300 mariadb >/dev/null 2>&1 || die "A mariadb nem indult el (docker compose logs mariadb)."
+    fi
+    local store
+    for store in valkey valkey-sessions; do
+        if grep -qx "$store" <<<"$services"; then
+            docker compose up -d --wait --wait-timeout 300 "$store" >/dev/null 2>&1 || die "A(z) $store nem indult el (docker compose logs $store)."
+        fi
+    done
+    if ! out=$(run_web web "${SIGN_OUT_COMMAND[@]}" </dev/null); then
+        printf '%s\n' "$out" >&2
+        die "A felhasználók kiléptetése nem sikerült (adatbázis vagy Valkey, lásd fent). A hiba elhárítása után ismételje meg: ./backup.sh signout${after:+; $after}"
+    fi
+    [[ $out =~ signed-out\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)\ ([A-Za-z0-9_-]+)\ ([A-Za-z0-9_-]+)(\ (shared|separate))? ]] \
+        || die "A kiléptetés eredménye nem olvasható: $out"
+    staff=${BASH_REMATCH[1]} clients=${BASH_REMATCH[2]} tokens=${BASH_REMATCH[3]} codes=${BASH_REMATCH[4]}
+    session_store=${BASH_REMATCH[5]} cache_store=${BASH_REMATCH[6]} sessions_place=${BASH_REMATCH[8]:-shared}
+    say "    mindenki kiléptetve: $staff munkatárs és $clients ügyfél munkamenet-korszaka nőtt, az emlékező tokenek törölve, $tokens mobil token törölve, $codes élő belépési hivatkozás és kód érvénytelenítve"
+    say "    a munkamenet-tár ($session_store) és a gyorsítótár ($cache_store) üres; bejegyzés az auditnaplóban: access.revoked_all"
+    if [[ $session_store == redis && $sessions_place == separate ]]; then
+        say "    a munkamenetek saját Valkey-je kiürült; a fő Valkey-ben a sor megmaradt"
+    elif [[ $session_store == redis ]]; then
+        say "    a kiürített Valkey-adatbázisokban várakozó sorfeladatok (QUEUE_CONNECTION=redis mellett) is törlődtek; a ki nem küldött üzeneteket az ütemező legfeljebb öt percen belül újra sorba állítja"
+    fi
 }
 
 create_backup() {
@@ -278,7 +348,7 @@ list_backups() {
 }
 
 restore_backup() {
-    local source image version db_state answer stage services differs=() f
+    local source image version db_state stage services differs=() f
     if [[ -z $NAME ]]; then
         NAME=$(find "$BACKUPS" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | grep -E "$STAMP_PATTERN" | sort | tail -n 1 || true)
         [[ -n $NAME ]] || die "Nincs mentés a $BACKUPS mappában."
@@ -325,13 +395,11 @@ restore_backup() {
     step "Visszaállítás: backup/$NAME"
     say "    készült: $(sed -n 's/^created=//p' "$source/info.txt"), OpenHDID $version"
     say "    a jelenlegi adatbázis, storage kötet és beállítások helyére ez a mentés kerül;"
-    say "    a mentés óta keletkezett adatok elvesznek, és mindenkinek újra be kell lépnie."
+    say "    a mentés óta keletkezett adatok elvesznek, és mindenkinek újra be kell lépnie (a mobilalkalmazásban is)."
+    say "    a mentés óta tett biztonsági lépéseket (fióklezárás, API-kulcs visszavonása, szerepkör- és jogelvétel,"
+    say "    jelszó- és második lépés visszaállítása) meg kell ismételni: a mentés nem ismeri őket."
     [[ ${#differs[@]} == 0 ]] || say "    a mentés beállításai eltérnek a jelenlegitől: ${differs[*]}"
-    if [[ $YES != 1 ]]; then
-        [[ -t 0 ]] || die "Megerősítés kellene, de nincs terminál; nem interaktív futtatáshoz: --yes"
-        read -r -p "    Folytatja? Írja be: igen > " answer || answer=""
-        [[ $answer == igen ]] || die "Megszakítva, semmi nem változott."
-    fi
+    confirm
 
     if [[ $SAFETY == 1 && -f .env ]]; then
         if ! (QUIET=1 create_backup "$SAFETY_SUFFIX"); then
@@ -398,6 +466,13 @@ restore_backup() {
         done' < "$source/storage.tar.gz" || die "A storage kötet visszaállítása nem sikerült."
     say "    storage kötet visszaállítva"
 
+    step "Kiléptetés"
+    # Before anything starts: a session or token of the backup time must not serve one request.
+    sign_out_everyone "az alkalmazás addig leállítva marad, utána: docker compose up -d"
+    if [[ $db_state != included ]]; then
+        say "    külső adatbázis: ha a visszaállítása csak ezután történik, utána futtassa: ./backup.sh signout"
+    fi
+
     step "Indítás"
     docker compose up -d --wait --wait-timeout 300 >/dev/null 2>&1 \
         || die "A szolgáltatások nem indultak el egészségesen; az ok: docker compose ps, docker compose logs"
@@ -412,8 +487,28 @@ restore_backup() {
     say "bizonyítja, hogy a titkosított adatok az APP_KEY-jel olvashatók)."
 }
 
+# The application stops for the sign-out, as for a restore: emptying the cache while it runs
+# would drop the locks of running work (the EMD sync, the scheduler's overlap guards), and a
+# second sync could start beside one still running.
+sign_out_command() {
+    [[ -f .env ]] || die "Nincs .env a szkript mappájában: ez nem egy telepítés mappája."
+    step "Kiléptetés"
+    say "    minden felhasználónak újra be kell lépnie (a mobilalkalmazásban is); a munkamenetek és a"
+    say "    gyorsítótár kiürülnek; ha a munkamenetek a fő Valkey-ben vannak (REDIS_SESSION_HOST üres),"
+    say "    a várakozó sorfeladatok is (QUEUE_CONNECTION=redis mellett)."
+    say "    az alkalmazás a kiléptetés idejére leáll (a futó átvétel és az ütemező zárjai miatt), utána újraindul."
+    confirm
+    docker compose stop "${APP_SERVICES[@]}" >/dev/null 2>&1 \
+        || die "Az alkalmazás nem állt le (docker compose ps); a kiléptetés nem kezdődött el."
+    sign_out_everyone "az alkalmazás addig leállítva marad, utána: docker compose up -d"
+    docker compose up -d --wait --wait-timeout 300 >/dev/null 2>&1 \
+        || die "A szolgáltatások nem indultak el egészségesen; az ok: docker compose ps, docker compose logs"
+    say "    a szolgáltatások futnak"
+}
+
 case $COMMAND in
     list) list_backups ;;
     backup) lock; create_backup; prune ;;
     restore) lock; restore_backup ;;
+    signout) lock; sign_out_command ;;
 esac

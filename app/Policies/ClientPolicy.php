@@ -20,6 +20,17 @@ class ClientPolicy extends PermissionPolicy
 
     protected ?Permission $manage = Permission::ClientsManage;
 
+    /**
+     * A phone number is created for a client: the phone numbers tab passes
+     * that client, and one the system does not serve takes none. Without a
+     * client (a new client) the permission alone decides. The answers tab
+     * has no create action; linking a client asks update on the sponsor.
+     */
+    public function create(User $user, ?Client $client = null): bool
+    {
+        return parent::create($user) && ($client === null || $this->served($client));
+    }
+
     public function view(User $user, Model $model): bool
     {
         return parent::view($user, $model) && $this->served($model);

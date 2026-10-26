@@ -16,6 +16,7 @@ use App\Sync\AccountProvisioner;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
+use Filament\Notifications\NotificationMailbox;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 
@@ -62,6 +63,11 @@ it('keeps the link action visible but disabled with a reason on a closed sponsor
 
     $openSponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
     $closedSponsor = Client::factory()->synced()->closed('admin')->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    // The tab of a closed sponsor shows only while it has links (they survive the closure).
+    ClientLink::query()->create([
+        'sponsor_client_id' => $closedSponsor->id,
+        'linked_client_id' => Client::factory()->synced()->closed('sponsor_closed')->create(['implicit_package' => null, 'explicit_package' => 'Premium'])->id,
+    ]);
 
     Livewire::test(LinkedClientsRelationManager::class, ['ownerRecord' => $openSponsor, 'pageClass' => ViewClient::class])
         ->assertActionVisible(TestAction::make('link')->table())
@@ -276,4 +282,32 @@ it('asks for confirmation on the client form before ending links by changing the
         ->and($link->fresh()->isActive())->toBeFalse()
         ->and($link->fresh()->ended_reason)->toBe(ClientLinks::END_REASON_SPONSOR_INELIGIBLE)
         ->and($dependent->fresh()->isClosed())->toBeFalse();
+});
+
+it('names the linked clients a closed sponsor\'s package change reopens, and says how many reopened', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    Filament::setCurrentPanel('admin');
+    app(Settings::class)->set(SettingKey::PackagesPremium, ['Premium']);
+    app(Settings::class)->set(SettingKey::PackagesStandard, ['Basic']);
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->create(['implicit_package' => 'Premium', 'explicit_package' => null, 'name' => 'Lezárt Főügyfél']);
+    $dependent = Client::factory()->synced()->create(['implicit_package' => 'Basic', 'explicit_package' => 'Premium', 'name' => 'Kapcsolt Kató']);
+    $links->link($sponsor, $dependent);
+    $sponsor->close('admin');
+    expect($dependent->fresh()->closed_reason)->toBe(ClientLinks::CLOSE_REASON_SPONSOR);
+
+    Livewire::test(EditClient::class, ['record' => $sponsor->id])
+        ->fillForm(['implicit_package' => 'Basic'])
+        ->mountAction('save')
+        ->assertMountedActionModalSee('Kapcsolt Kató')
+        ->assertMountedActionModalSee('reopen on save')
+        ->callMountedAction()
+        ->assertHasNoFormErrors();
+
+    expect($dependent->fresh()->isClosed())->toBeFalse()
+        ->and(AuditLog::query()->where('event', 'account.reopened')->where('subject_id', $dependent->id)->exists())->toBeTrue();
+    $mailbox = app(NotificationMailbox::class);
+    $mailbox->flush();
+    expect(collect($mailbox->pull())->pluck('body')->filter()->implode(' '))->toContain(__(':n linked client(s) closed with this sponsor reopened, because their link ended.', ['n' => 1]));
 });

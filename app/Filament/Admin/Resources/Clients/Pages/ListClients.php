@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Resources\Clients\Pages;
 use App\Filament\Actions\ExportClientsAction;
 use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Admin\Resources\ExternalRecords\ExternalRecordResource;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\Client;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
@@ -13,6 +14,8 @@ use Illuminate\Database\Eloquent\Builder;
 
 class ListClients extends ListRecords
 {
+    use LimitsSearchInput;
+
     protected static string $resource = ClientResource::class;
 
     protected function getHeaderActions(): array

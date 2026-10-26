@@ -11,6 +11,7 @@ use App\Models\ExternalRecord;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\DemoData;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Contracts\Auth\Factory as AuthFactory;
 use Illuminate\Contracts\Auth\StatefulGuard;
@@ -22,6 +23,7 @@ use Illuminate\Database\Eloquent\Model;
  * record that carries the same e-mail (for clients unless
  * CLIENT_LOGIN_REQUIRE_EMD is off), (for staff) carries a panel
  * permission, and (for clients) has a package that grants portal access.
+ * In production a demo account (App\System\DemoData) never signs in.
  */
 class AccountLogin
 {
@@ -254,6 +256,11 @@ class AccountLogin
     {
         if ($principal === null) {
             return LoginRejection::NoAccount;
+        }
+
+        // The demo accounts' passwords are published: never in production.
+        if (DemoData::refusedHere() && DemoData::isDemoAccount($principal)) {
+            return LoginRejection::DemoAccount;
         }
 
         if ($principal->isClosed()) {

@@ -95,10 +95,10 @@ enum SettingSection: string
             self::SupportContacts => __('the portal and the support line block of the client page; in premium-only mode a turned-away standard client sees the standard contact'),
             self::CallQueues => __('the level of each call: the dashboard, the missed calls and the Calls list follow it'),
             self::ClientList => __('the Clients list, the counter next to the menu item, the client page and the export'),
-            self::QuestionAnswer => __('the agent\'s identification page and the security questions on the portal'),
+            self::QuestionAnswer => __('the agent\'s identification page (including how often one client may be tried) and the security questions on the portal'),
             self::Pin => __('the phone menu (IVR), the agent\'s PIN check and the PIN handling on the portal'),
             self::OneTimeCodes => __('the one-time identification code of the portal and the mobile app (Verify code page), the IVR code, and the agents\' attempt limit'),
-            self::PhoneNumbers => __('recognising the caller by number, the Phone numbers tab of the client page and the phone numbers on the portal'),
+            self::PhoneNumbers => __('recognising the caller by number, the Phone numbers tab of the client page, the numbers clients may add on the portal, and the numbers every text message may go to'),
             self::PortalSignIn => __('the portal\'s login page, the mobile app, and the "Send login link" button of the client page'),
             self::PortalSession => __('the client\'s browser session on the portal'),
             self::PortalContent => __('the overview page and the footer of the portal'),
@@ -150,7 +150,8 @@ enum SettingSection: string
 
             self::QuestionAnswer => [
                 SettingKey::QaMinAnsweredQuestionsRequired, SettingKey::QaMaxQuestionsPerSession, SettingKey::QaMinAcceptedToPass,
-                SettingKey::QaMaxRejectedToFail, SettingKey::QaSessionTtlMinutes, SettingKey::QaBlindCheck, SettingKey::QaTypoTolerance,
+                SettingKey::QaMaxRejectedToFail, SettingKey::QaSessionTtlMinutes, SettingKey::QaMaxUnsuccessfulSessions, SettingKey::QaUnsuccessfulWindowHours,
+                SettingKey::QaBlindCheck, SettingKey::QaTypoTolerance,
             ],
             self::Pin => [
                 SettingKey::PinMinLength, SettingKey::PinMaxLength, SettingKey::PinMaxFailedAttempts, SettingKey::PinLockoutMinutes,
@@ -158,14 +159,16 @@ enum SettingSection: string
             ],
             self::OneTimeCodes => [SettingKey::MobileOtpLength, SettingKey::MobileOtpTtlMinutes, SettingKey::IvrCodeLength, SettingKey::AgentAttemptsPerHour],
             self::PhoneNumbers => [
-                SettingKey::PortalMaxPhoneNumbersPerClient, SettingKey::PortalPhoneVerificationEnabled,
+                SettingKey::PhoneAllowedRegions, SettingKey::PortalMaxPhoneNumbersPerClient, SettingKey::PortalPhoneVerificationEnabled,
                 SettingKey::VerifyPhoneOnIdentifiedCall, SettingKey::PortalSharedNumberNotice,
             ],
 
             self::PortalSignIn => [
                 SettingKey::ClientLoginMagicLinkEnabled, SettingKey::ClientLoginMagicLinkTtlMinutes, SettingKey::ClientLoginMagicLinkPreviewInPanel,
+                SettingKey::ClientLoginMagicLinkMaxPerHour,
                 SettingKey::ClientLoginOtpSmsEnabled, SettingKey::ClientLoginOtpSmsLength, SettingKey::ClientLoginOtpSmsTtlMinutes,
                 SettingKey::ClientLoginOtpMaxAttempts, SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute, SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour,
+                SettingKey::ClientLoginOtpSmsMaxPerNumberPerDay, SettingKey::ClientLoginOtpSmsMaxPerHour, SettingKey::ClientLoginOtpSmsMaxPerDay,
                 SettingKey::ClientLoginOtpSmsEmailFallbackEnabled, SettingKey::ClientLoginLockoutMaxAttempts, SettingKey::ClientLoginLockoutMinutes,
                 SettingKey::ClientSsoEntraEnabled, SettingKey::ClientSsoAdfsEnabled, SettingKey::SsoMobileTokenMaxAgeMinutes,
             ],

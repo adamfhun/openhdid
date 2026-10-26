@@ -1,6 +1,9 @@
 # Portál, munkatársi panel és gépi API-k: nginx + PHP-FPM egy konténerben, a 8080-as porton
-# (OPENHDID_TLS=off, a TLS az ingressen zárul le). A replikaszámot és az erőforrásokat az overlay
-# adja; a HPA a CPU szerint skáláz az overlay határai között.
+# (OPENHDID_TLS=off, a TLS az ingressen zárul le). A replikaszámot az overlay adja; a HPA a CPU
+# szerint skáláz az overlay határai között. A memória kérése egyenlő a korlátjával: a fürt csak
+# olyan csomópontra tesz podot, ahol a teljes korlát elfér, így a korlátok összege sem nő a
+# csomópont fölé. A korlát: 8 PHP-FPM folyamat × (128 MB memory_limit + kb. 22 MB), opcache
+# 208 MB, 2 nginx-dolgozó × 80 MB, a 256 MB-os /tmp és 64 MB tartalék, kb. 1888 MB → 2Gi.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -49,10 +52,13 @@ spec:
           env:
             - {name: OPENHDID_TLS, value: "off"}
             - {name: OPENHDID_FPM_PM, value: static}
-            - {name: OPENHDID_FPM_MAX_CHILDREN, value: "12"}
-            - {name: OPENHDID_FPM_START_SERVERS, value: "12"}
+            - {name: OPENHDID_FPM_MAX_CHILDREN, value: "8"}
+            - {name: OPENHDID_FPM_START_SERVERS, value: "8"}
             - {name: OPENHDID_FPM_MIN_SPARE_SERVERS, value: "4"}
-            - {name: OPENHDID_FPM_MAX_SPARE_SERVERS, value: "12"}
+            - {name: OPENHDID_FPM_MAX_SPARE_SERVERS, value: "8"}
+            - {name: OPENHDID_FPM_MEMORY_LIMIT, value: 128M}
+            # "auto" would start one worker per CPU of the node, not of the pod.
+            - {name: OPENHDID_NGINX_WORKERS, value: "2"}
           startupProbe:
             exec:
               command: [/usr/local/bin/openhdid, healthcheck]
@@ -63,9 +69,11 @@ spec:
               command: [/usr/local/bin/openhdid, healthcheck]
             periodSeconds: 10
             timeoutSeconds: 5
+          # nginx alone: a pool busy with a flood is no reason to restart the pod (readiness
+          # takes it out of the service meanwhile).
           livenessProbe:
             exec:
-              command: [/usr/local/bin/openhdid, healthcheck]
+              command: [/usr/local/bin/openhdid, healthcheck, live]
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
@@ -75,8 +83,8 @@ spec:
             capabilities:
               drop: [ALL]
           resources:
-            requests: {cpu: 500m, memory: 1Gi}
-            limits: {memory: 1536Mi}
+            requests: {cpu: 500m, memory: 2Gi}
+            limits: {memory: 2Gi}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
             - {name: storage, mountPath: /app/storage}

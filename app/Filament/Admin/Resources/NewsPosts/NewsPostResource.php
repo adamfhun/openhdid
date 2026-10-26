@@ -6,6 +6,7 @@ use App\Filament\Admin\Clusters\Content;
 use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\NewsPosts\Pages\ManageNewsPosts;
 use App\Models\NewsPost;
+use App\Support\InputLimits;
 use BackedEnum;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
@@ -21,6 +22,7 @@ use Filament\Tables\Filters\TrashedFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use Illuminate\Support\Number;
 
 /**
  * News shown to clients on the portal. Clients see the title, the body and
@@ -55,7 +57,8 @@ class NewsPostResource extends BaseResource
     {
         return $schema->components([
             TextInput::make('title')->label(__('Title'))->required()->maxLength(255)->columnSpanFull(),
-            MarkdownEditor::make('body')->label(__('Body'))->required()->columnSpanFull()
+            MarkdownEditor::make('body')->label(__('Body'))->required()->maxLength(InputLimits::TEXT_CHARS)->columnSpanFull()
+                ->helperText(__('At most :max characters.', ['max' => Number::format(InputLimits::TEXT_CHARS)]))
                 ->toolbarButtons(['bold', 'italic', 'link', 'bulletList', 'orderedList', 'heading', 'blockquote']),
             DateTimePicker::make('published_at')->label(__('Published at'))->seconds(false)
                 ->helperText(__('Leave empty to keep it as a draft; a future time schedules it.')),

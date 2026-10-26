@@ -25,6 +25,13 @@ class OidcClient
     /** Tolerated clock difference to the provider for exp, nbf and iat. */
     public const CLOCK_SKEW_SECONDS = 60;
 
+    /**
+     * Longest ID or access token accepted (the input standard's limit for
+     * tokens). Checked before any splitting or decoding, so an oversized
+     * token costs neither memory nor a key-set request.
+     */
+    public const MAX_TOKEN_LENGTH = 16384;
+
     public function __construct(
         private readonly Http $http,
         private readonly Cache $cache,
@@ -267,7 +274,7 @@ class OidcClient
      */
     private static function unsignedToken(string $token): array|string
     {
-        $parts = explode('.', $token);
+        $parts = explode('.', $token, 4);
 
         if (count($parts) !== 3) {
             return '(not a JWT, '.strlen($token).' characters)';
@@ -293,13 +300,23 @@ class OidcClient
      */
     private function decodeSigned(string $jwksUri, string $token): array
     {
+        if (strlen($token) > self::MAX_TOKEN_LENGTH) {
+            throw new OidcException('Token is longer than '.self::MAX_TOKEN_LENGTH.' bytes.');
+        }
+
         $jwks = $this->jwks($jwksUri);
         JWT::$leeway = self::CLOCK_SKEW_SECONDS;
 
         try {
             return (array) JWT::decode($token, JWK::parseKeySet($jwks, 'RS256'));
-        } catch (Throwable) {
-            // A rotated key may not be in the cached set yet: refresh once.
+        } catch (Throwable $first) {
+            // A rotated key may not be in the cached set yet: refresh once, but only
+            // for a key id the cached set does not have, and at most once a minute, so
+            // a stream of invalid tokens does not turn into a stream of JWKS requests.
+            if (! $this->mayRefreshFor($jwksUri, $jwks, $token)) {
+                throw new OidcException($first->getMessage(), previous: $first);
+            }
+
             $jwks = $this->jwks($jwksUri, refresh: true);
 
             try {
@@ -308,6 +325,25 @@ class OidcClient
                 throw new OidcException($e->getMessage(), previous: $e);
             }
         }
+    }
+
+    /**
+     * Whether a failed decode is worth a fresh key set: the token names a key
+     * id (kid) the cached set lacks, and no refresh ran in the last minute.
+     *
+     * @param  array<string, mixed>  $jwks
+     */
+    private function mayRefreshFor(string $jwksUri, array $jwks, string $token): bool
+    {
+        $header = json_decode((string) base64_decode(strtr(explode('.', $token, 2)[0], '-_', '+/'), true), true);
+        $kid = is_array($header) && is_string($header['kid'] ?? null) ? $header['kid'] : null;
+        $known = array_filter(array_map(fn (mixed $key): mixed => is_array($key) ? ($key['kid'] ?? null) : null, (array) ($jwks['keys'] ?? [])), 'is_string');
+
+        if ($kid === null || in_array($kid, $known, true)) {
+            return false;
+        }
+
+        return $this->cache->add('oidc.jwks.refresh.'.md5($jwksUri), true, 60);
     }
 
     /**

@@ -32,8 +32,11 @@ use App\Models\Client;
 use App\Models\ExternalRecord;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\Support\EmailAddressRule;
 use App\Support\HuDate;
+use App\Support\InputLimits;
 use App\Support\PhoneNormalizer;
+use App\System\NotDemoAddressRule;
 use BackedEnum;
 use Closure;
 use Filament\Actions\Action;
@@ -206,12 +209,7 @@ class ClientResource extends BaseResource
             ->modalDescription(__('The sponsor is a client with an implicit premium package of their own. Closing the sponsor closes this account too; reopening reopens it.'))
             ->schema([
                 Select::make('sponsor_id')->label(__('Sponsor'))->required()->searchable()->allowHtml()
-                    ->getSearchResultsUsing(fn (string $search) => $candidates()
-                        ->with(['externalRecord', 'phoneNumbers'])
-                        ->where(fn (Builder $q) => $q->where('name', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%")
-                            ->orWhereHas('externalRecord', fn (Builder $r) => $r->where('company', 'like', "%{$search}%")->orWhere('external_id', ctype_digit($search) ? (int) $search : -1)))
-                        ->orderBy('name')->limit(20)->get()
-                        ->mapWithKeys(fn (Client $c) => [$c->id => LinkedClientsRelationManager::optionLabel($c)])->all())
+                    ->getSearchResultsUsing(fn (string $search) => static::sponsorSearchResults(InputLimits::search($search)))
                     ->getOptionLabelUsing(fn ($value) => static::sponsorOptionLabel($value))
                     ->helperText(__('Search by name, e-mail, company or external id; only open clients with an implicit premium package are offered.')),
             ])
@@ -239,6 +237,22 @@ class ClientResource extends BaseResource
         return Client::query()->open()
             ->whereIn('implicit_package', $tiers->rawNames($tiers->packages(ClientTier::Premium)))
             ->tap(fn (Builder $query) => $tiers->scopeServed($query));
+    }
+
+    /**
+     * Sponsor candidates by name, e-mail, company or external id; the term
+     * comes cut to the search limit.
+     *
+     * @return array<string, string>
+     */
+    public static function sponsorSearchResults(string $search): array
+    {
+        return static::sponsorCandidates()
+            ->with(['externalRecord', 'phoneNumbers'])
+            ->where(fn (Builder $q) => $q->where('name', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%")
+                ->orWhereHas('externalRecord', fn (Builder $r) => $r->where('company', 'like', "%{$search}%")->orWhere('external_id', ctype_digit($search) ? (int) $search : -1)))
+            ->orderBy('name')->limit(20)->get()
+            ->mapWithKeys(fn (Client $c) => [$c->id => LinkedClientsRelationManager::optionLabel($c)])->all();
     }
 
     public static function sponsorOptionLabel(mixed $value): ?string
@@ -676,10 +690,16 @@ class ClientResource extends BaseResource
             Section::make(__('Client'))->columns(2)->schema([
                 TextInput::make('name')->label(__('Name'))->required()->maxLength(255)
                     ->disabled(fn (?Client $record) => $record?->isSynced() ?? false)->dehydrated(fn (?Client $record) => ! ($record?->isSynced() ?? false)),
-                TextInput::make('email')->label(__('E-mail'))->email()->required()->unique(ignoreRecord: true)->maxLength(255)
-                    ->disabled(fn (?Client $record) => $record?->isSynced() ?? false)->dehydrated(fn (?Client $record) => ! ($record?->isSynced() ?? false))
-                    ->helperText(fn (?Client $record) => $record?->isSynced() ? null
-                        : __('If EMD already holds a client record with this e-mail, saving links the account at once, and the name, packages and phone numbers come from EMD.')),
+                // The e-mail is the account's identity: on a client linked to EMD or bound
+                // to a company sign-in only the sync changes it (LinksToDirectory).
+                TextInput::make('email')->label(__('E-mail'))->type('email')->required()->unique(ignoreRecord: true)->maxLength(EmailAddressRule::MAX_LENGTH)->rule(new EmailAddressRule)->rule(new NotDemoAddressRule)
+                    ->disabled(fn (?Client $record): bool => $record?->manualEmailLock() !== null)
+                    ->dehydrated(fn (?Client $record): bool => $record?->manualEmailLock() === null)
+                    ->helperText(fn (?Client $record) => match (true) {
+                        $record === null => __('If EMD already holds a client record with this e-mail, saving links the account at once, and the name, packages and phone numbers come from EMD.'),
+                        $record->manualEmailLock() !== null => EditClient::emailLockText($record),
+                        default => trim(__('Saving a new address signs the client out everywhere (the Save button asks first). If EMD already holds a client record with this e-mail, saving links the account to it at once: the name, packages and phone numbers then come from EMD, and the PIN, security answers and phone numbers added by hand are deleted, since they belong to the previous holder.').' '.(EditClient::handOverNote($record) ?? '')),
+                    }),
                 Select::make('implicit_package')->label(__('Implicit package'))->searchable()->native(false)
                     ->options(fn (?Client $record) => static::packageOptions($record?->implicit_package))
                     ->disabled(fn (?Client $record) => $record?->isSynced() ?? false)->dehydrated(fn (?Client $record) => ! ($record?->isSynced() ?? false))

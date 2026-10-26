@@ -49,7 +49,7 @@
                                 @endif
                             </div>
                             <x-filament::input.wrapper>
-                                <x-filament::input type="text" wire:model="emailCode" inputmode="numeric" autocomplete="one-time-code" maxlength="12" :placeholder="__('Code from the e-mail')" />
+                                <x-filament::input type="text" wire:model="emailCode" inputmode="numeric" autocomplete="one-time-code" maxlength="{{ \App\Filament\Pages\Auth\MfaChallenge::CODE_INPUT_MAX_LENGTH }}" :placeholder="__('Code from the e-mail')" />
                             </x-filament::input.wrapper>
                             @error('emailCode')
                                 <p class="text-sm text-danger-600 dark:text-danger-400">{{ $message }}</p>
@@ -79,7 +79,7 @@
 
                 <form wire:submit="confirm" class="space-y-3">
                     <x-filament::input.wrapper :valid="! $errors->has('code')">
-                        <x-filament::input type="text" wire:model="code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" :placeholder="__('Code')" />
+                        <x-filament::input type="text" wire:model="code" inputmode="numeric" autocomplete="one-time-code" maxlength="{{ \App\Filament\Pages\Auth\MfaChallenge::CODE_INPUT_MAX_LENGTH }}" :placeholder="__('Code')" />
                     </x-filament::input.wrapper>
                     @error('code')
                         <p class="text-sm text-danger-600 dark:text-danger-400">{{ $message }}</p>

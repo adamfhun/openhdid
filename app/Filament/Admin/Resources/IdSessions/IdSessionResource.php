@@ -10,6 +10,7 @@ use App\Filament\Admin\NavigationGroup;
 use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\IdSessions\Pages\ManageIdSessions;
 use App\Models\IdSession;
+use App\Support\InputLimits;
 use BackedEnum;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\DatePicker;
@@ -102,8 +103,8 @@ class IdSessionResource extends BaseResource
                 SelectFilter::make('method')->label(__('Method'))->options(collect(IdMethod::cases())->mapWithKeys(fn ($m) => [$m->value => $m->label()])),
                 SelectFilter::make('channel')->label(__('Channel'))->options(collect(IdChannel::cases())->mapWithKeys(fn ($c) => [$c->value => __($c->value)])),
                 SelectFilter::make('agent')->label(__('Agent'))->relationship('agent', 'name')->searchable()->preload(),
-                Filter::make('client')->schema([TextInput::make('client')->label(__('Client (name or e-mail)'))])
-                    ->query(fn (Builder $query, array $data) => $query->when($data['client'] ?? null, fn ($q, $v) => $q->whereHas('client', fn ($c) => $c
+                Filter::make('client')->schema([TextInput::make('client')->label(__('Client (name or e-mail)'))->maxLength(InputLimits::SEARCH)])
+                    ->query(fn (Builder $query, array $data) => $query->when(is_string($data['client'] ?? null) && trim($data['client']) !== '' ? InputLimits::search($data['client']) : null, fn ($q, $v) => $q->whereHas('client', fn ($c) => $c
                         ->where(fn ($match) => $match->where('name', 'like', '%'.$v.'%')->orWhere('email', 'like', '%'.$v.'%'))
                         ->tap(fn ($served) => app(ClientTiers::class)->scopeServed($served))))),
                 Filter::make('period')->label(__('Period'))->schema([

@@ -19,6 +19,7 @@ use App\Settings\Settings;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -261,7 +262,11 @@ it('lets an administrator reset the second factor of a colleague, signing them o
         ->and((int) $this->agent->fresh()->session_epoch)->toBeGreaterThan($epoch)
         ->and(AuditLog::query()->where('event', 'mfa.reset')->where('subject_id', $this->agent->id)->sole()->actor_id)->toBe($admin->id);
 
-    Livewire::test(ListUsers::class)->assertTableActionHidden('resetMfa', $superAdmin);
+    // Greyed out with the reason, and a direct call changes nothing.
+    Livewire::test(ListUsers::class)
+        ->assertActionDisabled(TestAction::make('resetMfa')->table($superAdmin))
+        ->call('mountAction', 'resetMfa', [], ['table' => true, 'recordKey' => $superAdmin->getKey()])
+        ->call('callMountedAction');
     expect($superAdmin->fresh()->mfa_app_secret)->not->toBeNull();
 });
 
@@ -339,4 +344,41 @@ it('walks a staff member without a factor through the setup page and the challen
         ->assertSee(MfaMethod::App->label())
         ->call('choose', 'email')->assertSet('method', 'email')
         ->call('choose', 'sms')->assertSet('method', null);
+});
+
+it('offers SMS codes only to a mobile number of an accepted country, and stops a factor whose country was taken off the list', function (): void {
+    $this->agent->externalRecord->update(['phones' => ['+436641234567']]);
+    $this->actingAs($this->agent);
+    $agent = $this->agent->fresh()->load('externalRecord');
+
+    // Hungary only, the default: the Austrian mobile receives no SMS, so it is not offered.
+    expect($this->mfa->smsNumbers($agent))->toBe([])
+        ->and($this->mfa->smsNumbersOutsideAcceptedCountries($agent))->toBe(['+436641234567'])
+        ->and(fn () => $this->mfa->sendCode($agent, MfaMethod::Sms, StaffMfa::PURPOSE_SETUP, '+436641234567'))->toThrow(MfaException::class);
+    $blocker = collect(Livewire::test(MfaSetup::class)->instance()->factors())->firstWhere('method', MfaMethod::Sms)['blocker'];
+    expect($blocker)->toContain('not of a country accepted for phone numbers')
+        ->and(OutboundMessage::query()->count())->toBe(0)
+        ->and(AuditLog::query()->where('event', 'mfa.code_sent')->exists())->toBeFalse();
+
+    app(Settings::class)->set(SettingKey::PhoneAllowedRegions, ['AT', 'HU']);
+    expect($this->mfa->smsNumbers($agent))->toBe(['+436641234567']);
+    $this->mfa->sendCode($agent, MfaMethod::Sms, StaffMfa::PURPOSE_SETUP, '+436641234567');
+    $this->mfa->confirmSentSetup($agent, MfaMethod::Sms, lastSentCode());
+    expect($this->mfa->enrolledMethods($agent->fresh()->load('externalRecord')))->toBe([MfaMethod::Sms]);
+
+    app(Settings::class)->set(SettingKey::PhoneAllowedRegions, ['HU']);
+    $agent = $agent->fresh()->load('externalRecord');
+    $sent = OutboundMessage::query()->count();
+    expect($this->mfa->hasFactor($agent, MfaMethod::Sms))->toBeFalse()
+        ->and(fn () => $this->mfa->sendCode($agent, MfaMethod::Sms, StaffMfa::PURPOSE_CHALLENGE))->toThrow(MfaException::class)
+        ->and(OutboundMessage::query()->count())->toBe($sent, 'nothing is queued and nothing claims a code went out');
+});
+
+it('refuses an over-long code inside the service, before anything is counted', function (): void {
+    $this->actingAs($this->agent);
+    withAppFactor($this->agent);
+    $agent = $this->agent->fresh();
+
+    expect(fn () => $this->mfa->verify($agent, MfaMethod::App, str_repeat('1', 100_000)))->toThrow(MfaException::class, 'at most');
+    expect((int) $agent->fresh()->failed_mfa_attempts)->toBe(0);
 });

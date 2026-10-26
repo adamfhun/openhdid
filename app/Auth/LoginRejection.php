@@ -22,6 +22,9 @@ enum LoginRejection: string
     case SsoSubjectTaken = 'sso_subject_taken';
     case TenantDomainNotAllowed = 'tenant_domain_not_allowed';
 
+    /** A demo account (reserved .test address, App\System\DemoData) in production. */
+    case DemoAccount = 'demo_account';
+
     public function message(): string
     {
         return match ($this) {
@@ -41,6 +44,7 @@ enum LoginRejection: string
             self::SsoSubjectMismatch => 'This sign-in comes from a different directory identity than the one bound to the account. Ask an administrator to check the account and clear its sign-in binding.',
             self::SsoSubjectTaken => 'This directory identity is already bound to another account. Ask an administrator to check the accounts.',
             self::TenantDomainNotAllowed => 'The organisation you signed in with may not sign in this account. Please report this to the operator of the system.',
+            self::DemoAccount => 'This is a demo account. Demo accounts cannot sign in to a production installation.',
         };
     }
 

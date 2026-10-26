@@ -24,6 +24,9 @@ use Illuminate\Support\Str;
  */
 class OneTimeCodes
 {
+    /** An opaque token (a login link's) is this many ASCII letters and digits. */
+    public const TOKEN_LENGTH = 64;
+
     /**
      * @return array{code: string, record: OneTimeCode}
      */
@@ -71,7 +74,7 @@ class OneTimeCodes
      */
     public function issueToken(Client $client, OneTimeCodePurpose $purpose, int $ttlMinutes, ?string $destination = null): array
     {
-        $token = Str::random(64);
+        $token = Str::random(self::TOKEN_LENGTH);
 
         return ['token' => $token, 'record' => $this->store($client, $purpose, $token, $ttlMinutes, 1, $destination)];
     }

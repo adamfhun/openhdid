@@ -6,12 +6,12 @@ use App\Models\SyncRun;
 use App\Sync\QueuedSyncs;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Support\Facades\Storage;
 use Throwable;
 
 /**
  * One EMD sync in the worker: from the API, or from a file uploaded on the
- * panel (kept on the local disk until this job has read it). The worker's
+ * panel (kept on the local disk until this job has read it; only a path of
+ * the upload's own shape is read or deleted, see QueuedSyncs). The worker's
  * time limit ends a runaway run and marks it failed; the request that
  * queued it never waits.
  */
@@ -43,8 +43,6 @@ class RunDirectorySync implements ShouldQueue
             app(QueuedSyncs::class)->fail($run, __('EMD sync worker stopped before completion (time limit of :seconds seconds, or a crash); check the worker log.', ['seconds' => self::TIMEOUT]));
         }
 
-        if ($this->upload !== null) {
-            Storage::disk('local')->delete($this->upload);
-        }
+        app(QueuedSyncs::class)->discardUpload($this->upload);
     }
 }

@@ -2,6 +2,7 @@
 
 use App\Auth\Permission;
 use App\Auth\Role;
+use App\CallCenter\CallCenterService;
 use App\Enums\CallStatus;
 use App\Enums\IdMethod;
 use App\Enums\IdSessionStatus;
@@ -329,7 +330,7 @@ it('moves a call to another client inside the call lock, so a take-over cannot s
     $call = Call::factory()->create(['client_id' => $wrong->id, 'agent_user_id' => $this->agent->id]);
     $locked = [];
     Event::listen('eloquent.updated: '.Call::class, function (Call $updated) use (&$locked): void {
-        $probe = Cache::lock('hdid:call:'.$updated->external_call_id, 1);
+        $probe = Cache::lock(CallCenterService::callLockName($updated->external_call_id), 1);
         $free = $probe->get();
         if ($free) {
             $probe->release();

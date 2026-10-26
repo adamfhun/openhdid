@@ -9,8 +9,11 @@ use App\Enums\SyncSource;
 use App\Jobs\RunDirectorySync;
 use App\Models\SyncRun;
 use App\Models\User;
+use App\System\Installation;
+use App\System\Retention;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
+use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 
@@ -24,11 +27,36 @@ use Throwable;
 class QueuedSyncs
 {
     /**
+     * The only shape of path the import reads and deletes: the name the
+     * import field gives a fresh upload in the upload directory (40 random
+     * characters and .csv or .xlsx, by the extension the user chose). The path travels in the browser's
+     * form state and in the queued job, so anything else (the audit archive
+     * and its checksums, any other file of the disk) is refused, never read
+     * and never deleted. That the path is the requester's own fresh upload
+     * is the form's check (preventFilePathTampering on the import field).
+     */
+    public static function isUpload(?string $path): bool
+    {
+        return $path !== null && preg_match('/\A'.preg_quote(Retention::UPLOAD_DIRECTORY, '/').'\/[A-Za-z0-9]{40}\.(csv|xlsx)\z/', $path) === 1;
+    }
+
+    /**
+     * Removes an upload of the import; a path of any other shape stays untouched.
+     */
+    public function discardUpload(?string $upload): void
+    {
+        if (self::isUpload($upload)) {
+            Storage::disk('local')->delete($upload);
+        }
+    }
+
+    /**
      * @param  string|null  $upload  path of an uploaded file on the local disk; null reads the API
      */
     public function start(User $user, bool $dryRun, ?string $upload = null): SyncRun
     {
         $this->authorize($user);
+        $this->assertUpload($upload);
         $connection = config('queue.default');
         $driver = config('queue.connections.'.$connection.'.driver');
         if ($driver === 'sync' || $driver === 'null') {
@@ -39,7 +67,7 @@ class QueuedSyncs
             throw new RuntimeException(__('The queue retry_after must exceed :seconds seconds for EMD sync.', ['seconds' => RunDirectorySync::TIMEOUT]));
         }
 
-        return Cache::lock('hdid:sync-dispatch', 10)->block(1, function () use ($user, $dryRun, $upload): SyncRun {
+        return Cache::lock(Installation::lockName('hdid:sync-dispatch'), 10)->block(1, function () use ($user, $dryRun, $upload): SyncRun {
             if (SyncRun::query()->whereIn('status', [SyncRunStatus::Queued, SyncRunStatus::Running])->where('started_at', '>', now()->subHour())->exists()) {
                 throw new RuntimeException(__('Another EMD sync is already queued or running.'));
             }
@@ -48,7 +76,7 @@ class QueuedSyncs
                 'source' => $upload === null ? SyncSource::Api : (str_ends_with(mb_strtolower($upload), '.csv') ? SyncSource::Csv : SyncSource::Xlsx),
                 'status' => SyncRunStatus::Queued,
                 'started_at' => now(), 'dry_run' => $dryRun,
-                'file_name' => $upload === null ? config('hdid.sync.api_url') : basename($upload),
+                'file_name' => SourceLabel::of($upload === null ? config('hdid.sync.api_url') : basename($upload)),
                 'triggered_by_user_id' => $user->id,
             ]);
 
@@ -74,6 +102,7 @@ class QueuedSyncs
             $user = User::query()->find($run->triggered_by_user_id);
             abort_unless($user !== null, 403);
             $this->authorize($user);
+            $this->assertUpload($upload);
             $readers = app(ReaderFactory::class);
             $reader = $upload === null ? $readers->forApi() : $readers->forFile(Storage::disk('local')->path($upload), basename($upload));
             app(SyncExternalRecords::class)->run($reader, $user, $run->dry_run, $run);
@@ -82,9 +111,7 @@ class QueuedSyncs
             throw $exception;
         } finally {
             // The upload has served its purpose; it must not linger on disk.
-            if ($upload !== null) {
-                Storage::disk('local')->delete($upload);
-            }
+            $this->discardUpload($upload);
         }
     }
 
@@ -100,5 +127,12 @@ class QueuedSyncs
     private function authorize(User $user): void
     {
         abort_unless(! $user->isClosed() && $user->can(Permission::SyncManage->value), 403);
+    }
+
+    private function assertUpload(?string $upload): void
+    {
+        if ($upload !== null && ! self::isUpload($upload)) {
+            throw new InvalidArgumentException(__('The import accepts only a file uploaded on the EMD sync runs page.'));
+        }
     }
 }

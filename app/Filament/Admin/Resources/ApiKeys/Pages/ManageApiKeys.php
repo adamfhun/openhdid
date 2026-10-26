@@ -4,6 +4,7 @@ namespace App\Filament\Admin\Resources\ApiKeys\Pages;
 
 use App\Enums\ApiKeyScope;
 use App\Filament\Admin\Resources\ApiKeys\ApiKeyResource;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\ApiKey;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
@@ -16,6 +17,8 @@ use Illuminate\Support\HtmlString;
 
 class ManageApiKeys extends ManageRecords
 {
+    use LimitsSearchInput;
+
     protected static string $resource = ApiKeyResource::class;
 
     protected function getHeaderActions(): array

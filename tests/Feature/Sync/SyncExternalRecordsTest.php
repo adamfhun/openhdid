@@ -39,6 +39,7 @@ use App\Sync\SuspiciousSourceException;
 use App\Sync\SyncExternalRecords;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
+use App\System\Installation;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
@@ -744,7 +745,7 @@ it('turns a run that PHP cut short into a failed run and frees the sync lock', f
             yield row('1', 'a@x.hu');
             // PHP dies here (time limit): only the shutdown handler runs.
             SyncExternalRecords::simulateAbort();
-            $probe = Cache::lock('hdid:sync', 3600);
+            $probe = Cache::lock(Installation::lockName('hdid:sync'), 3600);
             expect($probe->get())->toBeTrue('the guard released the sync lock');
             $probe->release();
             expect(SyncRun::query()->sole()->status)->toBe(SyncRunStatus::Failed);

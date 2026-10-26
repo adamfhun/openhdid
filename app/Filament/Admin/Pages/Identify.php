@@ -18,6 +18,7 @@ use App\Identification\ClientAnswers;
 use App\Identification\CurrentIdentification;
 use App\Identification\IdentificationException;
 use App\Identification\PinService;
+use App\Identification\QaRetryLimit;
 use App\Identification\QaSessionEngine;
 use App\Models\Call;
 use App\Models\Client;
@@ -32,6 +33,7 @@ use Filament\Pages\Page;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Locked;
 use Livewire\Attributes\Url;
@@ -83,6 +85,12 @@ class Identify extends Page
     public function mount(string $client): void
     {
         $this->clientId = ClientResource::getEloquentQuery()->findOrFail($client)->id;
+
+        // A call id is a UUID; anything else in the address names no call
+        // (and would not even compare with the UUID column on MariaDB).
+        if ($this->call !== null && ! Str::isUuid($this->call)) {
+            $this->call = null;
+        }
 
         if ($this->call !== null) {
             $call = Call::query()->whereKey($this->call)->first();
@@ -176,7 +184,7 @@ class Identify extends Page
      */
     public function getCall(): ?Call
     {
-        if (! $this->call) {
+        if (! $this->call || ! Str::isUuid($this->call)) {
             return null;
         }
 
@@ -321,6 +329,68 @@ class Identify extends Page
     }
 
     /**
+     * How often this client was tried lately: unsuccessful attempts by any
+     * method on any call (the history below shows the current call only),
+     * the question-and-answer sessions that count toward the client's limit,
+     * and why a new one cannot start (null while it can).
+     *
+     * @return array{recent: int, count: int, limit: int, hours: int, refusal: ?string}
+     */
+    public function getQaRetry(): array
+    {
+        $limit = app(QaRetryLimit::class);
+        $client = $this->getClient();
+
+        return [
+            'recent' => $limit->recentUnsuccessfulAttempts($client),
+            'count' => $limit->unsuccessfulCount($client),
+            'limit' => $limit->limit(),
+            'hours' => $limit->windowHours(),
+            'refusal' => $limit->refusal($client),
+        ];
+    }
+
+    /**
+     * Lifting the question-and-answer lock takes the client management
+     * permission, like lifting the client's login lock.
+     */
+    public function canUnlockQa(): bool
+    {
+        return auth()->user()?->can(Permission::ClientsManage->value) ?? false;
+    }
+
+    /**
+     * Shown only while the client is locked out of question and answer: the
+     * lock line next to it says why and until when.
+     */
+    public function unlockQaAction(): Action
+    {
+        return Action::make('unlockQa')
+            ->label(__('Unlock question and answer'))
+            ->icon('heroicon-o-lock-open')
+            ->color('warning')
+            ->size('sm')
+            ->visible(fn (): bool => $this->canUnlockQa() && app(QaRetryLimit::class)->lockedUntil($this->getClient()) !== null)
+            ->authorize(fn (): bool => $this->canUnlockQa())
+            ->requiresConfirmation()
+            ->modalHeading(__('Unlock question and answer for this client?'))
+            ->modalDescription(__('The client had too many unsuccessful question-and-answer sessions lately (failed, undecided, or cancelled or expired with a shown question that was not accepted). Unlock only when you are sure the caller is the client (for example after a call back to a registered number): the sessions so far stop counting, and a new session can start at once. The unlock is recorded in the audit log with your name.'))
+            ->modalSubmitActionLabel(__('Unlock'))
+            ->action(function (): void {
+                $client = $this->getClient();
+                abort_unless($this->canUnlockQa() && app(QaRetryLimit::class)->lockedUntil($client) !== null, 403);
+
+                if (! app(QaRetryLimit::class)->unlock($client, $this->agent())) {
+                    Notification::make()->title(__('The lock is still in place'))->body(__('The unlock mark was not kept by the cache (CACHE_STORE), so the sessions still count. Check the cache on the System status page.'))->danger()->persistent()->send();
+
+                    return;
+                }
+
+                Notification::make()->title(__('Question and answer unlocked'))->success()->send();
+            });
+    }
+
+    /**
      * @return Collection<int, IdSession>
      */
     public function getHistory(): Collection
@@ -330,10 +400,25 @@ class Identify extends Page
         return IdSession::query()
             ->where('client_id', $this->clientId)
             ->when($call !== null, fn ($q) => $q->where('call_id', $call->id))
-            ->with('agent')
+            ->with(['agent', 'steps:id,id_session_id,verdict'])
             ->latest('id')
             ->limit(10)
             ->get();
+    }
+
+    /**
+     * The line under an attempt in the history that tells why a cancelled
+     * or expired question-and-answer session still counts as unsuccessful.
+     */
+    protected function getAttemptNote(IdSession $attempt): ?string
+    {
+        if (! app(QaRetryLimit::class)->closedEarlyAfterUnacceptedQuestion($attempt)) {
+            return null;
+        }
+
+        return $attempt->status === IdSessionStatus::Expired
+            ? __('Unsuccessful attempt: expired after a question was shown and not accepted.')
+            : __('Unsuccessful attempt: cancelled after a question was shown and not accepted.');
     }
 
     /**
@@ -473,6 +558,17 @@ class Identify extends Page
             return;
         }
 
+        // A PIN is digits only, never shorter or longer than PinService allows
+        // (a shorter one cannot exist): any other input is a typing slip,
+        // refused before a session is opened or an attempt is counted against
+        // the agent or the client.
+        if (! ctype_digit($this->pin) || strlen($this->pin) < PinService::MIN_ALLOWED_LENGTH || strlen($this->pin) > PinService::MAX_ALLOWED_LENGTH) {
+            $this->pin = '';
+            Notification::make()->title(__('A PIN is made of digits only, at least :min and at most :max of them.', ['min' => PinService::MIN_ALLOWED_LENGTH, 'max' => PinService::MAX_ALLOWED_LENGTH]))->danger()->send();
+
+            return;
+        }
+
         try {
             $session = app(PinService::class)->verify($this->getClient(), $this->pin, IdChannel::Manual, $this->agent(), $this->getHeldCall());
         } catch (IdentificationException $e) {
@@ -569,7 +665,7 @@ class Identify extends Page
             ->requiresConfirmation(fn (): bool => $this->getSession() !== null)
             ->modal(fn (): bool => $this->getSession() !== null)
             ->modalHeading(__('Release this call?'))
-            ->modalDescription(__('The call goes back to the queue without an agent; the question-and-answer session in progress closes and the caller starts over, the attempts made so far stay recorded.'))
+            ->modalDescription(__("The call goes back to the queue without an agent; the question-and-answer session in progress closes and the caller starts over, the attempts made so far stay recorded. The closed session counts as unsuccessful in the client's question-and-answer limit, since a question was already shown and not accepted."))
             ->visible(fn () => ($call = $this->getHeldCall()) !== null && ! $call->status->isOver())
             ->disabled(fn () => $this->getHeldCall()?->isIdentified() ?? false)
             ->tooltip(fn () => ($this->getHeldCall()?->isIdentified() ?? false) ? __('The caller is identified: the call stays with the agent who handled it.') : null)

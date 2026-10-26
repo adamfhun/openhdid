@@ -161,13 +161,15 @@ it('refuses a file import on a synchronous queue and removes the upload', functi
 
 it('marks a queued file import failed and removes the upload when the worker is killed', function (): void {
     $admin = User::factory()->withRole(Role::Admin)->create();
-    Storage::disk('local')->put('sync-uploads/y.csv', "external_user_id,name,email\n1,A,a@client.hu\n");
+    // The name Filament gives an upload: 40 random characters and the extension.
+    $upload = 'sync-uploads/'.str_repeat('y', 40).'.csv';
+    Storage::disk('local')->put($upload, "external_user_id,name,email\n1,A,a@client.hu\n");
 
-    $run = app(QueuedSyncs::class)->start($admin, false, 'sync-uploads/y.csv');
-    expect($run->source)->toBe(SyncSource::Csv)->and($run->file_name)->toBe('y.csv');
-    (new RunDirectorySync($run->id, 'sync-uploads/y.csv'))->failed(null);
+    $run = app(QueuedSyncs::class)->start($admin, false, $upload);
+    expect($run->source)->toBe(SyncSource::Csv)->and($run->file_name)->toBe(str_repeat('y', 40).'.csv');
+    (new RunDirectorySync($run->id, $upload))->failed(null);
 
     expect($run->fresh()->status)->toBe(SyncRunStatus::Failed)
         ->and($run->fresh()->error)->toContain('1200')
-        ->and(Storage::disk('local')->exists('sync-uploads/y.csv'))->toBeFalse();
+        ->and(Storage::disk('local')->exists($upload))->toBeFalse();
 });

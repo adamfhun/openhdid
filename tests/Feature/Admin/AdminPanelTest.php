@@ -59,6 +59,7 @@ it('hides admin resources from an agent', function (): void {
     $this->flushSession();
 
     $this->actingAs($agent)->get('/admin/accounts/users')->assertForbidden();
+    $this->actingAs($agent)->get('/admin/accounts/roles')->assertForbidden();
 });
 
 it('creates a staff user with roles', function (): void {

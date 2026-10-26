@@ -46,6 +46,10 @@ const RAW_HTML_ALLOWLIST = [
     'app/Filament/Admin/Resources/ApiKeys/Pages/ManageApiKeys.php' => ['HtmlString' => 2],
     // Name marks and the description are assembled from e() escaped values and static markup.
     'app/Filament/Admin/Resources/Clients/ClientResource.php' => ['HtmlString' => 3],
+    // The Save question joins the e() escaped sponsor text with the e-mail question of LinksToDirectory.
+    'app/Filament/Admin/Resources/Clients/Pages/EditClient.php' => ['HtmlString' => 4],
+    // The e-mail change question: every line (addresses, EMD record name) is e() escaped, joined with <br> (AccountEmailChangeTest).
+    'app/Filament/Concerns/LinksToDirectory.php' => ['HtmlString' => 4],
     // The preview renders text in an e() escaped <pre>, HTML in a sandboxed iframe (srcdoc e() escaped).
     'app/Filament/Admin/Resources/MessageTemplates/MessageTemplateResource.php' => ['HtmlString' => 4],
     // The stored e-mail body is shown in a sandboxed iframe whose srcdoc is e() escaped.

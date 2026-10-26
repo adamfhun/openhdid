@@ -3,8 +3,10 @@
 namespace App\Http\Controllers\Api\V1\Client;
 
 use App\Auth\Passwordless\ClientPasswordlessLogin;
+use App\Auth\Passwordless\OneTimeCodes;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\V1\ClientResource;
+use App\Support\EmailAddressRule;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -22,7 +24,7 @@ class PasswordlessController extends Controller
      */
     public function requestMagicLink(Request $request): JsonResponse
     {
-        $data = $request->validate(['email' => ['required', 'email']]);
+        $data = $request->validate(['email' => ['required', 'string', new EmailAddressRule]]);
 
         $this->passwordless->requestMagicLink($data['email']);
 
@@ -35,7 +37,7 @@ class PasswordlessController extends Controller
      */
     public function consumeMagicLink(Request $request): ClientResource
     {
-        $data = $request->validate(['token' => ['required', 'string', 'max:100']]);
+        $data = $request->validate(['token' => ['required', 'string', 'size:'.OneTimeCodes::TOKEN_LENGTH, 'alpha_num:ascii']], [], ['token' => __('login link')]);
 
         $client = $this->passwordless->consumeMagicLink($data['token']);
 
@@ -53,7 +55,7 @@ class PasswordlessController extends Controller
      */
     public function requestOtp(Request $request): JsonResponse
     {
-        $data = $request->validate(['email' => ['required', 'email']]);
+        $data = $request->validate(['email' => ['required', 'string', new EmailAddressRule]]);
 
         $this->passwordless->requestOtp($data['email']);
 
@@ -66,9 +68,10 @@ class PasswordlessController extends Controller
     public function verifyOtp(Request $request): ClientResource
     {
         $data = $request->validate([
-            'email' => ['required', 'email'],
-            'code' => ['required', 'string', 'max:10'],
-        ]);
+            'email' => ['required', 'string', new EmailAddressRule],
+            // Exactly the length set now (the same for every account, so it tells nothing about one).
+            'code' => ['required', 'string', 'digits:'.$this->passwordless->otpCodeLength()],
+        ], [], ['code' => __('code from the SMS')]);
 
         $client = $this->passwordless->verifyOtp($data['email'], $data['code']);
 

@@ -11,6 +11,7 @@
     $outcome = $passed ?? $this->getLatestOutcome();
     $methods = $this->availableMethods();
     $shared = $this->getSharedNumbers();
+    $retry = $this->getQaRetry();
     $statusColor = fn ($status) => match ($status) {
         \App\Enums\IdSessionStatus::Passed => 'success',
         \App\Enums\IdSessionStatus::Failed => 'danger',
@@ -169,9 +170,17 @@
                             </div>
                         @endif
 
-                        <x-filament::button wire:click="startQa" :disabled="! $this->isEligibleForQa() || $client->isClosed()" icon="heroicon-o-play">
-                            {{ $session === null ? __('Start Q-A session') : __('Start a new Q-A session') }}
-                        </x-filament::button>
+                        <div class="flex flex-wrap items-center gap-3">
+                            <x-filament::button wire:click="startQa" :disabled="! $this->isEligibleForQa() || $client->isClosed() || $retry['refusal'] !== null" :tooltip="$retry['refusal']" icon="heroicon-o-play">
+                                {{ $session === null ? __('Start Q-A session') : __('Start a new Q-A session') }}
+                            </x-filament::button>
+                            {{ $this->unlockQaAction }}
+                        </div>
+                        @if ($retry['refusal'] !== null)
+                            <p class="mt-3 text-sm font-medium text-danger-700 dark:text-danger-400" data-hdid-qa-locked>{{ $retry['refusal'] }}</p>
+                        @elseif ($retry['count'] > 0)
+                            <p class="mt-3 text-sm {{ $muted }}">{{ __('Unsuccessful question-and-answer sessions of this client in the last :h hours: :n of the :max allowed.', ['h' => $retry['hours'], 'n' => $retry['count'], 'max' => $retry['limit']]) }}</p>
+                        @endif
                     @elseif ($step)
                         @php
                             // Read afresh: the current question may have been created after the session was loaded.
@@ -245,7 +254,7 @@
                                 <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm" x-data="{ rules: false }">
                                     <x-filament::link tag="button" wire:click="judge('undecided')" color="gray" size="sm" icon="heroicon-m-question-mark-circle">{{ __('Cannot decide') }}</x-filament::link>
                                     <x-filament::link tag="button" x-on:click="rules = ! rules" color="gray" size="sm" icon="heroicon-m-information-circle">{{ __('What counts as a match?') }}</x-filament::link>
-                                    <x-filament::link tag="button" wire:click="cancelQa" color="gray" size="sm" class="ml-auto">{{ __('Cancel session') }}</x-filament::link>
+                                    <x-filament::link tag="button" wire:click="cancelQa" color="gray" size="sm" class="ml-auto" :tooltip="__('Cancelling counts as an unsuccessful session in the client\'s question-and-answer limit, since this question was shown and not accepted.')">{{ __('Cancel session') }}</x-filament::link>
                                     <ul x-show="rules" x-cloak class="w-full list-disc space-y-1 rounded-lg bg-gray-50 py-2 pl-8 pr-3 text-xs {{ $muted }} dark:bg-white/5">
                                         <li>{{ __('Case, accents, punctuation and spaces do not count.') }}</li>
                                         <li>{{ trans_choice('{0} No typo is allowed.|{1} One typo is allowed: a letter different, missing, extra, or swapped with its neighbour.|[2,*] :n typos are allowed: a letter different, missing, extra, or swapped with its neighbour.', (int) $session->typo_tolerance, ['n' => (int) $session->typo_tolerance]) }}</li>
@@ -262,7 +271,7 @@
                                     <x-filament::button wire:click="judge('accepted')" wire:loading.attr="disabled" wire:target="judge" color="success" icon="heroicon-o-check" :badge="1" badge-color="gray">{{ __('Accept') }}</x-filament::button>
                                     <x-filament::button wire:click="judge('rejected')" wire:loading.attr="disabled" wire:target="judge" color="danger" icon="heroicon-o-x-mark" :badge="2" badge-color="gray">{{ __('Reject') }}</x-filament::button>
                                     <x-filament::button wire:click="judge('undecided')" wire:loading.attr="disabled" wire:target="judge" color="gray" icon="heroicon-o-question-mark-circle" :badge="3" badge-color="gray">{{ __('Cannot decide') }}</x-filament::button>
-                                    <x-filament::link tag="button" wire:click="cancelQa" color="gray" size="sm" class="ml-auto">{{ __('Cancel session') }}</x-filament::link>
+                                    <x-filament::link tag="button" wire:click="cancelQa" color="gray" size="sm" class="ml-auto" :tooltip="__('Cancelling counts as an unsuccessful session in the client\'s question-and-answer limit, since this question was shown and not accepted.')">{{ __('Cancel session') }}</x-filament::link>
                                 </div>
                             @endif
                         </div>
@@ -272,7 +281,7 @@
                 <x-filament::section :heading="__('PIN told by the caller')">
                     <form wire:submit="verifyPin" class="flex gap-3">
                         <x-filament::input.wrapper class="flex-1">
-                            <x-filament::input type="password" wire:model="pin" inputmode="numeric" autocomplete="off" placeholder="••••" autofocus x-init="$nextTick(() => $el.focus())" :disabled="! $methods['pin']['enabled']" />
+                            <x-filament::input type="password" wire:model="pin" inputmode="numeric" maxlength="{{ \App\Identification\PinService::MAX_ALLOWED_LENGTH }}" autocomplete="off" placeholder="••••" autofocus x-init="$nextTick(() => $el.focus())" :disabled="! $methods['pin']['enabled']" />
                         </x-filament::input.wrapper>
                         <x-filament::button type="submit" :disabled="! $methods['pin']['enabled']">{{ __('Verify') }}</x-filament::button>
                     </form>
@@ -289,6 +298,10 @@
             </x-filament::section>
 
             <x-filament::section :heading="__('Attempts')" collapsible>
+                {{-- The list shows this call; the count covers every call, so a new call does not hide earlier failures. --}}
+                <p @class(['mb-2 text-sm', 'font-medium text-warning-700 dark:text-warning-400' => $retry['recent'] > 0, $muted => $retry['recent'] === 0])>
+                    {{ __('Unsuccessful attempts of this client in the last :h hours, on any call: :n', ['h' => $retry['hours'], 'n' => $retry['recent']]) }}
+                </p>
                 <ul class="divide-y divide-gray-100 text-sm dark:divide-white/5">
                     @forelse ($history as $attempt)
                         <li class="flex flex-wrap items-center gap-3 py-2">
@@ -303,9 +316,12 @@
                             @if ($attempt->method === \App\Enums\IdMethod::Manual && $attempt->outcome_reason)
                                 <span class="basis-full text-xs {{ $muted }}">{{ \Illuminate\Support\Str::after($attempt->outcome_reason, 'manual:') }}</span>
                             @endif
+                            @if ($note = $this->getAttemptNote($attempt))
+                                <span class="basis-full text-xs text-warning-700 dark:text-warning-400" data-hdid-qa-counted>{{ $note }}</span>
+                            @endif
                         </li>
                     @empty
-                        <li class="py-2 {{ $muted }}">{{ __('No attempts yet.') }}</li>
+                        <li class="py-2 {{ $muted }}">{{ $call ? __('No attempts on this call yet.') : __('No attempts yet.') }}</li>
                     @endforelse
                 </ul>
             </x-filament::section>

@@ -4,12 +4,14 @@ namespace App\Clients;
 
 use App\Audit\Auditor;
 use App\Enums\ClientTier;
+use App\Enums\PrincipalType;
 use App\Models\Client;
 use App\Models\ClientLink;
 use App\Models\User;
 use App\Sync\AccountProvisioner;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -188,39 +190,13 @@ class ClientLinks
      * directory sync or an admin changed it), every active link ends with
      * END_REASON_SPONSOR_INELIGIBLE. The linked clients keep whatever their
      * own packages entitle them to: a dependent closed only because the
-     * sponsor was closed reopens, unless the directory dropped it meanwhile
-     * (then it stays closed as missing, like in reopenLinkedClients()).
-     * Returns the number of links ended.
+     * sponsor was closed reopens, unless the directory dropped or
+     * reclassified it meanwhile (keepClosedReason(), like in
+     * reopenLinkedClients()). Returns the number of links ended.
      */
     public function endLinksOfIneligibleSponsor(Client $sponsor): int
     {
-        if ($this->tiers->hasImplicitPremium($sponsor)) {
-            return 0;
-        }
-
-        $ended = 0;
-
-        $sponsor->activeLinks()->with('linked.externalRecord')->get()->each(function (ClientLink $link) use ($sponsor, &$ended): void {
-            $this->unlink($link, null, self::END_REASON_SPONSOR_INELIGIBLE);
-            $ended++;
-
-            $linked = $link->linked;
-            if ($linked === null || ! $linked->isClosed() || $linked->closed_reason !== self::CLOSE_REASON_SPONSOR) {
-                return;
-            }
-
-            if ($linked->externalRecord?->isMissing()) {
-                $linked->forceFill(['closed_reason' => AccountProvisioner::CLOSE_REASON_MISSING])->save();
-                $this->auditor->record('account.kept_closed', $linked, ['reason' => AccountProvisioner::CLOSE_REASON_MISSING, 'sponsor_id' => $sponsor->id]);
-
-                return;
-            }
-
-            $linked->reopen();
-            $this->auditor->record('account.reopened', $linked, ['reason' => self::END_REASON_SPONSOR_INELIGIBLE, 'sponsor_id' => $sponsor->id]);
-        });
-
-        return $ended;
+        return $this->endSponsorLinks($sponsor)['links'];
     }
 
     /**
@@ -230,19 +206,140 @@ class ClientLinks
      */
     public function endLinksOfIneligibleSponsors(): int
     {
+        return $this->sweepIneligibleSponsors()['links'];
+    }
+
+    /**
+     * endLinksOfIneligibleSponsors() with what it did, for the report after
+     * a package list save: the links ended, the linked clients reopened
+     * because they had been closed only with their sponsor, and those kept
+     * closed for the directory's reason. Each reopening and keeping closed
+     * is audited (account.reopened / account.kept_closed with the sponsor),
+     * the hourly sweep's too.
+     *
+     * @return array{links: int, reopened: int, kept_closed: int}
+     */
+    public function sweepIneligibleSponsors(): array
+    {
         $premium = $this->tiers->packages(ClientTier::Premium);
-        $ended = 0;
+        $total = ['links' => 0, 'reopened' => 0, 'kept_closed' => 0];
 
         Client::query()
             ->whereHas('sponsoredLinks', fn (Builder $q) => $q->whereNull('ended_at'))
             ->where(fn (Builder $q) => $q->whereNull('implicit_package')->orWhereNotIn('implicit_package', $this->tiers->rawNames($premium)))
-            ->chunkById(100, function ($sponsors) use (&$ended): void {
+            ->chunkById(100, function ($sponsors) use (&$total): void {
                 foreach ($sponsors as $sponsor) {
-                    $ended += $this->endLinksOfIneligibleSponsor($sponsor);
+                    foreach ($this->endSponsorLinks($sponsor) as $what => $count) {
+                        $total[$what] += $count;
+                    }
                 }
             });
 
-        return $ended;
+        return $total;
+    }
+
+    /**
+     * @return array{links: int, reopened: int, kept_closed: int}
+     */
+    private function endSponsorLinks(Client $sponsor): array
+    {
+        $done = ['links' => 0, 'reopened' => 0, 'kept_closed' => 0];
+
+        if ($this->tiers->hasImplicitPremium($sponsor)) {
+            return $done;
+        }
+
+        $sponsor->activeLinks()->with('linked.externalRecord')->get()->each(function (ClientLink $link) use ($sponsor, &$done): void {
+            $this->unlink($link, null, self::END_REASON_SPONSOR_INELIGIBLE);
+            $done['links']++;
+
+            $linked = $link->linked;
+            if ($linked === null || ! $linked->isClosed() || $linked->closed_reason !== self::CLOSE_REASON_SPONSOR) {
+                return;
+            }
+
+            if ($this->keepClosed($linked, $sponsor->id)) {
+                $done['kept_closed']++;
+
+                return;
+            }
+
+            $linked->reopen();
+            $this->auditor->record('account.reopened', $linked, ['reason' => self::END_REASON_SPONSOR_INELIGIBLE, 'sponsor_id' => $sponsor->id]);
+            $done['reopened']++;
+        });
+
+        return $done;
+    }
+
+    /**
+     * The linked clients that ending this sponsor's links would reopen:
+     * closed only because the sponsor was closed, and not kept closed for
+     * the directory's reason (keepClosedReason()). What the save of a
+     * sponsor's package change and a package list save name beforehand.
+     *
+     * @return Collection<int, Client>
+     */
+    public function reopenedOnLinkEnd(Client $sponsor): Collection
+    {
+        return $sponsor->activeLinks()->with('linked.externalRecord')->get()
+            ->map(fn (ClientLink $link): ?Client => $link->linked)
+            ->filter(fn (?Client $linked): bool => $linked !== null && $linked->isClosed() && $linked->closed_reason === self::CLOSE_REASON_SPONSOR && $this->keepClosedReason($linked) === null)
+            ->values();
+    }
+
+    /**
+     * Why a client closed only because of its sponsor stays closed although
+     * the sponsor no longer holds it (reopened, or its link ended): the
+     * directory dropped its record meanwhile, or reclassified it as staff.
+     * Null when it may reopen. The account then stays closed for the
+     * directory's reason, and the sync reopens it once the record is back as
+     * a client (AccountProvisioner::reopenIfClosedBySync); otherwise the
+     * account would reopen for a record the directory no longer has as a
+     * client, since the sync does not close an account that is closed already.
+     */
+    public function keepClosedReason(Client $linked): ?string
+    {
+        $record = $linked->externalRecord;
+
+        return match (true) {
+            $record === null => null,
+            $record->isMissing() => AccountProvisioner::CLOSE_REASON_MISSING,
+            $record->kind !== PrincipalType::Client => AccountProvisioner::CLOSE_REASON_KIND_CHANGED,
+            default => null,
+        };
+    }
+
+    /**
+     * The active link that holds this client closed: its sponsor is closed
+     * (a removed sponsor too, since removing closes it first). While it
+     * lasts, the client stays closed whatever path would reopen it
+     * (NYT-06.1); reopening the sponsor or ending the link frees it.
+     */
+    public function closedSponsorLink(Client $client): ?ClientLink
+    {
+        return ClientLink::query()->active()
+            ->where('linked_client_id', $client->getKey())
+            ->whereHas('sponsor', fn (Builder $query) => $query->withTrashed()->whereNotNull('closed_at'))
+            ->first();
+    }
+
+    /**
+     * Switches a client closed with its sponsor to the directory's reason
+     * when keepClosedReason() has one, audited as account.kept_closed.
+     */
+    private function keepClosed(Client $linked, string $sponsorId): bool
+    {
+        $reason = $this->keepClosedReason($linked);
+
+        if ($reason === null) {
+            return false;
+        }
+
+        $linked->forceFill(['closed_reason' => $reason])->save();
+        $this->auditor->record('account.kept_closed', $linked, ['reason' => $reason, 'sponsor_id' => $sponsorId]);
+
+        return true;
     }
 
     /**
@@ -265,9 +362,10 @@ class ClientLinks
 
     /**
      * Sponsor reopened: reopen the linked clients that were closed only
-     * because of the sponsor. One the directory dropped in the meantime
-     * stays closed, now for the directory's reason, until the record returns
-     * and the sync reopens it.
+     * because of the sponsor. One the directory dropped or reclassified in
+     * the meantime stays closed, now for the directory's reason
+     * (keepClosedReason()), until the record returns as a client and the
+     * sync reopens it.
      */
     public function reopenLinkedClients(Client $sponsor): int
     {
@@ -283,10 +381,7 @@ class ClientLinks
 
         $sponsor->activeLinks()->with('linked.externalRecord')->get()->each(function (ClientLink $link) use (&$count): void {
             if ($link->linked !== null && $link->linked->isClosed() && $link->linked->closed_reason === self::CLOSE_REASON_SPONSOR) {
-                if ($link->linked->externalRecord?->isMissing()) {
-                    $link->linked->forceFill(['closed_reason' => AccountProvisioner::CLOSE_REASON_MISSING])->save();
-                    $this->auditor->record('account.kept_closed', $link->linked, ['reason' => AccountProvisioner::CLOSE_REASON_MISSING, 'sponsor_id' => $link->sponsor_client_id]);
-
+                if ($this->keepClosed($link->linked, $link->sponsor_client_id)) {
                     return;
                 }
 

@@ -4,12 +4,15 @@ namespace App\Filament\Admin\Resources\SyncRunChanges\Pages;
 
 use App\Filament\Actions\ExportTableAction;
 use App\Filament\Admin\Resources\SyncRunChanges\SyncRunChangeResource;
+use App\Filament\Concerns\LimitsSearchInput;
 use App\Models\SyncRunChange;
 use App\Support\HuDate;
 use Filament\Resources\Pages\ManageRecords;
 
 class ManageSyncRunChanges extends ManageRecords
 {
+    use LimitsSearchInput;
+
     protected static string $resource = SyncRunChangeResource::class;
 
     public function getSubheading(): ?string

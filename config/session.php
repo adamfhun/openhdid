@@ -71,9 +71,13 @@ return [
     | connection that should be used to manage these sessions. This should
     | correspond to a connection in your database configuration options.
     |
+    | With the redis driver the sessions default to the "session" Redis
+    | connection (REDIS_SESSION_*, falling back to REDIS_*), a store of its
+    | own that may evict least recently used sessions; see config/database.php.
+    |
     */
 
-    'connection' => env('SESSION_CONNECTION'),
+    'connection' => env('SESSION_CONNECTION', env('SESSION_DRIVER', 'database') === 'redis' ? 'session' : null),
 
     /*
     |--------------------------------------------------------------------------

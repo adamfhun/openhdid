@@ -105,6 +105,20 @@ it('warns when a panel-started sync waits on a queue no worker listens to', func
         ->and($check->detail)->toContain(__('An EMD sync has been waiting on the ":queue" queue for :minutes minutes; no worker seems to listen on it.', ['queue' => 'sync', 'minutes' => 12]));
 });
 
+it('turns the sign-in tile yellow when a client tenant domain is on no EMD domain list, and its hint says where to look', function (): void {
+    config()->set('hdid.oidc.client.entra', ['tenant' => null, 'tenants' => '22222222-2222-4222-8222-222222222222:partner.hu', 'client_id' => 'client-app', 'client_secret' => 's']);
+    app(Settings::class)->set(SettingKey::ClientSsoEntraEnabled, true);
+    app(Settings::class)->set(SettingKey::SyncClientDomains, ['other.hu']);
+
+    $check = app(HealthChecks::class)->oidc();
+    expect($check->status)->toBe(CheckStatus::Warn)
+        ->and($check->detail)->toContain('partner.hu (on no EMD domain list)')
+        ->and(HealthChecks::hint('oidc'))->toContain('CLIENT_ENTRA_TENANTS')->toContain('Client e-mail domains');
+
+    app(Settings::class)->set(SettingKey::SyncClientDomains, ['other.hu', 'partner.hu']);
+    expect(app(HealthChecks::class)->oidc()->status)->toBe(CheckStatus::Ok);
+});
+
 it('shows the release version on the status page only when the build sets one', function (): void {
     $this->seed(RolesAndPermissionsSeeder::class);
     Filament::setCurrentPanel('admin');
@@ -175,7 +189,7 @@ it('splits the tiles into an operation block and a modes block, and reports deli
     $grouped = app(HealthChecks::class)->grouped();
 
     expect(array_keys($grouped))->toBe(['operation', 'modes'])
-        ->and(collect($grouped['modes'])->pluck('key')->all())->toBe(['premium_only', 'login_link_preview', 'client_login_emd', 'adfs_debug', 'package_overrides', 'shared_numbers'])
+        ->and(collect($grouped['modes'])->pluck('key')->all())->toBe(['premium_only', 'login_link_preview', 'client_login_emd', 'rate_limit_exemptions', 'adfs_debug', 'package_overrides', 'shared_numbers'])
         ->and(collect($grouped['operation'])->pluck('key')->all())->toContain('database', 'queue', 'mfa', 'oidc', 'capacity')
         ->and(collect($grouped['operation'])->pluck('key')->all())->not->toContain('premium_only');
 

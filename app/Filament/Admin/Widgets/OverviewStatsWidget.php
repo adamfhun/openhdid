@@ -3,6 +3,7 @@
 namespace App\Filament\Admin\Widgets;
 
 use App\Auth\Permission;
+use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
 use App\Reporting\DashboardCounters;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
@@ -17,6 +18,8 @@ use Filament\Widgets\StatsOverviewWidget\Stat;
  */
 class OverviewStatsWidget extends StatsOverviewWidget
 {
+    use AuthorizesEveryRequest;
+
     protected static ?int $sort = 0;
 
     protected ?string $pollingInterval = null;

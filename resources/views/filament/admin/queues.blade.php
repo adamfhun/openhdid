@@ -1,6 +1,7 @@
 @php
     $states = $this->getQueues();
     $maintenance = $this->getMaintenance();
+    $sharedStore = $this->getSharedStoreWarning();
 @endphp
 
 <x-filament-panels::page>
@@ -8,6 +9,12 @@
         <x-filament::section>
             <x-slot name="heading">{{ __('Worker queues') }}</x-slot>
             <x-slot name="description">{{ __('Connection ":connection". Every queue needs a running worker: the default queue carries the e-mails and SMS, the EMD sync queue the sync started from the panel. The scheduler sends a heartbeat to each configured queue every minute; a queue nobody listens to shows no worker.', ['connection' => $maintenance->connection()]) }}</x-slot>
+
+            @if ($sharedStore !== null)
+                <div class="mb-3 rounded-lg bg-danger-50 px-3 py-2 text-sm text-danger-700 dark:bg-danger-500/10 dark:text-danger-400" data-hdid-shared-store>
+                    {{ $sharedStore }} {{ __('The heartbeats below may come from that installation\'s workers; see System status.') }}
+                </div>
+            @endif
 
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
@@ -33,7 +40,9 @@
                                 </td>
                                 <td class="py-2 pr-3">
                                     <div class="flex flex-wrap items-center gap-2">
-                                        @if ($state->isAlive())
+                                        @if ($state->isAlive() && $sharedStore !== null)
+                                            <x-filament::badge color="warning" :tooltip="__('A worker of the other installation may have written this heartbeat.')">{{ __('Seen (shared store)') }}</x-filament::badge>
+                                        @elseif ($state->isAlive())
                                             <x-filament::badge color="success">{{ __('Alive') }}</x-filament::badge>
                                         @elseif ($state->heartbeat !== null)
                                             <x-filament::badge :color="$state->configured ? 'danger' : 'gray'">{{ __('Stale') }}</x-filament::badge>

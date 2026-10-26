@@ -298,7 +298,7 @@ it('clears the binding from the users list under the user policy and binds anew 
 
     Livewire::test(ListUsers::class)
         ->assertTableActionHidden('unbindSso', $unbound)
-        ->assertTableActionHidden('unbindSso', $superAdmin)
+        ->assertActionDisabled(TestAction::make('unbindSso')->table($superAdmin))
         ->callTableAction('unbindSso', $user)
         ->assertNotified();
 

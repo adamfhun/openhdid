@@ -65,7 +65,8 @@ class SsoController extends Controller
         if (! is_array($pending)
             || $pending['principal'] !== $principal->value
             || $pending['provider'] !== $provider->value
-            || ! hash_equals((string) $pending['state'], (string) $request->query('state'))
+            || ! is_string($request->query('state'))
+            || ! hash_equals((string) $pending['state'], $request->query('state'))
             || ! is_string($request->query('code'))) {
             // A forged or stale callback, or a sign-in cancelled or refused at
             // the provider (ADFS names the cause in error_description, MSIS…).
@@ -77,6 +78,14 @@ class SsoController extends Controller
             $this->login->recordRejection($principal, 'sso.'.$provider->value, LoginRejection::InvalidCredentials, [
                 'detail' => is_array($pending) ? 'state_or_code' : 'no_pending_request',
             ] + $providerError);
+
+            return $this->failed($principal, LoginRejection::InvalidCredentials);
+        }
+
+        // No provider issues a code longer than a token: one that is would
+        // only be passed on to the provider's token endpoint.
+        if (strlen($request->query('code')) > OidcClient::MAX_TOKEN_LENGTH) {
+            $this->login->recordRejection($principal, 'sso.'.$provider->value, LoginRejection::InvalidCredentials, ['detail' => 'code_too_long']);
 
             return $this->failed($principal, LoginRejection::InvalidCredentials);
         }

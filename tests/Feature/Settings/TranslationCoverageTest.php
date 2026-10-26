@@ -1,5 +1,6 @@
 <?php
 
+use App\Auth\LoginRejection;
 use Illuminate\Support\Facades\File;
 
 /**
@@ -35,4 +36,30 @@ it('has a Hungarian translation for every literal interface sentence', function 
     }
 
     expect($missing)->toBe([]);
+});
+
+/**
+ * The portal names a refused sign-in by the machine readable reason (an SSO
+ * return carries only ?error=<reason>), so every LoginRejection case needs a
+ * sentence in loginErrors.js and that sentence a Hungarian text in i18n.js;
+ * otherwise the page stays silent or shows English.
+ */
+it('gives the client portal a translated message for every login refusal reason', function (): void {
+    $errors = (string) file_get_contents(resource_path('js/client/loginErrors.js'));
+    $dictionary = (string) file_get_contents(resource_path('js/client/i18n.js'));
+    preg_match_all("/^\\s*([a-z_]+): '((?:[^'\\\\]|\\\\.)*)',$/m", $errors, $matches, PREG_SET_ORDER);
+    $messages = collect($matches)->mapWithKeys(fn (array $match): array => [$match[1] => $match[2]]);
+
+    $unmapped = collect(LoginRejection::cases())
+        ->map(fn (LoginRejection $reason): string => $reason->value)
+        ->reject(fn (string $reason): bool => $messages->has($reason))
+        ->values()
+        ->all();
+    $untranslated = $messages
+        ->reject(fn (string $message): bool => str_contains($dictionary, "'".$message."':") || str_contains($dictionary, '"'.$message.'":'))
+        ->keys()
+        ->all();
+
+    expect($unmapped)->toBe([])
+        ->and($untranslated)->toBe([]);
 });

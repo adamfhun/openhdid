@@ -13,6 +13,7 @@ use App\Models\QueuedJob;
 use App\Models\User;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
+use App\System\Installation;
 use App\System\QueueMaintenance;
 use App\System\Retention;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -56,6 +57,27 @@ it('opens for an administrator only', function (): void {
         ->and(FailedJobsWidget::canView())->toBeFalse()
         ->and(PendingJobsWidget::canView())->toBeFalse();
     $this->get('/admin/system/queues')->assertForbidden();
+});
+
+it('watches the priority queue of the sign-in messages with its own heartbeat', function (): void {
+    config()->set('hdid.messages.priority_queue', 'priority');
+    $maintenance = app(QueueMaintenance::class);
+
+    expect($maintenance->configuredQueues())->toBe(['default', 'priority'])
+        ->and(collect($maintenance->overview())->pluck('name')->all())->toBe(['default', 'priority']);
+
+    // A worker still started with --queue=default never answers the priority heartbeat.
+    (new QueueHeartbeat)->handle();
+    $tile = app(HealthChecks::class)->queue();
+    expect($tile->status)->toBe(CheckStatus::Warn)
+        ->and($tile->detail)->toContain('priority: '.__('no worker seen yet'));
+
+    (new QueueHeartbeat('priority'))->handle();
+    expect(app(HealthChecks::class)->queue()->status)->toBe(CheckStatus::Ok);
+
+    // Without the variable every message stays on the default queue, and so does the watch.
+    config()->set('hdid.messages.priority_queue', null);
+    expect($maintenance->configuredQueues())->toBe(['default']);
 });
 
 it('lists every configured queue with its own heartbeat and judges each worker', function (): void {
@@ -223,4 +245,20 @@ it('prunes failed jobs older than thirty days with the daily retention task', fu
 
     expect($removed['failed_jobs'])->toBe(1)
         ->and(FailedJob::query()->pluck('id')->all())->toBe([$recent->id]);
+});
+
+it('warns on the queues page, too, while another installation shares the store, and calls no heartbeat alive', function (): void {
+    (new QueueHeartbeat)->handle();
+    $this->get('/admin/system/queues')->assertOk()->assertSee(__('Alive'))->assertDontSee('data-hdid-shared-store', false);
+
+    // Two sightings of another installation's heartbeat jobs.
+    Installation::sighted('0123456789ab', 'queue:default');
+    Installation::sighted('0123456789ab', 'queue:default');
+
+    $this->get('/admin/system/queues')->assertOk()
+        ->assertSee('data-hdid-shared-store', false)
+        ->assertSee('0123456789ab')
+        ->assertSee(Installation::id())
+        ->assertSee(__('Seen (shared store)'))
+        ->assertDontSee('>'.__('Alive').'<', false);
 });

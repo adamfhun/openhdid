@@ -1,6 +1,7 @@
 <?php
 
 use App\Auth\Oidc\EmailClaimMatch;
+use App\Auth\Oidc\OidcClient;
 use App\Auth\Oidc\OidcProvider;
 use App\Auth\Oidc\OidcProviderConfig;
 use App\Auth\Oidc\OidcTokens;
@@ -14,10 +15,12 @@ use App\Settings\Settings;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Filament\Notifications\Livewire\Notifications;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Testing\TestResponse;
+use Livewire\Livewire;
 use Tests\Support\FakeOidc;
 
 beforeEach(function (): void {
@@ -132,7 +135,9 @@ it('refuses a sign-in without a usable e-mail claim with the reason and the clai
     ])->and($context['id_token_claims'])->toContain('upn', 'unique_name', 'aud', 'nonce')
         ->and(json_encode($context))->not->toContain('agent@corp.hu')->not->toContain('CORP');
 
-    $this->get(route('filament.admin.auth.login'))->assertOk()
+    // The login page pulls the waiting notification with a Livewire request once loaded.
+    $this->get(route('filament.admin.auth.login'))->assertOk();
+    Livewire::test(Notifications::class)->call('pullNotificationsFromSession')
         ->assertSee('A bejelentkezési szolgáltatás nem küldött használható e-mail-címet, ezért a fiók nem azonosítható.');
 });
 
@@ -275,4 +280,15 @@ it('records an unverified Entra e-mail claim as passed over', function (): void 
 
     expect($match->email)->toBe('agent@corp.hu')
         ->and($match->auditContext())->toBe(['email_claim' => 'preferred_username', 'email_token' => 'id_token', 'claims_passed_over' => ['email' => 'unverified']]);
+});
+
+it('keeps the sign-in by the ID token when only the access token is too long, and says why its claims were left out', function (): void {
+    $user = staffAgent();
+    FakeOidc::$accessClaims = ['aud' => 'urn:hdid', 'appid' => 'user-app', 'emailaddress' => 'agent@corp.hu', 'padding' => str_repeat('x', OidcClient::MAX_TOKEN_LENGTH)];
+
+    adfsSignIn('user', ['upn' => 'agent@corp.hu'])->assertRedirect('/admin');
+
+    $this->assertAuthenticatedAs($user, 'web');
+    expect(AuditLog::query()->where('event', 'login.succeeded')->sole()->context)
+        ->toMatchArray(['email_claim' => 'upn', 'access_token' => 'ignored: Token is longer than '.OidcClient::MAX_TOKEN_LENGTH.' bytes.']);
 });
