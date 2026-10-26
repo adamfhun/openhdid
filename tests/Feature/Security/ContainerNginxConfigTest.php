@@ -495,3 +495,19 @@ it('starts with a valid exempt list, and the container and the application accep
         expect(RateLimitExemptions::acceptable($entry))->toBeFalse($entry);
     }
 });
+
+it('offers check-env in the container entrypoint for install.sh check', function (): void {
+    $entrypoint = (string) file_get_contents(dirname(openhdidRuntimeHelper()).'/openhdid');
+    preg_match('/^    check-env\)\n(.*?)\n        ;;$/ms', $entrypoint, $branch);
+
+    // The same start checks as a role, with the file secrets resolved; nothing else starts.
+    expect($branch[1] ?? '')->toContain('load_file_secrets', 'session_store', 'exec php "$SHARE/runtime.php" check-env "${1:-web}"')
+        ->and($branch[1] ?? '')->not->toContain('warm_caches', 'prepare ')
+        ->and($entrypoint)->toContain('#   check-env [role]', 'tls-check, check-env, healthcheck');
+
+    // install.sh maps the "openhdid: ERROR:" and "openhdid: warning:" lines to its findings.
+    $check = runContainerCheckEnv(['HDID_RATE_LIMIT_EXEMPT_NETWORKS' => '10.0.0.0/7', 'REDIS_SESSION_HOST' => '']);
+    expect($check->exitCode())->toBe(64)
+        ->and($check->errorOutput())->toMatch('/ openhdid: ERROR: \'10\.0\.0\.0\/7\' in HDID_RATE_LIMIT_EXEMPT_NETWORKS is too wide/')
+        ->and($check->errorOutput())->toMatch('/ openhdid: warning: the sessions share the main Valkey/');
+});

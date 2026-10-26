@@ -196,11 +196,14 @@ jobs:
         run: |
           assets="$RUNNER_TEMP/assets"
           mkdir -p "$assets"
-          cp docs/*.pdf compose.yaml db.env.example backup.sh TROUBLESHOOTING.md UPGRADE.md "$assets/"
+          cp docs/*.pdf compose.yaml db.env.example backup.sh install.sh TROUBLESHOOTING.md UPGRADE.md "$assets/"
           cp .env.example "$assets/env.example"
-          # The usage profiles .env.example refers to (COMPOSE_FILE): downloadable next to compose.yaml.
+          # The usage profiles .env.example and install.sh refer to (COMPOSE_FILE): downloadable next to
+          # compose.yaml; the preflight stops when a file under profiles/ has no line here.
           cp profiles/5k/compose.yaml "$assets/profile-5k.yaml"
           cp profiles/10k/compose.yaml "$assets/profile-10k.yaml"
+          cp profiles/10k/single.yaml "$assets/profile-10k-single.yaml"
+          cp profiles/10k/infra.yaml "$assets/profile-10k-infra.yaml"
           cp "$RUNNER_TEMP/openhdid-$VERSION.spdx.json" "$assets/"
           (cd "$assets" && sha256sum -- * > SHA256SUMS)
           awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {found=1; next} found && /^## \[/ {exit} found' CHANGELOG.md > "$RUNNER_TEMP/notes.md"

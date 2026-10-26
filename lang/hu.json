@@ -1750,7 +1750,7 @@
     "cache": "gyorsítótár",
     "sessions": "munkamenetek",
     "queue": "üzenetsor",
-    "Accounts active in the last 15 minutes (any request they made), today's peak and, on MariaDB, the connections in use against max_connections. With HDID_SIZING_PROFILE set (5k, 10k, 20k) the tile compares the peak with the profile's design point and turns yellow at 80 %: time to step up to the next profile (more PHP-FPM processes and workers, Valkey, a second application server or Kubernetes), see the operations manual. Without a profile the numbers are shown for information only.": "Az utolsó 15 percben aktív fiókok (bármilyen kérésük alapján), a mai csúcs, MariaDB-n pedig a használt kapcsolatok a max_connections értékhez képest. Megadott HDID_SIZING_PROFILE mellett (5k, 10k, 20k) a kártya a csúcsot a profil tervezett értékével veti össze, és 80 %-nál sárgul: ideje a következő profilra lépni (több PHP-FPM folyamat és feldolgozó, Valkey, második alkalmazáskiszolgáló vagy Kubernetes), lásd az üzemeltetési kézikönyvet. Profil nélkül a számok csak tájékoztatnak.",
+    "Accounts active in the last 15 minutes (any request they made), today's peak and, on MariaDB, the connections in use against max_connections. With HDID_SIZING_PROFILE set (5k, 10k-single, 10k, 20k) the tile compares the peak with the profile's design point and turns yellow at 80 %: time to step up to the next profile (more PHP-FPM processes and workers, Valkey, a second application server or Kubernetes), see the operations manual. Without a profile the numbers are shown for information only.": "Az utolsó 15 percben aktív fiókok (bármilyen kérésük alapján), a mai csúcs, MariaDB-n pedig a használt kapcsolatok a max_connections értékhez képest. Megadott HDID_SIZING_PROFILE mellett (5k, 10k-single, 10k, 20k) a kártya a csúcsot a profil tervezett értékével veti össze, és 80 %-nál sárgul: ideje a következő profilra lépni (több PHP-FPM folyamat és feldolgozó, Valkey, második alkalmazáskiszolgáló vagy Kubernetes), lásd az üzemeltetési kézikönyvet. Profil nélkül a számok csak tájékoztatnak.",
     ":n entries in the database, :days days kept": ":n bejegyzés az adatbázisban, :days nap marad itt",
     ":files archive files, :size": ":files archívumfájl, :size",
     "archiving has not run yet": "archiválás még nem futott",
@@ -1762,6 +1762,7 @@
     "no sizing profile set (HDID_SIZING_PROFILE)": "nincs megadva használati profil (HDID_SIZING_PROFILE)",
     ":profile · designed for :n simultaneous accounts": ":profile · tervezett egyidejű fiók: :n",
     "5k profile (single server)": "5k profil (egy kiszolgáló)",
+    "10k profile (single server)": "10k profil (egy kiszolgáló)",
     "10k profile (two application servers)": "10k profil (két alkalmazáskiszolgáló)",
     "20k profile (Kubernetes)": "20k profil (Kubernetes)",
     "The database keeps the audit entries of the last :days days (:n entries now, the oldest from :oldest); the nightly task moves every older day into one compressed JSON Lines file here and deletes it from the database. The files are kept for the general retention period and are part of the backups with the storage volume.": "Az adatbázis az utolsó :days nap auditbejegyzéseit tartja (most :n bejegyzés, a legrégebbi :oldest); az éjjeli feladat minden régebbi napot egy tömörített JSON Lines fájlba ír ide, és törli az adatbázisból. A fájlok az általános megőrzési ideig maradnak meg, és a storage kötettel együtt a mentés részei.",
@@ -2319,5 +2320,6 @@
     "login links by e-mail: hourly limit (:limit) reached": "e-mailes belépési hivatkozás: az óránkénti korlát (:limit) betelt",
     "SMS login codes: hourly limit (:limit) reached": "SMS-belépőkód: az óránkénti korlát (:limit) betelt",
     "SMS login codes: daily limit (:limit) reached": "SMS-belépőkód: a napi korlát (:limit) betelt",
-    ":n not sent": ":n nem ment ki"
+    ":n not sent": ":n nem ment ki",
+    "If a task is late while the scheduler runs (the EMD token refresh, the EMD sync or hdid:prune, for example), its lock may have outlived a restart of the scheduler: docker compose exec scheduler php artisan schedule:clear-cache (on a classic installation: sudo -u www-data sh -c 'umask 027 && php artisan schedule:clear-cache'). From 1.15.0 a lock lives at most as long as its task may run.": "Ha egy feladat késik, miközben az ütemező fut (például az EMD-token frissítése, az ügyféltörzs átvétele vagy a hdid:prune), a zárja megmaradhatott az ütemező egy újraindítása után: docker compose exec scheduler php artisan schedule:clear-cache (hagyományos telepítésen: sudo -u www-data sh -c 'umask 027 && php artisan schedule:clear-cache'). Az 1.15.0-tól egy zár legfeljebb a feladat lehetséges futási idejéig él."
 }

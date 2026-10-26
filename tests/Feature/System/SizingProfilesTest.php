@@ -240,6 +240,63 @@ it('fits every ceiling of a 10k application host, and both hosts into the extern
         ->and($text)->toContain('maxmemory-policy noeviction', 'maxmemory-policy allkeys-lru', 'REDIS_SESSION_HOST');
 });
 
+it('fits every ceiling of the 10k single-host profile on its 8 vCPU, 16 GB host, with room for twice the normal peak', function (): void {
+    $files = [sizingReleaseFile('compose.yaml'), sizingReleaseFile('profiles/10k/single.yaml')];
+    $machine = sizingMachine($files[1], 'Gazdagép: 8 vCPU, 16 GB RAM');
+    $env = [
+        'OPENHDID_FPM_MAX_CHILDREN' => (string) sizingComposeValue($files, 'services', 'web', '/OPENHDID_FPM_MAX_CHILDREN: (\S+)$/m'),
+        'OPENHDID_FPM_MEMORY_LIMIT' => '128M',
+    ];
+    preg_match('/replicas: (\d+)/', sizingComposeBlock($files[1], 'services', 'worker'), $workers);
+
+    $total = sizingCheckComposeHost($files, $env, $machine['cpus'],
+        ['web', 'worker', 'sync-worker', 'scheduler', 'migrate', 'mariadb', 'valkey', 'valkey-sessions'], workers: (int) $workers[1], webServers: 1, hostWorkers: (int) $workers[1]);
+
+    expect($total + SIZING_HOST_OS)->toBeLessThanOrEqual($machine['memory'])
+        // Twice the normal peak of 10k (about 150 requests/s) with requests of up to 80 ms.
+        ->and((int) $env['OPENHDID_FPM_MAX_CHILDREN'])->toBeGreaterThanOrEqual(intdiv(150 * 80, 1000))
+        // The same session store as the two-host 10k profile, the mandatory policies.
+        ->and(sizingComposeValue($files, 'configs', 'valkey-sessions', '/^\s+maxmemory (\S+)$/m'))->toBe('576mb')
+        ->and(sizingComposeBlock($files[1], 'configs', 'valkey'))->toContain('maxmemory-policy noeviction')
+        ->and(sizingComposeBlock($files[1], 'configs', 'valkey-sessions'))->toContain('maxmemory-policy allkeys-lru')
+        ->and(sizingComposeBlock($files[1], 'services', 'web'))->toContain('HDID_SIZING_PROFILE: 10k-single');
+});
+
+it('fits the infra host of the 10k profile and pins the images of compose.yaml', function (): void {
+    $compose = sizingReleaseFile('compose.yaml');
+    $infra = sizingReleaseFile('profiles/10k/infra.yaml');
+    $machine = sizingMachine($infra, 'Gazdagép: 4 vCPU, 10 GB RAM');
+    $ceilings = sizingComposeCeilings([$infra], ['mariadb', 'valkey', 'valkey-sessions']);
+
+    $pool = sizingMb((string) sizingComposeValue([$infra], 'configs', 'mariadb-server', '/innodb_buffer_pool_size = (\S+)$/m'));
+    $maxConnections = (int) sizingComposeValue([$infra], 'configs', 'mariadb-server', '/max_connections = (\S+)$/m');
+    expect($ceilings['mariadb'])->toBeGreaterThanOrEqual($pool + SIZING_DB_GLOBAL + $maxConnections * SIZING_DB_PER_CONNECTION)
+        // Both application hosts of the 10k profile: 12 PHP-FPM each, a worker each, the EMD worker,
+        // the scheduler with two background tasks and the spare connections.
+        ->and($maxConnections)->toBeGreaterThanOrEqual(2 * 12 + 2 + 1 + 3 + SIZING_DB_SPARE);
+    foreach (['valkey', 'valkey-sessions'] as $store) {
+        $maxmemory = sizingMb((string) sizingComposeValue([$infra], 'configs', $store, '/^\s+maxmemory (\S+)$/m'));
+        expect($ceilings[$store])->toBeGreaterThanOrEqual(2 * $maxmemory + 128, $store);
+    }
+    expect(array_sum($ceilings) + SIZING_HOST_OS)->toBeLessThanOrEqual($machine['memory'])
+        ->and(sizingComposeBlock($infra, 'configs', 'valkey'))->toContain('maxmemory-policy noeviction', 'appendonly yes', 'requirepass "${REDIS_PASSWORD:?')
+        ->and(sizingComposeBlock($infra, 'configs', 'valkey-sessions'))->toContain('maxmemory-policy allkeys-lru', 'save 300 1', 'requirepass "${REDIS_SESSION_PASSWORD:?');
+
+    // The same images, digest and all, as the bundled services of compose.yaml.
+    foreach (['mariadb', 'valkey', 'valkey-sessions'] as $service) {
+        preg_match('/^    image: (\S+)$/m', sizingComposeBlock($compose, 'services', $service), $base);
+        preg_match('/^    image: (\S+)$/m', sizingComposeBlock($infra, 'services', $service), $own);
+        expect($own[1] ?? null)->toBe($base[1] ?? 'missing', $service)
+            ->and($own[1] ?? '')->toContain('@sha256:');
+    }
+
+    // The two accounts of compose.yaml (runtime DML, migration DDL), and published ports only on the given address.
+    preg_match('/^  mariadb-accounts:\n    content: \|\n(.*?)(?=^  \S)/ms', $compose, $accounts);
+    expect($infra)->toContain($accounts[1] ?? 'missing')
+        ->and($infra)->toContain('${OPENHDID_INFRA_BIND_IP:?')
+        ->and($infra)->not->toContain('0.0.0.0');
+});
+
 /**
  * The resources of a Deployment (or Job) of the Kubernetes manifests: the
  * overlay's patch where it sets them, else the base's.
@@ -330,3 +387,20 @@ it('fits the pods of the 10k and 20k overlays at the HPA maximum onto their node
     '10k' => ['10k', '3 × (4 vCPU, 8 GB)', 4, 80],
     '20k' => ['20k', '3 × (4 vCPU, 12 GB)', 6, 120],
 ]);
+
+it('archives and restores every usage profile file', function (): void {
+    $backup = sizingReleaseFile('backup.sh');
+
+    // The configuration archive takes every profile file (profiles/10k/single.yaml too), the
+    // restore compares and puts back the same set, and the archive check lets exactly these in.
+    expect($backup)->toContain('for profile in profiles/*/*.yaml; do', 'for f in profiles/*/*.yaml "$stage"/profiles/*/*.yaml; do')
+        ->and($backup)->not->toContain('profiles/*/compose.yaml');
+    preg_match("/grep -vxE '([^']+)'/", $backup, $pattern);
+    $allowed = '~^'.$pattern[1].'$~';
+    foreach (['profiles/5k/compose.yaml', 'profiles/10k/compose.yaml', 'profiles/10k/single.yaml', './profiles/10k/infra.yaml', '.env', 'db.env', 'compose.yaml', 'ca/', 'ca/internal.crt'] as $name) {
+        expect(preg_match($allowed, $name))->toBe(1, $name);
+    }
+    foreach (['backup.sh', 'profiles/10k/single.sh', 'profiles/../backup.sh', 'tls/privkey.pem', 'install.sh'] as $name) {
+        expect(preg_match($allowed, $name))->toBe(0, $name);
+    }
+});

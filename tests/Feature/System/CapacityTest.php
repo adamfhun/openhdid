@@ -77,6 +77,21 @@ it('maps the sizing profiles to their design points', function (): void {
     expect(SizingProfile::current())->toBeNull();
 });
 
+it('knows the single-host 10k profile', function (): void {
+    expect(SizingProfile::tryFrom('10k-single'))->toBe(SizingProfile::MediumSingle)
+        ->and(SizingProfile::MediumSingle->clients())->toBe(10_000)
+        ->and(SizingProfile::MediumSingle->designedConcurrency())->toBe(800)
+        ->and(SizingProfile::MediumSingle->label())->toBe('10k profile (single server)')
+        ->and(SizingProfile::Medium->label())->toBe('10k profile (two application servers)');
+
+    config()->set('hdid.profile', '10k-single');
+    expect(SizingProfile::current())->toBe(SizingProfile::MediumSingle)
+        ->and(app(HealthChecks::class)->capacity()->detail)->toContain('10k profile (single server) · designed for 800');
+
+    app()->setLocale('hu');
+    expect(SizingProfile::MediumSingle->label())->toBe('10k profil (egy kiszolgáló)');
+});
+
 it('includes the audit and capacity tiles with hints in the health report', function (): void {
     $keys = collect(app(HealthChecks::class)->all())->keyBy('key');
 

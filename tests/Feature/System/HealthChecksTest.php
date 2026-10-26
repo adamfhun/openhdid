@@ -19,6 +19,7 @@ use App\System\CheckStatus;
 use App\System\HealthChecks;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
@@ -218,6 +219,28 @@ it('does not fail the strict command or the health endpoint on information tiles
 
     $this->artisan('hdid:health --strict')->assertExitCode(1);
     $this->getJson('/health')->assertOk();
+});
+
+it('prints label, group and hint in the JSON output of hdid:health', function (): void {
+    $this->mock(HealthChecks::class, function ($mock): void {
+        $mock->shouldReceive('all')->andReturn([
+            Check::ok('database', 'Database', 'ok')->withHint('Check the DB_* values.'),
+            Check::fail('scheduler', 'Scheduler', 'no heartbeat')->withHint(HealthChecks::hint('scheduler')),
+            Check::info('package_overrides', 'Package overrides', '1 client'),
+        ]);
+    });
+
+    $code = Artisan::call('hdid:health', ['--json' => true]);
+    $rows = json_decode(trim(Artisan::output()), true);
+
+    // install.sh check reads these fields; key, status and detail keep their order and meaning.
+    expect($code)->toBe(2)
+        ->and(array_keys($rows[0]))->toBe(['key', 'status', 'detail', 'label', 'group', 'hint'])
+        ->and($rows[0])->toBe(['key' => 'database', 'status' => 'ok', 'detail' => 'ok', 'label' => 'Database', 'group' => 'operation', 'hint' => 'Check the DB_* values.'])
+        ->and($rows[1]['status'])->toBe('fail')
+        ->and($rows[1]['hint'])->toContain('schedule:clear-cache')
+        ->and($rows[2]['group'])->toBe('modes')
+        ->and($rows[2]['hint'])->toBeNull();
 });
 
 it('renders the status page in two blocks with links to the pages that fix a tile', function (): void {

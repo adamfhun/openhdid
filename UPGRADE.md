@@ -11,7 +11,7 @@ The commands run in the installation folder (`/opt/openhdid` in the examples), a
 ### 1. Előkészítés
 
 ```sh
-v=1.14.1
+v=1.15.0
 cd /opt/openhdid
 base=https://github.com/adamfhun/openhdid/releases/download/v$v
 ```
@@ -36,19 +36,22 @@ curl -fsSL -O "$base/backup.sh" && chmod 755 backup.sh
 A `.env`, a `db.env` és a `compose.override.yaml` nem cserélődik, azok a saját beállítások. A használati
 profil fájlja a kiadás része: a `.env` `COMPOSE_FILE` sora mutat rá, az 5k profilnál a `profile-5k.yaml`
 melléklet a `profiles/5k/compose.yaml` helyre kerül (a 10k profilnál a `profile-10k.yaml` a
-`profiles/10k/compose.yaml` helyre, mindkét gépen).
+`profiles/10k/compose.yaml` helyre, mindkét gépen; a 10k egy gépen a `profile-10k-single.yaml` a
+`profiles/10k/single.yaml` helyre; az infra gépen a `profile-10k-infra.yaml` a `profiles/10k/infra.yaml` helyre).
+Az `install.sh` (a telepítő, ellenőrző és javító) is a kiadás része, 1.15.0 óta melléklet.
 
 ```sh
-curl -fsSL -O "$base/compose.yaml" -O "$base/backup.sh" -O "$base/SHA256SUMS" -O "$base/profile-5k.yaml"
+curl -fsSL -O "$base/compose.yaml" -O "$base/backup.sh" -O "$base/install.sh" -O "$base/SHA256SUMS" -O "$base/profile-5k.yaml"
 curl -fsSL -o env.example "$base/env.example"
 sha256sum -c --ignore-missing SHA256SUMS
-chmod 755 backup.sh
+chmod 755 backup.sh install.sh
 mkdir -p profiles/5k && mv profile-5k.yaml profiles/5k/compose.yaml
 ```
 
 Az ellenőrzés minden fájlra `OK`-t ad. A profilfájl nélkül minden `docker compose` parancs a
 `compose file "profiles/5k/compose.yaml" set by COMPOSE_FILE environment variable is invalid` hibával áll meg
-(TROUBLESHOOTING.md 15. fejezet).
+(TROUBLESHOOTING.md 15. fejezet); a hiányzó profilfájlt az `./install.sh fix --only FILES-04` is letölti,
+ellenőrzőösszeggel.
 
 ### 4. Új telepítési kulcsok
 
@@ -58,6 +61,11 @@ Az új kulcsoknak alapértékük van; csak akkor kell felvenni őket, ha a kiad�
 ```sh
 comm -13 <(grep -oE '^[A-Z0-9_]+' .env | sort -u) <(grep -oE '^[A-Z0-9_]+' env.example | sort -u)
 ```
+
+Ugyanezt a telepítő is megmondja: az `./install.sh check` `ENV-01` lelete a hiányzó, az `ENV-02` a megszűnt
+kulcsokat sorolja fel, az `./install.sh fix --only ENV-01,ENV-02` pedig a hiányzókat a kommentjeikkel és
+alapértékükkel a `.env` végére fűzi, a megszűnteket kikommentezi (törölni nem töröl), előtte a `.env`-et
+`.env.bak-<időbélyeg>` néven menti.
 
 Az 1.7.0 előtti telepítésen a `COMPOSE_FILE` jelenik meg újként: felvétele
 (`COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) a használati profilt kapcsolja be, és a 3. lépés
@@ -77,8 +85,30 @@ a beépített 256mb-os korláttal indul; ha most többet használ, előbb emelje
 `OPENHDID_VALKEY_MEM_LIMIT` értékét:
 
 ```sh
-docker compose exec valkey valkey-cli -a "$REDIS_PASSWORD" INFO memory | grep -E 'used_memory_human|maxmemory_human'
+REDISCLI_AUTH="$(docker compose exec -T web php -r 'echo getenv("REDIS_PASSWORD");')" docker compose exec -T -e REDISCLI_AUTH valkey valkey-cli INFO memory | grep -E 'used_memory_human|maxmemory_human'
 ```
+
+A jelszót a `web` konténer adja, és környezeti változón át jut a `valkey-cli`-hez (a gazdagép héjában nincs
+`REDIS_PASSWORD`, parancssori argumentumba pedig nem kerül); jelszó nélküli Valkey-nél a `REDISCLI_AUTH=…`
+előtag elmarad.
+
+#### Régi, adatbázisos alapértékű telepítés
+
+Egy régebbi `env.example`-ből készült telepítés a munkameneteket, a gyorsítótárat és a sort az adatbázisban
+tartja, miközben a beépített Valkey fut, gyakran jelszó nélkül. Felismerés:
+
+```sh
+grep -E '^(SESSION_DRIVER|CACHE_STORE|QUEUE_CONNECTION)=' .env
+```
+
+Ha valamelyik `database`, az átállás a frissítés után ajánlott: `./install.sh fix --only ENV-07`. A javító
+lépésenként kimondja, mit tesz, és megerősítést kér: a `.env` mentése, `docker compose stop web scheduler` (új
+feladat ne kerüljön a régi sorba), a régi sor kiürülésének megvárása
+(`docker compose exec worker php artisan queue:monitor database:priority,database:default,database:sync`, amíg
+mindhárom 0), csak ezután a `REDIS_PASSWORD` (ha üres), a `redis` compose-profil és a három kulcs `redis`
+értéke, végül `docker compose up -d`. Egyszer mindenki kilép, a gyorsítótár egyszer üres; a `failed_jobs` tábla
+és a panel Üzenetsorok oldala megmarad, adat nem törlődik. Megszakításkor a `.env` változatlan, a web és az
+ütemező újraindul. Kézzel ugyanez: TROUBLESHOOTING.md 21. fejezet.
 
 A kiadás többi teendője (STARTTLS, kéréskorlát, szerepkörök ellenőrzése, Kubernetes NetworkPolicy, demóadat
 élesben) a CHANGELOG „Frissítés előtt” részében áll.
@@ -98,10 +128,15 @@ ez néhány másodperc kiesés.
 ### 6. Ellenőrzés
 
 ```sh
+./install.sh check
 docker compose exec web php artisan hdid:health
 ```
 
-A panelen a Rendszerállapot fejlécében az új verzió áll.
+Az `install.sh check` kilépési kódja 0 (rendben), 1 (figyelmeztetés) vagy 2 (hiba); minden lelethez az okot,
+a pontos teendőt és a TROUBLESHOOTING.md fejezetét adja. A javítható leleteket az `./install.sh fix` vezetetten,
+egyenként megerősítve javítja (a `.env` mentésével, a kommentek megtartásával): a frissítés utáni hiányzó és
+megszűnt kulcsokat, a régi, adatbázisos alapértékeket, a beragadt ütemező-zárat (`SCHED-01`), a hiányzó
+profilfájlt. A panelen a Rendszerállapot fejlécében az új verzió áll.
 
 ### Visszalépés
 
@@ -155,7 +190,7 @@ a külső MariaDB-t, a két külső Valkey-t és az NFS-en közös `storage` kö
    (`/up`) zöld.
 4. **A gép:** ugyanez. A `migrate` itt már nem talál teendőt; a `web`, a `worker`, a `sync-worker` és az
    ütemező az új image-dzsel indul.
-5. **Ellenőrzés mindkét gépen:** `docker compose ps`, `hdid:health`; a Rendszerállapot fejlécében az új verzió.
+5. **Ellenőrzés mindkét gépen:** `./install.sh check` (a B gépen ütemező és ügyféltörzs-feldolgozó nem futhat: `SVC-05`), `docker compose ps`, `hdid:health`; a Rendszerállapot fejlécében az új verzió.
 
 **A két verzió együttfutása.** A 3. és a 4. lépés között az A gép régi verziója az új sémán fut. Ez akkor
 megengedett, ha a kiadási jegyzet „Frissítés előtt” része nem mond mást (a migrációk bővítők: új tábla, oszlop,
@@ -231,13 +266,15 @@ kubectl apply -k kubernetes/overlays/20k      # a régi címke klónjában
 - A `migrate` 64-es kóddal megáll, „demo data” hibával: éles környezetben demóadat van az adatbázisban (TROUBLESHOOTING.md 16. fejezet).
 - Minden oldal 400 „Ismeretlen kiszolgálónév”, vagy sok 429/503 válasz: TROUBLESHOOTING.md 17. és 18. fejezet.
 - A levelek nem mennek ki, a Levelezés kártya piros „TLS required” hibával: az SMTP-kiszolgáló nem kínál STARTTLS-t (TROUBLESHOOTING.md 19. fejezet).
+- Egy ütemezett feladat (például az ügyféltörzs tokenjének frissítése) a frissítés óta nem fut: a futás közben leállt ütemező zárja maradt meg; `./install.sh fix --only SCHED-01`, kézzel `docker compose exec scheduler php artisan schedule:clear-cache` (TROUBLESHOOTING.md 22. fejezet).
+- Bármi más: `./install.sh check`; hibabejelentéshez `./install.sh report` (kitakart csomag a gépen, sehová nem tölt fel).
 
 ## English
 
 ### 1. Preparation
 
 ```sh
-v=1.14.1
+v=1.15.0
 cd /opt/openhdid
 base=https://github.com/adamfhun/openhdid/releases/download/v$v
 ```
@@ -262,19 +299,22 @@ curl -fsSL -O "$base/backup.sh" && chmod 755 backup.sh
 `.env`, `db.env` and `compose.override.yaml` are your own settings and are not replaced. The usage profile
 file is part of the release: the `COMPOSE_FILE` line of `.env` points to it; with the 5k profile the
 `profile-5k.yaml` asset goes to `profiles/5k/compose.yaml` (with the 10k profile `profile-10k.yaml` goes to
-`profiles/10k/compose.yaml`, on both hosts).
+`profiles/10k/compose.yaml`, on both hosts; 10k on one host takes `profile-10k-single.yaml` to
+`profiles/10k/single.yaml`; the infra host `profile-10k-infra.yaml` to `profiles/10k/infra.yaml`). `install.sh`
+(the installer, checker and fixer) is part of the release too, an asset since 1.15.0.
 
 ```sh
-curl -fsSL -O "$base/compose.yaml" -O "$base/backup.sh" -O "$base/SHA256SUMS" -O "$base/profile-5k.yaml"
+curl -fsSL -O "$base/compose.yaml" -O "$base/backup.sh" -O "$base/install.sh" -O "$base/SHA256SUMS" -O "$base/profile-5k.yaml"
 curl -fsSL -o env.example "$base/env.example"
 sha256sum -c --ignore-missing SHA256SUMS
-chmod 755 backup.sh
+chmod 755 backup.sh install.sh
 mkdir -p profiles/5k && mv profile-5k.yaml profiles/5k/compose.yaml
 ```
 
 Every file reports `OK`. Without the profile file every `docker compose` command stops with
 `compose file "profiles/5k/compose.yaml" set by COMPOSE_FILE environment variable is invalid`
-(TROUBLESHOOTING.md, chapter 15).
+(TROUBLESHOOTING.md, chapter 15); `./install.sh fix --only FILES-04` downloads a missing profile file too, with
+its checksum.
 
 ### 4. New deployment keys
 
@@ -284,6 +324,10 @@ with defaults; add them only when the release notes or your needs call for it.
 ```sh
 comm -13 <(grep -oE '^[A-Z0-9_]+' .env | sort -u) <(grep -oE '^[A-Z0-9_]+' env.example | sort -u)
 ```
+
+The installer says the same: finding `ENV-01` of `./install.sh check` lists the missing keys, `ENV-02` the
+removed ones, and `./install.sh fix --only ENV-01,ENV-02` appends the missing ones to `.env` with their comments
+and defaults and comments the removed ones out (it deletes nothing), saving `.env` as `.env.bak-<stamp>` first.
 
 On installations older than 1.7.0 `COMPOSE_FILE` shows up as new: adding it
 (`COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) switches the usage profile on and needs the profile
@@ -302,8 +346,30 @@ Moving the sessions signs everybody out once. Check the main Valkey's memory too
 256mb limit; if it uses more now, raise `OPENHDID_VALKEY_MAXMEMORY` and `OPENHDID_VALKEY_MEM_LIMIT` first:
 
 ```sh
-docker compose exec valkey valkey-cli -a "$REDIS_PASSWORD" INFO memory | grep -E 'used_memory_human|maxmemory_human'
+REDISCLI_AUTH="$(docker compose exec -T web php -r 'echo getenv("REDIS_PASSWORD");')" docker compose exec -T -e REDISCLI_AUTH valkey valkey-cli INFO memory | grep -E 'used_memory_human|maxmemory_human'
 ```
+
+The password comes from the `web` container and reaches `valkey-cli` through an environment variable (the host
+shell has no `REDIS_PASSWORD`, and it never lands on a command line); for a Valkey without a password leave out
+the `REDISCLI_AUTH=…` prefix.
+
+#### An old installation with the database defaults
+
+An installation made from an older `env.example` keeps sessions, cache and queue in the database while the
+bundled Valkey runs, often without a password. To recognise it:
+
+```sh
+grep -E '^(SESSION_DRIVER|CACHE_STORE|QUEUE_CONNECTION)=' .env
+```
+
+If one of them is `database`, moving over after the upgrade is recommended: `./install.sh fix --only ENV-07`. The
+fix says what it does step by step and asks first: it saves `.env`, runs `docker compose stop web scheduler` (no
+new job into the old queue), waits until the old queue is empty
+(`docker compose exec worker php artisan queue:monitor database:priority,database:default,database:sync`, until
+all three are 0), only then sets `REDIS_PASSWORD` (when empty), the `redis` compose profile and the three keys
+to `redis`, and finally runs `docker compose up -d`. Everyone is signed out once and the cache is empty once; the
+`failed_jobs` table and the Queues page of the panel stay, no data is deleted. When cancelled, `.env` stays
+unchanged and web and the scheduler start again. The same by hand: TROUBLESHOOTING.md, chapter 21.
 
 The other steps of this release (STARTTLS, request limit, reviewing the roles, Kubernetes NetworkPolicy, demo
 data in production) are in the "Before upgrading" part of the CHANGELOG.
@@ -323,10 +389,15 @@ this is a few seconds of downtime.
 ### 6. Check
 
 ```sh
+./install.sh check
 docker compose exec web php artisan hdid:health
 ```
 
-The system status page shows the new version in its header.
+The exit code of `install.sh check` is 0 (fine), 1 (warnings) or 2 (errors); each finding comes with its cause,
+the exact remedy and its TROUBLESHOOTING.md chapter. `./install.sh fix` repairs the fixable findings in guided
+steps, each confirmed (saving `.env`, keeping its comments): the keys missing or removed after the upgrade, the
+old database defaults, a stuck scheduler lock (`SCHED-01`), a missing profile file. The system status page shows
+the new version in its header.
 
 ### Going back
 
@@ -379,7 +450,7 @@ in this order:
    B: `docker compose ps` and step 6; the load balancer's liveness probe (`/up`) is green.
 4. **Host A:** the same. `migrate` finds nothing left to do; `web`, `worker`, `sync-worker` and the scheduler start
    on the new image.
-5. **Check both hosts:** `docker compose ps`, `hdid:health`; the system status header shows the new version.
+5. **Check both hosts:** `./install.sh check` (no scheduler and no master data worker may run on host B: `SVC-05`), `docker compose ps`, `hdid:health`; the system status header shows the new version.
 
 **Both versions at once.** Between steps 3 and 4 the old version on host A runs on the new schema. This is allowed
 unless the "Before upgrading" part of the release notes says otherwise (migrations add: new tables, columns,
@@ -455,3 +526,5 @@ kubectl apply -k kubernetes/overlays/20k      # in a clone of the old tag
 - `migrate` stops with exit code 64 and a "demo data" error: the production database holds demo data (TROUBLESHOOTING.md, chapter 16).
 - Every page answers 400 "Unknown host name", or many 429/503 answers: TROUBLESHOOTING.md, chapters 17 and 18.
 - Mail is not sent, the Mail tile is red with "TLS required": the SMTP server offers no STARTTLS (TROUBLESHOOTING.md, chapter 19).
+- A scheduled task (the master data token refresh, for example) has not run since the upgrade: the lock of a scheduler stopped mid-run stayed; `./install.sh fix --only SCHED-01`, by hand `docker compose exec scheduler php artisan schedule:clear-cache` (TROUBLESHOOTING.md, chapter 22).
+- Anything else: `./install.sh check`; for a bug report `./install.sh report` (a masked package on the host, uploaded nowhere).

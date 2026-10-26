@@ -23,7 +23,7 @@
 #   database.sql.gz   a beépített MariaDB adatbázisa, konzisztens pillanatképként
 #   storage.tar.gz    a storage kötet (arculati képek, feltöltések)
 #   config.tar.gz     .env, db.env, compose.yaml, compose.override.yaml, a használati profil
-#                     fájlja (profiles/*/compose.yaml) és a ca mappa – benne az APP_KEY és
+#                     fájljai (profiles/*/*.yaml) és a ca mappa – benne az APP_KEY és
 #                     minden jelszó: ezt a fájlt védje a legjobban
 #   tls.tar.gz        a tanúsítvány és a kulcs (a tls mappa)
 #   info.txt          időpont, OpenHDID-verzió, image, adatbázis
@@ -113,6 +113,7 @@ checksum() {
 
 # The account and the database inside the mariadb container: db.env gives the migration
 # account, which may also come from a secret file (NAME_FILE).
+# shellcheck disable=SC2016 # expanded by the container's shell, not here
 DB_SHELL='u=${DB_USERNAME:-}; [ -n "$u" ] || u=$(cat "${DB_USERNAME_FILE:-/dev/null}" 2>/dev/null)
 p=${DB_PASSWORD:-}; [ -n "$p" ] || p=$(cat "${DB_PASSWORD_FILE:-/dev/null}" 2>/dev/null)
 db=${MARIADB_DATABASE:?}
@@ -195,7 +196,7 @@ config_archive() {
     [[ -f compose.override.yaml ]] && files+=(compose.override.yaml)
     # The usage profile COMPOSE_FILE in .env points to: without it the restored .env names a
     # missing file and no docker compose command works.
-    for profile in profiles/*/compose.yaml; do
+    for profile in profiles/*/*.yaml; do
         [[ -f $profile ]] && files+=("$profile")
     done
     [[ -d ca ]] && files+=(ca)
@@ -329,7 +330,7 @@ check_config_archive() {
     local archive=$1 names entries unexpected
     names=$(tar tzf "$archive") || die "A beállítások mentése nem olvasható."
     entries=$(tar tvzf "$archive") || die "A beállítások mentése nem olvasható."
-    unexpected=$(grep -vxE '(\./)?(\.env|db\.env|compose\.yaml|compose\.override\.yaml|profiles/[A-Za-z0-9_.-]+/compose\.yaml|ca(/[^/]+)*/?)' <<<"$names" || true)
+    unexpected=$(grep -vxE '(\./)?(\.env|db\.env|compose\.yaml|compose\.override\.yaml|profiles/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.yaml|ca(/[^/]+)*/?)' <<<"$names" || true)
     [[ -z $unexpected ]] || die "A beállítások mentésében nem várt fájl van ($(tr '\n' ' ' <<<"$unexpected")); ezt a mentést nem ez a szkript készítette, vagy módosították. Nem állítom vissza."
     unexpected=$(grep -vE '^[-d]' <<<"$entries" || true)
     [[ -z $unexpected ]] || die "A beállítások mentésében hivatkozás vagy különleges fájl van; ezt a mentést nem állítom vissza."
@@ -380,9 +381,10 @@ restore_backup() {
         grep -qx mariadb <<<"$services" || die "A mentés a beépített adatbázist tartalmazza, de a mentett .env-ben nincs db profil."
     fi
     mkdir -p tls
+    # shellcheck disable=SC2012 # the owner's name of one known folder, for the message only
     [[ -O tls ]] || die "A tls mappa nem az Ön tulajdona ($(ls -ld tls | awk '{print $3}')); állítsa át a tulajdonost, majd indítsa újra. Semmi nem változott."
     local -a config_files=(.env db.env compose.yaml compose.override.yaml)
-    for f in profiles/*/compose.yaml "$stage"/profiles/*/compose.yaml; do
+    for f in profiles/*/*.yaml "$stage"/profiles/*/*.yaml; do
         f=${f#"$stage"/}
         [[ -e $f || -e $stage/$f ]] || continue
         [[ " ${config_files[*]} " == *" $f "* ]] || config_files+=("$f")
@@ -460,6 +462,7 @@ restore_backup() {
 
     step "Storage kötet"
     # File sessions and the file cache go too, for the same reason as the tables above.
+    # shellcheck disable=SC2016 # expanded by the container's shell, not here
     run_web --entrypoint sh web -c 'find /app/storage -mindepth 1 -delete && tar xzf - -C /app/storage &&
         for d in /app/storage/framework/sessions /app/storage/framework/cache; do
             if [ -d "$d" ]; then find "$d" -mindepth 1 -type f ! -name .gitignore -delete; fi

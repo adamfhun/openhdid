@@ -1,0 +1,161 @@
+# OpenHDID – a kétgépes 10k profil infra gépe: a közös MariaDB, a fő Valkey és a munkamenet-
+# Valkey egy harmadik gépen, az A és a B alkalmazásgép mögött. Önálló Compose-fájl (nem a
+# compose.yaml kiegészítője); a gép .env-je választja ki, és ugyanez a mappa db.env-je adja az
+# adatbázis-rendszergazda és a migrációs fiók jelszavát:
+#
+#   COMPOSE_FILE=profiles/10k/infra.yaml
+#   OPENHDID_INFRA_BIND_IP=<a gép privát címe>
+#
+# A telepítő (./install.sh --profile 10k-ha --role infra) írja a .env-et és a db.env-et, indítja a
+# szolgáltatásokat, és a közös értékeket (címek, jelszavak, APP_KEY) egy válaszfájlba teszi az A és
+# a B gépnek. Gazdagép: 4 vCPU, 10 GB RAM, 100 GB lemez (benne az itt exportált NFS 50 GB-ja, ha a
+# közös storage is ezen a gépen van). A memóriaplafonok összege 8192 MB (MariaDB 6g, Valkey 768m,
+# munkamenet-Valkey 1280m), mellette 1 GB az operációs rendszeré. MariaDB 4 GB pufferrel és 80
+# kapcsolattal (a két gép 2 × 12 PHP-FPM folyamata, a feldolgozók, az ütemező, a migráció és
+# tartalék); fő Valkey 256 MB-tal (maxmemory-policy noeviction, AOF); munkamenet-Valkey 576 MB-tal
+# (allkeys-lru, RDB), saját jelszóval.
+#
+# Egyetlen példány: amíg nincs replika, ennek a gépnek a kiesése a szolgáltatás kiesése. A MariaDB-
+# replikát és az NFS-exportot a telepítő nem készíti el, hanem lépésenként kiírja (telepítési
+# útmutató 15.8). A MariaDB és a Valkey itt titkosítatlanul beszél: a gép csak privát hálózaton
+# legyen, és a 3306-os, a 6379-es és a 6380-as port (NFS-nél a 2049-es is) csak az A és a B gép
+# címéről legyen elérhető (tűzfal). A mentés itt nem a backup.sh (az az alkalmazásgépé), hanem a
+# telepítő által kiírt mariadb-dump parancs.
+#
+# Részletek: docs/openhdid-telepitesi-utmutato.pdf (15.8) és
+# docs/openhdid-uzemeltetesi-kezikonyv.pdf (9. fejezet).
+
+name: openhdid-infra
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 20m
+    max-file: "10"
+
+services:
+  mariadb:
+    image: mariadb:12.3.3@sha256:99c125f103f5d081ebbc9ffe064e63daf7f688ac33a5f7f29af2d7260a96debf
+    restart: unless-stopped
+    # Relative paths of a Compose file start at its own folder: db.env is the one next to .env.
+    env_file: [../../db.env]
+    environment:
+      MARIADB_DATABASE: ${DB_DATABASE:-openhdid}
+      OPENHDID_RUNTIME_USER: ${DB_USERNAME:-openhdid}
+      OPENHDID_RUNTIME_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    configs:
+      - source: mariadb-server
+        target: /etc/mysql/conf.d/openhdid.cnf
+      - source: mariadb-accounts
+        target: /docker-entrypoint-initdb.d/10-openhdid-accounts.sh
+    volumes:
+      - db:/var/lib/mysql
+    ports:
+      - "${OPENHDID_INFRA_BIND_IP:?Set OPENHDID_INFRA_BIND_IP in .env}:${OPENHDID_INFRA_DB_PORT:-3306}:3306"
+    # 4096M + 192 + 80 × 20 ≈ 5888 MB.
+    mem_limit: ${OPENHDID_DB_MEM_LIMIT:-6g}
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # A sor, a zárak, a korlátszámlálók és a gyorsítótár (REDIS_HOST az alkalmazásgépeken).
+  valkey:
+    image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
+    restart: unless-stopped
+    command: [valkey-server, /etc/valkey/valkey.conf]
+    configs:
+      - source: valkey
+        target: /etc/valkey/valkey.conf
+    volumes:
+      - valkey:/data
+    ports:
+      - "${OPENHDID_INFRA_BIND_IP:?Set OPENHDID_INFRA_BIND_IP in .env}:${OPENHDID_INFRA_VALKEY_PORT:-6379}:6379"
+    # Twice maxmemory and 256 MB: the AOF rewrite forks (copy-on-write) while the store is full.
+    mem_limit: ${OPENHDID_VALKEY_MEM_LIMIT:-768m}
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    healthcheck: &valkey-health
+      # Up and answering; NOAUTH is the answer without the password.
+      test: [CMD-SHELL, "valkey-cli ping 2>&1 | grep -qE 'PONG|NOAUTH'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # A munkamenetek (REDIS_SESSION_HOST az alkalmazásgépeken), saját jelszóval.
+  valkey-sessions:
+    image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
+    restart: unless-stopped
+    command: [valkey-server, /etc/valkey/valkey.conf]
+    configs:
+      - source: valkey-sessions
+        target: /etc/valkey/valkey.conf
+    volumes:
+      - valkey-sessions:/data
+    ports:
+      - "${OPENHDID_INFRA_BIND_IP:?Set OPENHDID_INFRA_BIND_IP in .env}:${OPENHDID_INFRA_VALKEY_SESSIONS_PORT:-6380}:6379"
+    # Twice maxmemory and 128 MB: the RDB snapshot forks (copy-on-write) while the store is full.
+    mem_limit: ${OPENHDID_VALKEY_SESSIONS_MEM_LIMIT:-1280m}
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    healthcheck: *valkey-health
+
+volumes:
+  db:
+  valkey:
+  valkey-sessions:
+
+configs:
+  mariadb-server:
+    content: |
+      [mariadbd]
+      character-set-server = utf8mb4
+      collation-server = utf8mb4_unicode_ci
+      skip-name-resolve
+      # 2 × 12 PHP-FPM + 2 workers + EMD worker + scheduler (3) + 6 spare = 36, with room: 80.
+      innodb_buffer_pool_size = ${OPENHDID_DB_BUFFER_POOL:-4G}
+      max_connections = ${OPENHDID_DB_MAX_CONNECTIONS:-80}
+      key_buffer_size = 16M
+
+  # First start only: the migration account may change the schema, the runtime
+  # account used by web, worker and scheduler may only read and write rows (as compose.yaml).
+  mariadb-accounts:
+    content: |
+      for name in DB_USERNAME DB_PASSWORD OPENHDID_RUNTIME_USER OPENHDID_RUNTIME_PASSWORD; do
+        file_env "$$name"
+      done
+      migrate_user="$$(docker_sql_escape_string_literal "$${DB_USERNAME}")"
+      migrate_pass="$$(docker_sql_escape_string_literal "$${DB_PASSWORD}")"
+      runtime_user="$$(docker_sql_escape_string_literal "$${OPENHDID_RUNTIME_USER}")"
+      runtime_pass="$$(docker_sql_escape_string_literal "$${OPENHDID_RUNTIME_PASSWORD}")"
+      docker_process_sql --database=mysql <<EOSQL
+      CREATE USER IF NOT EXISTS '$${migrate_user}'@'%' IDENTIFIED BY '$${migrate_pass}';
+      GRANT ALL PRIVILEGES ON \`$${MARIADB_DATABASE}\`.* TO '$${migrate_user}'@'%';
+      CREATE USER IF NOT EXISTS '$${runtime_user}'@'%' IDENTIFIED BY '$${runtime_pass}';
+      GRANT SELECT, INSERT, UPDATE, DELETE ON \`$${MARIADB_DATABASE}\`.* TO '$${runtime_user}'@'%';
+      EOSQL
+
+  # Memóriakorlát kiszorítás nélkül (kötelező): betelt tárnál az írás áll meg, kulcs nem vész el.
+  valkey:
+    content: |
+      appendonly yes
+      save ""
+      requirepass "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"
+      maxmemory ${OPENHDID_VALKEY_MAXMEMORY:-256mb}
+      maxmemory-policy noeviction
+
+  # A munkamenet-tár: kiszorítás a legrégebben használt kulcsok szerint, RDB-pillanatkép.
+  valkey-sessions:
+    content: |
+      appendonly no
+      save 300 1
+      stop-writes-on-bgsave-error no
+      requirepass "${REDIS_SESSION_PASSWORD:?Set REDIS_SESSION_PASSWORD in .env}"
+      maxmemory ${OPENHDID_VALKEY_SESSIONS_MAXMEMORY:-576mb}
+      maxmemory-policy allkeys-lru
+      maxmemory-samples 10

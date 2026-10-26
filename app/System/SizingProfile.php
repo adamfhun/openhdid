@@ -12,6 +12,8 @@ namespace App\System;
 enum SizingProfile: string
 {
     case Small = '5k';
+    /** 10 000 clients on one larger server (profiles/10k/single.yaml), without high availability. */
+    case MediumSingle = '10k-single';
     case Medium = '10k';
     case Large = '20k';
 
@@ -26,7 +28,7 @@ enum SizingProfile: string
     {
         return match ($this) {
             self::Small => 5_000,
-            self::Medium => 10_000,
+            self::MediumSingle, self::Medium => 10_000,
             self::Large => 20_000,
         };
     }
@@ -44,6 +46,7 @@ enum SizingProfile: string
     {
         return match ($this) {
             self::Small => __('5k profile (single server)'),
+            self::MediumSingle => __('10k profile (single server)'),
             self::Medium => __('10k profile (two application servers)'),
             self::Large => __('20k profile (Kubernetes)'),
         };

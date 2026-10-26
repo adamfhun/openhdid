@@ -8,7 +8,18 @@ Copyable diagnostic commands for the container installation, run in the installa
 in the examples) as a member of the `docker` group. None of them prints a secret: at most the length of a
 token or password is shown. Details: operations manual, chapter 6 (Hungarian).
 
+Elsőként a telepítő ellenőrzése: `./install.sh check` minden réteget átnéz, és minden lelethez azonosítót,
+okot, pontos teendőt és az itteni fejezet számát adja; a fejezetek elején álló azonosítók ezek. A javítható
+leleteket az `./install.sh fix --only <azonosító>` vezetetten, megerősítéssel javítja, a `.env` mentésével;
+a hibabejelentéshez az `./install.sh report` kitakart csomagot készít a gépen (24. fejezet). / First the
+installer's check: `./install.sh check` goes through every layer and gives each finding an id, the cause, the
+exact remedy and the number of the chapter here; the ids at the start of the chapters are those. Fixable
+findings are repaired by `./install.sh fix --only <id>`, guided, with a confirmation and a backup of `.env`;
+for a bug report `./install.sh report` builds a masked package on the host (chapter 24).
+
 ## 1. Állapot / Overall state
+
+Az `install.sh check` lelete / Finding of `install.sh check`: `HEALTH-<csempe>` / `HEALTH-<tile>`, `HEALTH-all`.
 
 Mi fut, mi indul újra, és mit mond a rendszerállapot. / What runs, what restarts, and what the status check says.
 
@@ -19,6 +30,8 @@ docker compose exec web php artisan hdid:health
 ```
 
 ## 2. Naplók / Logs
+
+Az `install.sh check` lelete / Finding of `install.sh check`: `LOG-09`.
 
 Minden folyamat a konténer kimenetére ír. A webkiszolgáló sorai tömör JSON-ok (access log), a többi sor hiba
 vagy figyelmeztetés. / Every process writes to the container output; the web server's lines are compact JSON
@@ -43,6 +56,8 @@ panel, or from the command line below.
 
 ## 3. Újrainduló szolgáltatás / A service keeps restarting
 
+Az `install.sh check` lelete / Finding of `install.sh check`: `SVC-01`, `SVC-02`, `ENV-06`, `ENV-17`, `LOG-01`; javítás / fix: `./install.sh fix --only SVC-01`.
+
 Az indítószkript `openhdid: ERROR:` sora megnevezi az okot. Futó `web` nélkül is ellenőrizhető a tanúsítvány,
 és futtathatók az `artisan` parancsok.
 
@@ -56,6 +71,8 @@ docker compose run --rm --no-deps web artisan hdid:health
 ```
 
 ## 4. Image-letöltés és proxy / Image pull and proxy
+
+Az `install.sh check` lelete / Finding of `install.sh check`: `DOCKER-06`, `DOCKER-07`.
 
 A Docker-démon nem örökli a felhasználó proxyját. Az első két sor megmutatja, van-e proxy (a jelszó helyett
 `***`), és látja-e a démon; a két `curl` közül a `HTTP/2 401` a jó válasz (IPv4, illetve IPv6).
@@ -100,6 +117,8 @@ docker compose exec web php artisan tinker --execute '$c = app(App\System\Health
 
 ## 5. Docker-jogosultság / Docker permissions
 
+Az `install.sh check` lelete / Finding of `install.sh check`: `DOCKER-01`.
+
 `permission denied … docker.sock`: a felhasználó nincs a `docker` csoportban, vagy a tagság új bejelentkezésig
 nem él. Ha a kliens rossz socketet keres, a `DOCKER_HOST` vagy egy docker context a ludas.
 
@@ -123,6 +142,8 @@ export DOCKER_HOST="unix:///run/user/$(id -u)/docker.sock"
 ```
 
 ## 6. Fájlok tulajdonosa / File ownership
+
+Az `install.sh check` lelete / Finding of `install.sh check`: `FILES-03`, `TLS-01`; javítás / fix: `./install.sh fix --only FILES-03`, `./install.sh fix --only TLS-01`.
 
 A telepítési mappa, a `tls`, a `ca`, a `.env` és a `db.env` az üzemeltetőé; a `tls` kulcsa a konténer
 felhasználójáé (82), 400-as joggal. Az utolsó sor a konténer szemszögéből mutatja.
@@ -152,6 +173,8 @@ ls -ln tls   # a leképezett szám a helyes / the mapped number is right
 ```
 
 ## 7. Névfeloldás a konténerből / Name resolution inside the container
+
+Az `install.sh check` lelete / Finding of `install.sh check`: `FILES-05`, `NET-02`, `LOG-05`; javítás / fix: `./install.sh fix --only FILES-05`.
 
 Nem kell minden nevet felvenni. A konténer a Docker beépített DNS-én át a gazdagép DNS-kiszolgálóit kérdezi,
 tehát ami a belső DNS-ben van, azt magától feloldja. A gazdagép `/etc/hosts` bejegyzéseit viszont nem látja.
@@ -265,6 +288,13 @@ docker compose exec web php artisan hdid:emd-sync-token
 ```
 
 ## 10. Tanúsítvány-lánc és belső CA / Certificate chain and internal CA
+
+Az `install.sh check` lelete / Finding of `install.sh check`: `TLS-04`, `TLS-05`, `LOG-04`; javítás / fix: `./install.sh fix --only TLS-04`.
+
+A `ca` mappába a konténer felhasználója (uid 82) „másként” lép be: a mappa 755, a CA-fájlok 644 legyenek, különben
+induláskor egy CA-t sem vesz fel (`TLS-05`: `chmod 755 ca && chmod 644 ca/*.pem`, utána újraindítás).
+The container user (uid 82) enters `ca` as "others": the folder 755, the CA files 644, or no CA is taken at start
+(`TLS-05`: `chmod 755 ca && chmod 644 ca/*.pem`, then a restart).
 
 „unable to get local issuer certificate”: a lánc utolsó `i:` sora a hiányzó kiadó. A CA-tanúsítvány PEM-ben a
 `ca` mappába, utána újraindítás (az `up -d` nem elég), végül a napló mutatja, hány CA-t vett fel.
@@ -398,6 +428,8 @@ error starts with the HTTP status and says what Exchange answered.
 
 ## 14. Mentés és visszaállítás / Backup and restore
 
+Az `install.sh check` lelete / Finding of `install.sh check`: `FILES-09`.
+
 ```sh
 ./backup.sh
 ./backup.sh list
@@ -426,6 +458,8 @@ docker compose exec web php artisan tinker --execute 'App\Models\AuditLog::query
 ```
 
 ## 15. Használati profil fájlja / Usage profile file
+
+Az `install.sh check` lelete / Finding of `install.sh check`: `FILES-04`, `FILES-06`; javítás / fix: `./install.sh fix --only FILES-04`.
 
 ```
 compose file "profiles/5k/compose.yaml" set by COMPOSE_FILE environment variable is invalid: stat …/profiles/5k/compose.yaml: no such file or directory
@@ -481,6 +515,8 @@ docker compose config --quiet && docker compose up -d
 
 ## 16. Demóadat éles környezetben / Demo data in production
 
+Az `install.sh check` lelete / Finding of `install.sh check`: `SVC-02`.
+
 A `migrate` 64-es kóddal kilép, a hiba szerint az adatbázisban demóadat van (`.test` tartományú fiókok és
 ügyféltörzstételek, demóhívások), ezért a `web`, a `worker` és az ütemező nem indul. Éles telepítéshez üres
 adatbázis kell; a demókötetet a feltöltött fájlokkal együtt törölni kell. / `migrate` exits with code 64, the
@@ -518,6 +554,8 @@ centre, mobile backend): in a browser the panel and the portal work on the `APP_
 
 ## 18. Sok 429 vagy 503 / Many 429 or 503 answers
 
+Az `install.sh check` lelete / Finding of `install.sh check`: `ENV-11`, `ENV-13`, `LOG-07`; javítás / fix: `./install.sh fix --only ENV-11`, `./install.sh fix --only ENV-13`.
+
 A 429 („Túl sok kérés érkezett erről a címről…”, `Retry-After: 5`) az nginx kliens-címenkénti korlátja
 (alapból 20 kérés/s, 100-as löket, 16 egyidejű kérés; IPv6-on a /64-es hálózat a kulcs; a mentesített hálózatokra nem hat); az 503 („A
 szolgáltatás most túlterhelt…”, `Retry-After: 10`) azt jelenti, hogy nincs szabad PHP-FPM folyamat, és a
@@ -549,6 +587,8 @@ docker compose logs web | grep -E 'nginx: (at most|no request)'      # a korlát
 
 ## 19. SMTP: „TLS required” / SMTP: "TLS required"
 
+Az `install.sh check` lelete / Finding of `install.sh check`: `LOG-08`.
+
 SMTP-n a STARTTLS kötelező (`MAIL_REQUIRE_TLS`, alapból `true`): ha a kiszolgáló nem kínálja, a levél nem megy
 ki, a Levelezés kártya piros. / STARTTLS is mandatory on SMTP (`MAIL_REQUIRE_TLS`, `true` by default): when the
 server does not offer it, the mail is not sent and the Mail tile is red.
@@ -565,12 +605,30 @@ Then `docker compose up -d`.
 
 ## 20. Valkey memória és munkamenet-tár / Valkey memory and session store
 
+Az `install.sh check` lelete / Finding of `install.sh check`: `ENV-18`, `VALKEY-01`, `LOG-06`.
+
+A jelszó a gazdagép héjában nincs meg (a `.env`-et a Compose olvassa, nem a héj): a `web` konténerből jön, és a
+`REDISCLI_AUTH` környezeti változón át jut a `valkey-cli`-hez, így parancssori argumentumba sem kerül (más
+helyi felhasználó a `ps` kimenetében látná). Jelszó nélküli Valkey-nél (régi telepítés, 21. fejezet) az első és
+az utolsó sor elmarad. / The password is not in the host shell (Compose reads `.env`, the shell does not): it
+comes from the `web` container and reaches `valkey-cli` through the `REDISCLI_AUTH` environment variable, so
+it never lands on a command line (another local user would see it in `ps`). For a Valkey without a password
+(an old installation, chapter 21) leave out the first and the last line.
+
 ```sh
-docker compose exec valkey valkey-cli -a "$REDIS_PASSWORD" INFO memory | grep -E 'used_memory_human|maxmemory_human|maxmemory_policy'
-docker compose exec valkey valkey-cli -a "$REDIS_PASSWORD" INFO stats | grep evicted_keys
-docker compose exec valkey-sessions valkey-cli -a "$REDIS_PASSWORD" INFO memory | grep -E 'used_memory_human|maxmemory_human|maxmemory_policy'
-docker compose exec valkey-sessions valkey-cli -a "$REDIS_PASSWORD" INFO stats | grep evicted_keys
+export REDISCLI_AUTH="$(docker compose exec -T web php -r 'echo getenv("REDIS_PASSWORD");')"
+docker compose exec -T -e REDISCLI_AUTH valkey valkey-cli INFO memory | grep -E 'used_memory_human|maxmemory_human|maxmemory_policy'
+docker compose exec -T -e REDISCLI_AUTH valkey valkey-cli INFO stats | grep evicted_keys
+docker compose exec -T -e REDISCLI_AUTH valkey-sessions valkey-cli INFO memory | grep -E 'used_memory_human|maxmemory_human|maxmemory_policy'
+docker compose exec -T -e REDISCLI_AUTH valkey-sessions valkey-cli INFO stats | grep evicted_keys
+unset REDISCLI_AUTH
 ```
+
+Külső Valkey-nél a `REDIS_PASSWORD`, illetve a `REDIS_SESSION_PASSWORD` a szolgáltató felületén ellenőrizhető;
+a kötelező politikát a rendszerállapot `valkey` és `session_store` csempéje és az `install.sh check`
+`VALKEY-01` lelete is mutatja. / With an external Valkey check `REDIS_PASSWORD` and `REDIS_SESSION_PASSWORD`
+with the provider; the required policy also shows on the `valkey` and `session_store` tiles of the system status
+and as finding `VALKEY-01` of `install.sh check`.
 
 A fő Valkey politikája `noeviction` legyen (kiszorításnál a korlátszámlálók, a zárak és a várakozó feladatok
 csendben elvesznének), a munkamenet-Valkey-é `allkeys-lru`. 80 % fölött az `OPENHDID_VALKEY_MAXMEMORY` és az
@@ -588,3 +646,143 @@ kulcselőtagot használja: saját Valkey, vagy legalább saját adatbázis, ACL-
 fejezet). / If the scheduler and queue tiles are red because of "another installation", another installation
 uses the same Valkey and key prefix: give each its own Valkey, or at least its own database, ACL user and
 `REDIS_PREFIX`/`CACHE_PREFIX` (change the prefix only while the queue is empty: operations manual, chapter 6).
+
+## 21. Régi, adatbázisos alapértékű telepítés / An old installation with the database defaults
+
+Az `install.sh check` lelete / Finding of `install.sh check`: `ENV-07`, `ENV-08`; javítás / fix: `./install.sh fix --only ENV-07`.
+
+Egy régebbi `env.example`-ből készült telepítés a munkameneteket, a gyorsítótárat és a sort az adatbázisban
+tartja, miközben a beépített Valkey fut, gyakran jelszó nélkül. Működik, de a profilok méretezése a Valkey-re
+számol, és a jelszó nélküli Valkey a konténerhálózaton bárkinek nyitott. Felismerés: / An installation made from
+an older `env.example` keeps sessions, cache and queue in the database while the bundled Valkey runs, often
+without a password. It works, but the profiles are sized for Valkey, and a Valkey without a password is open to
+anyone on the container network. To recognise it:
+
+```sh
+grep -E '^(SESSION_DRIVER|CACHE_STORE|QUEUE_CONNECTION|REDIS_PASSWORD)=' .env | sed -E 's/^(REDIS_PASSWORD)=.+/\1=(megadva \/ set)/'
+docker compose ps valkey valkey-sessions
+```
+
+Vezetett átállás: `./install.sh fix --only ENV-07` (lépésenként kimondja, mit tesz, és megerősítést kér). Kézzel
+ugyanez: / Guided move: `./install.sh fix --only ENV-07` (it says what it does step by step and asks first). The
+same by hand:
+
+```sh
+cp -p .env ".env.bak-$(date +%Y%m%d-%H%M%S)"
+docker compose stop web scheduler            # új feladat ne kerüljön a régi sorba / no new job into the old queue
+docker compose exec worker php artisan queue:monitor database:priority,database:default,database:sync
+# ismételje, amíg mindhárom sor 0 / repeat until all three are 0
+openssl rand -hex 24                         # a REDIS_PASSWORD sorba, ha üres / into REDIS_PASSWORD when empty
+sed -i -E 's/^(SESSION_DRIVER|CACHE_STORE|QUEUE_CONNECTION)=database$/\1=redis/' .env
+grep -E '^COMPOSE_PROFILES=' .env            # a redis profil legyen benne / must hold the redis profile
+docker compose up -d --force-recreate valkey valkey-sessions
+docker compose up -d
+```
+
+A sorok neve a `.env` `HDID_PRIORITY_QUEUE` és `EMD_SYNC_QUEUE` értéke (alapból `priority` és `sync`). Hatása:
+egyszer mindenki kilép (a munkamenetek nem költöznek át), a gyorsítótár egyszer üres (a beállítások magától
+újratöltődnek, a korlátszámlálók nulláról indulnak); a `failed_jobs` tábla és az Üzenetsorok oldal megmarad,
+adat nem törlődik (a `jobs`, `cache`, `sessions` tábla marad, csak nem használt). Ha a sor nem ürül ki, a
+javító választást kínál (vár tovább, megszakít: a web és az ütemező újraindul, a `.env` változatlan; vagy
+folytat: a maradék a `jobs` táblában marad). / The queue names are the `.env` values `HDID_PRIORITY_QUEUE` and
+`EMD_SYNC_QUEUE` (`priority` and `sync` by default). Effect: everyone is signed out once (the sessions do not
+move over), the cache is empty once (the settings reload by themselves, the rate counters start from zero); the
+`failed_jobs` table and the Queues page stay, no data is deleted (the `jobs`, `cache`, `sessions` tables stay,
+unused). If the queue does not drain, the fix offers a choice (wait more, cancel: web and scheduler start again,
+`.env` unchanged; or go on: the rest stays in the `jobs` table).
+
+## 22. Késő ütemezett feladat, beragadt zár / A late scheduled task, a stuck lock
+
+Az `install.sh check` lelete / Finding of `install.sh check`: `SCHED-01`; javítás / fix: `./install.sh fix --only SCHED-01`.
+
+Az ütemezett feladatok átfedés elleni zárat tartanak, amíg futnak. Ha az ütemező futás közben leáll
+(frissítés, újraindítás), a zár megmarad, és a feladat a zár lejártáig kimarad; 1.15.0 előtt ez 24 óra volt
+(élő eset: az ügyféltörzs tokenjének 15 perces frissítése, a `sync_auth` csempe piros), 1.15.0-tól legfeljebb
+a feladat futási ideje (a tokennél 10 perc). Mi van ütemezve, és mely zárak élnek: / Scheduled tasks hold an
+overlap lock while they run. If the scheduler stops during a run (upgrade, restart), the lock stays and the task
+is skipped until the lock expires; before 1.15.0 that was 24 hours (live case: the 15-minute refresh of the
+master data token, the `sync_auth` tile red), from 1.15.0 at most the task's run time (10 minutes for the token).
+What is scheduled, and which locks are held:
+
+```sh
+docker compose exec scheduler php artisan schedule:list
+docker compose exec scheduler php artisan tinker --execute 'foreach (app(Illuminate\Console\Scheduling\Schedule::class)->events() as $e) { if ($e->withoutOverlapping && $e->mutex->exists($e)) { echo $e->description ?: $e->command, " (", $e->expiresAt, " perc / minutes)", PHP_EOL; } }'
+docker compose exec scheduler ps -o args
+```
+
+Ha egy zár él, de a folyamatlistában nincs hozzá futó `artisan` parancs, a zár beragadt; feloldása (minden
+tartott átfedés-zárat elenged, adatot nem érint; futó feladat mellett ne használja): / If a lock is held but no
+`artisan` command of it shows in the process list, the lock is stuck; releasing it (frees every held overlap
+lock, touches no data; do not use it while the task runs):
+
+```sh
+docker compose exec scheduler php artisan schedule:clear-cache
+```
+
+Két alkalmazásgépen (10k) az ütemező csak az A gépen fut: ott kell futtatni. / On two application hosts (10k)
+the scheduler runs on host A only: run it there.
+
+## 23. Valkey-jelszó: REDIS_PASSWORD_FILE és eltérő jelszó / Valkey password: REDIS_PASSWORD_FILE and a mismatch
+
+Az `install.sh check` lelete / Finding of `install.sh check`: `ENV-08`, `ENV-09`, `ENV-10`, `LOG-02`; javítás / fix: `./install.sh fix --only ENV-09`, `./install.sh fix --only ENV-10`.
+
+A beépített `valkey` és `valkey-sessions` a jelszót a `.env` `REDIS_PASSWORD` sorából kapja induláskor; a
+`REDIS_PASSWORD_FILE` titokfájlt nem olvassa, ezért mellette a Valkey jelszó nélkül vagy más jelszóval fut,
+mint amit az alkalmazás küld (`NOAUTH`, `WRONGPASS` a naplóban). Titokfájl csak külső Valkey-nél való. Ha a
+`.env` jelszava változott, a Valkey a régivel fut tovább, amíg újra nem jön létre. / The bundled `valkey` and
+`valkey-sessions` take their password from the `.env` line `REDIS_PASSWORD` at start; they do not read the
+`REDIS_PASSWORD_FILE` secret file, so next to it Valkey runs without a password or with another one than the
+application sends (`NOAUTH`, `WRONGPASS` in the logs). A secret file is for an external Valkey only. When the
+password in `.env` changed, Valkey keeps the old one until it is recreated.
+
+```sh
+grep -nE '^REDIS_(PASSWORD|PASSWORD_FILE|HOST)=' .env | sed -E 's/^([0-9]+:REDIS_PASSWORD)=.+/\1=(megadva \/ set)/'
+docker compose logs --since 1h --no-log-prefix web worker | grep -cE 'NOAUTH|WRONGPASS'
+REDISCLI_AUTH="$(docker compose exec -T web php -r 'echo getenv("REDIS_PASSWORD");')" docker compose exec -T -e REDISCLI_AUTH valkey valkey-cli --no-auth-warning PING
+```
+
+Javítás: a jelszó a `REDIS_PASSWORD` sorba (a `REDIS_PASSWORD_FILE` sor kikommentelve), utána
+`docker compose up -d --force-recreate valkey valkey-sessions` és `docker compose up -d`; a várakozó feladatok
+és a munkamenetek az AOF/RDB miatt megmaradnak. / Fix: the password into the `REDIS_PASSWORD` line (the
+`REDIS_PASSWORD_FILE` line commented out), then `docker compose up -d --force-recreate valkey valkey-sessions`
+and `docker compose up -d`; queued jobs and sessions survive through AOF/RDB.
+
+## 24. A telepítő: check, fix, report / The installer: check, fix, report
+
+```sh
+./install.sh check                 # ember számára / for a person; kilépési kód / exit code 0, 1, 2
+./install.sh check --json          # gépnek / for a machine (openhdid-check/1)
+./install.sh fix                   # minden javítható lelet, egyenként megerősítve / every fixable finding, one by one
+./install.sh fix --only ENV-07,SCHED-01
+./install.sh report                # report/openhdid-report-<időbélyeg>.tar.gz, 600, kitakarva / masked
+```
+
+A `check` csak olvas. A `fix` minden lelet előtt kimondja, mit fog tenni (parancsok, kulcsok, leállás és
+hatása), megerősítést kér, a `.env`-et előtte `.env.bak-<időbélyeg>` néven (600) menti, a megjegyzéseket
+megtartja; rootot nem kér, adatot nem töröl, meglévő adat mellett `APP_KEY`-t nem generál. A `report` csomagja
+a gépen marad; a titkok, a jelszavas címek, a tokenek és a naplók személyes adatai kitakarva; küldés előtt
+nézze át. / `check` only reads. Before each finding `fix` says what it will do (commands, keys, downtime and its
+effect), asks first, saves `.env` as `.env.bak-<stamp>` (600) beforehand and keeps its comments; it needs no
+root, deletes no data and never generates an `APP_KEY` next to existing data. The `report` package stays on the
+host; secrets, addresses with passwords, tokens and personal data in the logs are masked; review it before
+sending it.
+
+Súlyosság / severity: `error` (hiba, kilépési kód 2), `warning` (figyelmeztetés, 1), `info` (tájékoztatás, 0).
+Az azonosítók és a fejezetek / The ids and the chapters:
+
+| Azonosító / Id | Terület / Area | Fejezet / Chapter | Javítás / Fix |
+|---|---|---|---|
+| `HOST-01`…`HOST-07` | gép: mag, memória, lemez, idő, root, portok, rootless alsó portok / host | telepítési útmutató 2., 3., 6.1 | – |
+| `DOCKER-01`…`DOCKER-08` | Docker: démon, verziók, Podman, rootless, démon-proxy, image-ek, rootless NFS / Docker | 4., 5. | – |
+| `FILES-01`…`FILES-09` | fájlok: compose.yaml, .env, db.env, jogok, profilfájl, override, Compose-hiba, ellenőrzőösszeg, válaszfájl, mentés / files | 6., 7., 14., 15. | `FILES-03` FIX-PERMS, `FILES-04` FIX-PROFILE-FILE, `FILES-05` FIX-OVERRIDE |
+| `ENV-01`…`ENV-18`, `ENV-21` | környezet: új és megszűnt kulcsok, verzió, APP_KEY, APP_URL, éles védelmek, adatbázisos alapérték, Valkey-jelszó, mentesített hálózatok, terheléselosztó, nginx-dolgozók, átvételi sor, log levelező, 10k szerep, check-env, előtag, adatbázis-jelszó / environment | 3., 18., 20., 21., 23.; UPGRADE.md 3.–5. | `ENV-01` FIX-ENV-KEYS, `ENV-02` FIX-ENV-OBSOLETE, `ENV-04` FIX-APP-KEY, `ENV-07`/`ENV-08` FIX-DB-TO-REDIS, `ENV-09` FIX-REDIS-PASSWORD-FILE, `ENV-10` FIX-VALKEY-RECREATE, `ENV-11` FIX-EXEMPT, `ENV-13` FIX-NGINX-WORKERS, `ENV-14` FIX-PRIORITY-QUEUE |
+| `TLS-01`…`TLS-05` | tanúsítvány: fájlok, lejárat, kulcspár és lánc, CA-mappa és annak joga / certificate, CA folder and its mode | 6., 10.; telepítési útmutató 6.3 | `TLS-01`…`TLS-03` FIX-TLS-INSTALL, `TLS-04` FIX-CA-RESTART, `TLS-05` kézi / manual |
+| `NET-01`…`NET-03` | hálózat: DNS, névfeloldás a konténerből, portok (`OPENHDID_TLS=off` mellett csak a HTTP-port) / network, ports (HTTP only behind a TLS-terminating balancer) | 7.; telepítési útmutató 6.1, 6.2 | `NET-03` FIX-UP |
+| `DB-01`…`DB-03` | adatbázis: futási és migrációs fiók, függő migráció, jogok / database | telepítési útmutató 7. | – |
+| `SVC-01`…`SVC-05` | szolgáltatások: állapot, migrate, image és a beállítás lenyomata (a Compose config-hash-e), OOM, ütemező a B gépen / services, image and configuration hash | 3., 16.; UPGRADE.md 5. | `SVC-01`, `SVC-03` FIX-UP |
+| `HEALTH-<csempe>` | a `hdid:health` nem zöld csempéi; a bekötetlen integráció figyelmeztetés / status tiles | 1.; üzemeltetési kézikönyv 1., 6. | – |
+| `VALKEY-01` | Valkey-politika és memória / Valkey policy and memory | 20. | – |
+| `SCHED-01` | beragadt ütemező-zár / stuck scheduler lock | 22. | FIX-SCHED-LOCK |
+| `LOG-01`…`LOG-09` | ismert naplóhibák (24 óra) / known log errors | 2., 3., 7., 10., 18.–20., 23. | `LOG-02` FIX-VALKEY-RECREATE, `LOG-04` FIX-CA-RESTART |
+| `INFRA-01`…`INFRA-04` | a kétgépes 10k infra gépe / the infra host | telepítési útmutató 15.8 | `INFRA-01` FIX-UP |
+| `K8S-01`, `K8S-02` | a 20k kimenet fájljai és az overlay / the 20k output | telepítési útmutató 15.5 | `K8S-01` FIX-PERMS |

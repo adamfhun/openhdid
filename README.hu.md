@@ -18,7 +18,24 @@ Az OpenHDID futtatásra kész konténer-image-ként jelenik meg. Ez a repó a te
 
 ## Gyors indítás
 
-Feltételek: Linux-kiszolgáló Docker Engine 27+ és Docker Compose 2.24+ verzióval (Podman nem támogatott), a használati profil szerinti gép (5k profil: 4 vCPU, 8 GB RAM, 80 GB lemez; kipróbáláshoz 2 vCPU, 4 GB is elég), egy DNS-név és hozzá TLS-tanúsítvány (teljes lánc és kulcs PEM-formátumban).
+Feltételek: Linux-kiszolgáló Docker Engine 27+ és Docker Compose 2.24+ verzióval (Podman nem támogatott), a használati profil szerinti gép (kipróbálás: 2 vCPU, 8 GB RAM, 20 GB lemez; 5k profil: 4 vCPU, 10 GB, 80 GB; 10k egy gépen: 8 vCPU, 16 GB, 120 GB), egy DNS-név és hozzá TLS-tanúsítvány (teljes lánc és kulcs PEM-formátumban).
+
+**A telepítővel (ajánlott).** Az `install.sh` megkérdezi a nyelvet és azt, mit szeretne telepíteni (kipróbálás, 5k egy gépen, 10k egy gépen, 10k két alkalmazásgéppel és infra géppel, 20k Kubernetes), a kiadás fájljait ellenőrzőösszeggel tölti le, a titkokat maga készíti, a `.env`-et és a `db.env`-et 600-as joggal írja, elindítja a vermet és ellenőrzi; minden lépésnél kimondja, mit és miért csinál, és a gépen kívüli teendőket (DNS, tűzfal, terheléselosztó, NFS) pontos parancsokkal írja ki. Rootot nem kér (a `docker` csoport tagsága elég, rootless Dockerrel is működik), csomagot nem telepít.
+
+```sh
+mkdir openhdid && cd openhdid
+base=https://github.com/adamfhun/openhdid/releases/latest/download
+curl -fsSL -O "$base/install.sh" -O "$base/SHA256SUMS"
+sha256sum -c --ignore-missing SHA256SUMS      # install.sh: OK
+chmod 755 install.sh
+./install.sh                                  # nyelv, profil, kérdések, telepítés, ellenőrzés
+./install.sh check                            # bármikor: teljes ellenőrzés, leletenként a teendővel
+./install.sh fix                              # vezetett javítás, leletenként megerősítéssel
+```
+
+A kétgépes 10k sorrendje: előbb az infra gép (`./install.sh --profile 10k-ha --role infra`), amely egy 600-as jogú válaszfájlt ír (`openhdid-10k-answers.txt`); ezzel az A, majd a B gép (`./install.sh --answers openhdid-10k-answers.txt --role a`, illetve `--role b`); a fájl használat után mindhárom gépen törlendő. Részletek: telepítési útmutató 16. fejezet.
+
+**Kézzel**, a telepítő nélkül:
 
 ```sh
 mkdir openhdid && cd openhdid
@@ -103,7 +120,7 @@ Nem privilegizált felhasználóként (uid 82) fut, csak olvasható gyökér-fá
 Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz. A `v` a telepített verzió (a `.env` `OPENHDID_VERSION` értéke):
 
 ```sh
-v=1.14.1
+v=1.15.0
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -118,8 +135,10 @@ A telepítés három használati profil egyikére méretezhető; a profilt a `.e
 
 | Profil | Ügyfél (egyidejű portálhasználó) | Topológia | Fájl |
 |---|---|---|---|
-| `5k` | 5 000 (250–400) | egy kiszolgáló, 4 vCPU / 8 GB, beépített MariaDB és Valkey, 2 feldolgozó | `profiles/5k/compose.yaml` (a kiadás `profile-5k.yaml` melléklete; `COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) |
+| `5k` | 5 000 (250–400) | egy kiszolgáló, 4 vCPU / 10 GB, beépített MariaDB és Valkey, 2 feldolgozó | `profiles/5k/compose.yaml` (a kiadás `profile-5k.yaml` melléklete; `COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) |
 | `10k` | 10 000 (500–800) | két alkalmazásgép terheléselosztó mögött (magas rendelkezésre állás), külső MariaDB és Valkey, NFS a `storage` kötetnek | `profiles/10k/compose.yaml` mindkét gépen (a kiadás `profile-10k.yaml` melléklete; `COMPOSE_PROFILES=primary` csak az egyiken), vagy `kubernetes/overlays/10k` |
+| `10k-single` | 10 000 (500–800) | egy nagyobb kiszolgáló, 8 vCPU / 16 GB, beépített MariaDB és Valkey, 3 feldolgozó; magas rendelkezésre állás nélkül | `profiles/10k/single.yaml` (a kiadás `profile-10k-single.yaml` melléklete; `COMPOSE_FILE=compose.yaml:profiles/10k/single.yaml`) |
+| `10k` infra gép | – | a kétgépes 10k MariaDB-je, fő és munkamenet-Valkey-je egy gépen (4 vCPU / 10 GB), ha nincs saját | `profiles/10k/infra.yaml` (a kiadás `profile-10k-infra.yaml` melléklete; az `install.sh` állítja be) |
 | `20k` | 20 000 (1 000–1 600) | Kubernetes: web 3–6 pod, 3 feldolgozó, menedzselt MariaDB és Valkey, RWX kötet | `kubernetes/overlays/20k` (`kubectl apply -k`) |
 
 Minden profil 20–30 ügyintézővel számol; a munkamenet, a gyorsítótár és az üzenetsor mindhárom profilban Valkey-n fut. Két alkalmazásgép vagy Kubernetes esetén a TLS a terheléselosztón vagy az ingressen zárul le (`OPENHDID_TLS=off`, `TRUSTED_PROXIES` a terheléselosztó címe), a `storage` kötet közös, az ütemezőből pontosan egy fut, a migráció a közös Valkey zárja alatt egyszerre csak egy gépen. A terheléselosztó élő-próbája a `/up`, a felügyeleté a `/health`.
@@ -133,6 +152,8 @@ A [`docs/`](docs) mappában, magyarul, PDF-formában; minden kiadáshoz csatolva
 - `openhdid-telepitesi-utmutato`: telepítési útmutató (feltételek, beállítási referencia, HTTPS, adatbázis, első lépések, külső rendszerek, átvételi próbák)
 - `openhdid-uzemeltetesi-kezikonyv`: üzemeltetési kézikönyv (naplók, ütemező, rendszerállapot, mentés és visszaállítás, frissítés, skálázás, biztonság)
 - `felhasznaloi-kezikonyv`: felhasználói kézikönyv ügyintézőknek és rendszergazdáknak
+
+A repó gyökerében és kiadási mellékletként: `UPGRADE.md` (frissítés), `TROUBLESHOOTING.md` (hibakeresés, az `install.sh check` lelet-azonosítóival), `install.sh` (telepítő, ellenőrző és javító), `backup.sh` (mentés és visszaállítás).
 
 ## Biztonság
 

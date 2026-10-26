@@ -10,6 +10,7 @@
 #   key                 prints a new APP_KEY for a new installation (never replace a live key)
 #   reload              re-checks the TLS files and reloads nginx without dropping connections
 #   tls-check           validates the mounted certificate and key, prints a summary
+#   check-env [role]    runs the start checks of a role (default web) and exits; nothing starts
 #   healthcheck [live]  used by the image HEALTHCHECK (PHP-FPM answers /up); "live" asks nginx only
 #   version             prints the release version
 set -eu
@@ -180,6 +181,12 @@ case "$cmd" in
         load_file_secrets
         exec php "$SHARE/runtime.php" tls-check
         ;;
+    check-env)
+        # The same start checks as a role (install.sh check reads the ERROR and warning lines).
+        load_file_secrets
+        session_store
+        exec php "$SHARE/runtime.php" check-env "${1:-web}"
+        ;;
     healthcheck)
         exec php "$SHARE/runtime.php" healthcheck "$@"
         ;;
@@ -187,6 +194,6 @@ case "$cmd" in
         printf '%s\n' "${HDID_VERSION:-unknown}"
         ;;
     *)
-        die "unknown command '$cmd' (web, worker, scheduler, migrate, artisan, key, reload, tls-check, healthcheck, version)"
+        die "unknown command '$cmd' (web, worker, scheduler, migrate, artisan, key, reload, tls-check, check-env, healthcheck, version)"
         ;;
 esac

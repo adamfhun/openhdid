@@ -21,7 +21,15 @@ class HealthCommand extends Command
         $results = $checks->all();
 
         if ($this->option('json')) {
-            $this->line((string) json_encode(array_map(fn ($c) => ['key' => $c->key, 'status' => $c->status->value, 'detail' => $c->detail], $results), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            // key, status and detail first, as before; label, group and hint for install.sh check.
+            $this->line((string) json_encode(array_map(fn ($c) => [
+                'key' => $c->key,
+                'status' => $c->status->value,
+                'detail' => $c->detail,
+                'label' => $c->label,
+                'group' => $c->group->value,
+                'hint' => $c->hint,
+            ], $results), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         } else {
             $this->table(['check', 'status', 'detail'], array_map(fn ($c) => [$c->label, $c->status->value, $c->detail], $results));
         }

@@ -18,7 +18,24 @@ OpenHDID is published as a ready-to-run container image. This repository holds t
 
 ## Quick start
 
-Requirements: a Linux host with Docker Engine 27+ and Docker Compose 2.24+ (Podman is not supported), sized to the usage profile (5k profile: 4 vCPU, 8 GB RAM, 80 GB disk; 2 vCPU and 4 GB are enough for a trial), a DNS name and a TLS certificate for it (full chain and key in PEM).
+Requirements: a Linux host with Docker Engine 27+ and Docker Compose 2.24+ (Podman is not supported), sized to the usage profile (trial: 2 vCPU, 8 GB RAM, 20 GB disk; 5k profile: 4 vCPU, 10 GB, 80 GB; 10k on one host: 8 vCPU, 16 GB, 120 GB), a DNS name and a TLS certificate for it (full chain and key in PEM).
+
+**With the installer (recommended).** `install.sh` asks for the language and what to install (trial, 5k on one host, 10k on one host, 10k with two application hosts and an infra host, 20k Kubernetes), downloads the release files with their checksums, makes the secrets itself, writes `.env` and `db.env` with mode 600, starts the stack and checks it; at every step it says what it does and why, and it prints the steps outside the host (DNS, firewall, load balancer, NFS) as exact commands. It needs no root (membership of the `docker` group is enough, rootless Docker works too) and installs no package.
+
+```sh
+mkdir openhdid && cd openhdid
+base=https://github.com/adamfhun/openhdid/releases/latest/download
+curl -fsSL -O "$base/install.sh" -O "$base/SHA256SUMS"
+sha256sum -c --ignore-missing SHA256SUMS      # install.sh: OK
+chmod 755 install.sh
+./install.sh                                  # language, profile, questions, installation, check
+./install.sh check                            # any time: the full check, with the remedy per finding
+./install.sh fix                              # guided repair, each finding confirmed
+```
+
+The order of the two-host 10k: the infra host first (`./install.sh --profile 10k-ha --role infra`), which writes an answers file of mode 600 (`openhdid-10k-answers.txt`); with it host A, then host B (`./install.sh --answers openhdid-10k-answers.txt --role a`, then `--role b`); delete the file on all three hosts after use. Details: installation guide, chapter 16 (Hungarian).
+
+**By hand**, without the installer:
 
 ```sh
 mkdir openhdid && cd openhdid
@@ -101,7 +118,7 @@ The image contains only what runs the application: Alpine Linux, PHP-FPM with th
 Every image is signed and carries a build provenance and an SBOM attestation. Set `v` to the version you install (the `OPENHDID_VERSION` of your `.env`):
 
 ```sh
-v=1.14.1
+v=1.15.0
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -116,8 +133,10 @@ A deployment is sized to one of three usage profiles; `.env` selects the profile
 
 | Profile | Clients (concurrent portal users) | Topology | Files |
 |---|---|---|---|
-| `5k` | 5,000 (250–400) | one host, 4 vCPU / 8 GB, bundled MariaDB and Valkey, 2 workers | `profiles/5k/compose.yaml` (the release asset `profile-5k.yaml`; `COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) |
+| `5k` | 5,000 (250–400) | one host, 4 vCPU / 10 GB, bundled MariaDB and Valkey, 2 workers | `profiles/5k/compose.yaml` (the release asset `profile-5k.yaml`; `COMPOSE_FILE=compose.yaml:profiles/5k/compose.yaml`) |
 | `10k` | 10,000 (500–800) | two application hosts behind a load balancer (high availability), external MariaDB and Valkey, NFS for the `storage` volume | `profiles/10k/compose.yaml` on both hosts (the release asset `profile-10k.yaml`; `COMPOSE_PROFILES=primary` on one of them), or `kubernetes/overlays/10k` |
+| `10k-single` | 10,000 (500–800) | one larger host, 8 vCPU / 16 GB, bundled MariaDB and Valkey, 3 workers; no high availability | `profiles/10k/single.yaml` (the release asset `profile-10k-single.yaml`; `COMPOSE_FILE=compose.yaml:profiles/10k/single.yaml`) |
+| `10k` infra host | – | MariaDB, main and session Valkey of the two-host 10k on one host (4 vCPU / 10 GB), when you have none of your own | `profiles/10k/infra.yaml` (the release asset `profile-10k-infra.yaml`; `install.sh` sets it up) |
 | `20k` | 20,000 (1,000–1,600) | Kubernetes: 3–6 web pods, 3 workers, managed MariaDB and Valkey, RWX volume | `kubernetes/overlays/20k` (`kubectl apply -k`) |
 
 Every profile assumes 20–30 agents; sessions, cache and queue run on Valkey in all three. With two hosts or Kubernetes, TLS ends at the load balancer or the ingress (`OPENHDID_TLS=off`, `TRUSTED_PROXIES` set to the balancer), the `storage` volume is shared, exactly one scheduler runs, and the migration runs on one host at a time under the shared Valkey lock. The load balancer's liveness probe is `/up`, monitoring uses `/health`.
@@ -131,6 +150,8 @@ In [`docs/`](docs), in Hungarian, as PDF (also attached to every release):
 - `openhdid-telepitesi-utmutato` – installation guide: requirements, configuration reference, HTTPS, database, first steps, external systems, acceptance tests
 - `openhdid-uzemeltetesi-kezikonyv` – operations manual: logs, scheduler, health checks, backup and restore, upgrades, scaling, security
 - `felhasznaloi-kezikonyv` – user manual for agents and administrators
+
+In the repository root and attached to every release, in Hungarian and English: `UPGRADE.md` (upgrading), `TROUBLESHOOTING.md` (troubleshooting, with the finding ids of `install.sh check`), `install.sh` (installer, checker and fixer), `backup.sh` (backup and restore).
 
 ## Security
 
