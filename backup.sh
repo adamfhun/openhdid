@@ -195,9 +195,14 @@ run_web() {
     return "$status"
 }
 
-# The operator's own files, archived with the operator's rights.
+# The operator's own files, archived with the operator's rights. The restore takes plain files
+# only, while a CA folder may be a Kubernetes-style layout or link a CA in from elsewhere on the
+# host: the files are copied with their links resolved and their modes kept (cp -Lp: the restore
+# keeps the archived modes, and the container user reads the CA files) into a folder of the
+# backup in progress ($1, mode 700), and archived from there. tar -h would store a file reached twice as
+# a hard link (GNU tar), and a -C between the names means something else to busybox tar.
 config_archive() {
-    local files=(.env db.env compose.yaml) profile
+    local stage="$1/.config" files=(.env db.env compose.yaml) profile file status=0
     [[ -f compose.override.yaml ]] && files+=(compose.override.yaml)
     # The usage profile COMPOSE_FILE in .env points to: without it the restored .env names a
     # missing file and no docker compose command works.
@@ -205,10 +210,14 @@ config_archive() {
         [[ -f $profile ]] && files+=("$profile")
     done
     [[ -d ca ]] && files+=(ca)
-    # Links are archived as the files they point to (-h): the restore takes plain files only, and
-    # a CA folder may be a Kubernetes-style layout or link a CA in from elsewhere on the host.
+    mkdir "$stage" || return 1
+    for file in "${files[@]}"; do
+        mkdir -p "$stage/$(dirname "$file")" && cp -RLp "$file" "$stage/$file" || status=1
+    done
     # Archive and compress in two steps: some tar builds (bsdtar) pad a compressed stream.
-    tar chf - "${files[@]}" | gzip -c
+    [[ $status == 0 ]] && { (cd "$stage" && tar cf - "${files[@]}") | gzip -c || status=1; }
+    rm -rf "${stage:?}"
+    return "$status"
 }
 
 # The TLS key belongs to the container user (uid 82, or its namespace id under rootless
@@ -299,7 +308,7 @@ create_backup() {
     gzip -t "$tmp/storage.tar.gz" 2>/dev/null || die "A storage kötet mentése sérült."
     say "    storage kötet: $(du -h "$tmp/storage.tar.gz" | cut -f1)"
 
-    config_archive > "$tmp/config.tar.gz" || die "A beállítások mentése nem sikerült (a .env és a db.env olvasható? a ca mappában nincs törött hivatkozás?)."
+    config_archive "$tmp" > "$tmp/config.tar.gz" || die "A beállítások mentése nem sikerült (a .env és a db.env olvasható? a ca mappában nincs törött hivatkozás?)."
     gzip -t "$tmp/config.tar.gz" 2>/dev/null || die "A beállítások mentése sérült."
     tls_archive > "$tmp/tls.tar.gz" || die "A tls mappa mentése nem sikerült."
     gzip -t "$tmp/tls.tar.gz" 2>/dev/null || die "A tls mappa mentése sérült."

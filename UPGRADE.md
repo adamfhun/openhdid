@@ -11,7 +11,7 @@ The commands run in the installation folder (`/opt/openhdid` in the examples), a
 ### 1. Előkészítés
 
 ```sh
-v=1.15.1
+v=1.15.2
 cd /opt/openhdid
 base=https://github.com/adamfhun/openhdid/releases/download/v$v
 ```
@@ -113,7 +113,7 @@ mindhárom 0), csak ezután a `REDIS_PASSWORD` (ha üres), a `redis` compose-pro
 A kiadás többi teendője (STARTTLS, kéréskorlát, szerepkörök ellenőrzése, Kubernetes NetworkPolicy, demóadat
 élesben) a CHANGELOG „Frissítés előtt” részében áll.
 
-Az 1.15.1-re frissítés egyszer mindenkit kiléptet (a korábbi „emlékezz rám” sütik sem léptetnek be), a
+Az 1.15.0-ról vagy korábbiról az 1.15.1-re vagy újabbra frissítés egyszer mindenkit kiléptet (a korábbi „emlékezz rám” sütik sem léptetnek be), a
 korlátszámlálók nulláról indulnak, és az 5. lépés a beépített `mariadb` konténert is újra létrehozza (`--local-infile=0`,
 néhány másodperc adatbázis-kiesés). Ezután az `APP_URL` vagy az `APP_KEY` minden cseréje ugyanígy mindenkit
 kiléptet. Élesben, EWS-levelezésnél `EWS_VERIFY_TLS=false` mellett az új image nem indul: a 3. lépés után az
@@ -171,7 +171,7 @@ A két gép (A: elsődleges, `COMPOSE_PROFILES=primary`, ütemező és ügyfélt
 a külső MariaDB-t, a két külső Valkey-t és az NFS-en közös `storage` kötetet használja. Előbb mindkét gépen az
 1. lépés, utána ebben a sorrendben.
 
-**1.15.1-re a két gép egy karbantartási ablakban frissül** (nem gördülően): a zárak és a korlátszámlálók neve a
+**1.15.0-ról vagy korábbiról az 1.15.1-re vagy újabbra a két gép egy karbantartási ablakban frissül** (nem gördülően): a zárak és a korlátszámlálók neve a
 telepítésazonosítót viseli, a munkamenetek a telepítéshez kötöttek, így a régi és az új kiadás nem futhat együtt.
 A 3. lépés előtt mindkét gépen `docker compose stop web worker` (az A gépen a `sync-worker` és a `scheduler` is), és
 egyik gép sem kap forgalmat, amíg mindkettő frissült. A frissítés egyszer mindenkit kiléptet, a korábbi
@@ -262,7 +262,7 @@ Előbb a migrációs Job fut le (a migrációs fiókkal, a közös Valkey zárja
 pods`, `kubectl -n openhdid exec deploy/openhdid-web -- php artisan hdid:health`; a Rendszerállapot fejlécében az
 új verzió.
 
-Az 1.15.1-nél a gördülő csere perceiben a régi és az új podok együtt futnak: a két verzió zárai nem zárják ki
+Az 1.15.0-ról vagy korábbiról az 1.15.1-re vagy újabbra frissítésnél a gördülő csere perceiben a régi és az új podok együtt futnak: a két verzió zárai nem zárják ki
 egymást, és a régi podon ekkor létrejött munkamenetet az új pod még egyszer kilépteti. Forgalmon kívüli időben
 frissítsen; teljesen elkerülhető, ha a migrációs Job előtt leállítja a podokat
 (`kubectl -n openhdid scale deploy --all --replicas=0`), ekkor a teljes `apply` végéig kiesés van.
@@ -315,7 +315,7 @@ kubectl apply -k kubernetes/overlays/20k      # a régi címke klónjában
 ### 1. Preparation
 
 ```sh
-v=1.15.1
+v=1.15.2
 cd /opt/openhdid
 base=https://github.com/adamfhun/openhdid/releases/download/v$v
 ```
@@ -415,7 +415,7 @@ unchanged and web and the scheduler start again. The same by hand: TROUBLESHOOTI
 The other steps of this release (STARTTLS, request limit, reviewing the roles, Kubernetes NetworkPolicy, demo
 data in production) are in the "Before upgrading" part of the CHANGELOG.
 
-The upgrade to 1.15.1 signs everybody out once (remember-me cookies issued earlier do not sign them in again), the
+The upgrade from 1.15.0 or earlier to 1.15.1 or later signs everybody out once (remember-me cookies issued earlier do not sign them in again), the
 rate counters start from zero, and step 5 recreates the bundled `mariadb` container too (`--local-infile=0`, a few seconds
 without the database). From then on every change of `APP_URL` or `APP_KEY` signs everybody out the same way. In
 production, with EWS mail, the new image does not start with `EWS_VERIFY_TLS=false`: after step 3,
@@ -473,7 +473,7 @@ Both hosts (A: primary, `COMPOSE_PROFILES=primary`, scheduler and master-data wo
 external MariaDB, the two external Valkeys and the `storage` volume shared on NFS. First step 1 on both hosts, then
 in this order.
 
-**For 1.15.1 both hosts are upgraded in one maintenance window** (not rolling): the names of the locks and rate
+**From 1.15.0 or earlier to 1.15.1 or later both hosts are upgraded in one maintenance window** (not rolling): the names of the locks and rate
 counters carry the installation id and the sessions are bound to the installation, so the old and the new release
 cannot run side by side. Before step 3 run `docker compose stop web worker` on both hosts (on host A the
 `sync-worker` and the `scheduler` too), and neither host takes traffic until both are upgraded. The upgrade signs
@@ -564,7 +564,7 @@ worker with the `Recreate` strategy. For the 10k overlay use `kubernetes/overlay
 get pods`, `kubectl -n openhdid exec deploy/openhdid-web -- php artisan hdid:health`; the system status header
 shows the new version.
 
-For 1.15.1 the old and the new pods run side by side during the minutes of the rolling update: the locks of the two
+From 1.15.0 or earlier to 1.15.1 or later the old and the new pods run side by side during the minutes of the rolling update: the locks of the two
 versions do not exclude each other, and a session created on an old pod then is signed out once more by a new pod.
 Upgrade outside office hours; to avoid it entirely, stop the pods before the migration Job
 (`kubectl -n openhdid scale deploy --all --replicas=0`), with an outage until the full `apply` is done.

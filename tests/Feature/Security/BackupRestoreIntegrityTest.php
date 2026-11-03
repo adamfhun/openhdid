@@ -91,15 +91,24 @@ it('archives a CA folder of symbolic links as plain files, so the restore check 
     symlink('..data/internal-ca.crt', $dir.'/ca/internal-ca.crt');
     file_put_contents($dir.'/host-ca.crt', "-----BEGIN CERTIFICATE-----\n");
     symlink($dir.'/host-ca.crt', $dir.'/ca/host-ca.crt');
+    // The container user reads the CA files: the modes travel with the backup.
+    chmod($dir.'/ca/..2026_01_01_00_00_00.000000000/internal-ca.crt', 0o644);
+    chmod($dir.'/host-ca.crt', 0o644);
+    chmod($dir.'/ca', 0o755);
+    chmod($dir.'/.env', 0o600);
 
     try {
         $result = Process::path($dir)->run(['bash', '-c', 'set -euo pipefail; die() { echo "DIE: $*"; exit 1; }; '
-            .$archive[0].$check[0].'config_archive > config.tar.gz && check_config_archive config.tar.gz && tar tvzf config.tar.gz']);
+            .$archive[0].$check[0].'mkdir -m 700 work && config_archive work > config.tar.gz && [ ! -e work/.config ] && check_config_archive config.tar.gz && tar tvzf config.tar.gz']);
 
         expect($result->exitCode())->toBe(0, $result->output().$result->errorOutput())
             ->and($result->output())->not->toContain('DIE:')
             ->and($result->output())->toContain('ca/host-ca.crt', 'ca/internal-ca.crt')
-            ->and(preg_grep('/^l/', explode("\n", $result->output())))->toBe([]);
+            ->and(preg_grep('/^l/', explode("\n", $result->output())))->toBe([])
+            ->and($result->output())->toMatch('#^-rw-r--r-- .* ca/internal-ca\.crt$#m')
+            ->and($result->output())->toMatch('#^-rw-r--r-- .* ca/host-ca\.crt$#m')
+            ->and($result->output())->toMatch('#^drwxr-xr-x .* ca/?$#m')
+            ->and($result->output())->toMatch('#^-rw------- .* \.env$#m');
     } finally {
         File::deleteDirectory($dir);
         @unlink($dir.'/host-ca.crt');

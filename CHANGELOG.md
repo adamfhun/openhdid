@@ -4,6 +4,24 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.15.2] – 2026-11-04
+
+### Magyar
+- Az 1.15.1 kiadás image-e nem került ki: a kiadási workflow tesztje Linuxon megállt, mert a `backup.sh` új, a `ca` mappa hivatkozásait feloldó mentése GNU tarral egy több úton elért CA-fájlt kemény hivatkozásként tárolt, a visszaállítás pedig csak sima fájlt fogad el. A `v1.15.1` címke kiadás nélkül marad; ez a kiadás az 1.15.1 minden változását tartalmazza.
+- `backup.sh`: a beállítások és a `ca` mappa a készülő mentés 700-as mappájában hivatkozások nélkül, a jogokat megőrizve (`cp -RLp`) másolódik, és onnan kerül az archívumba; GNU, busybox és bsd tarral is csak sima fájlok és mappák, a CA-fájlok jogai (a konténer felhasználója olvassa őket) megmaradnak.
+- UPGRADE.md: az egyszeri kiléptetés, a két alkalmazásgép egy karbantartási ablakban és a Kubernetes gördülő cseréjének figyelmeztetése az 1.15.0-ról vagy korábbiról az 1.15.1-re vagy újabbra frissítésre szól.
+- A dokumentumok verziója 1.15.2.
+
+**Frissítés előtt:** mint az 1.15.1-nél (lásd ott: egyszeri kiléptetés, a két alkalmazásgép egy karbantartási ablakban, a MariaDB és a Valkey konténer újraindul, migrációk); az 1.15.0-ról közvetlenül erre a verzióra kell frissíteni.
+
+### English
+- The image of release 1.15.1 was not published: the test of the release workflow stopped on Linux, because the new backup of `backup.sh`, which resolves the links of the `ca` folder, stored a CA file reached on two paths as a hard link with GNU tar, while the restore takes plain files only. The `v1.15.1` tag stays without a release; this release carries every change of 1.15.1.
+- `backup.sh`: the configuration and the `ca` folder are copied without links and with their modes (`cp -RLp`) into the 700 folder of the backup in progress and archived from there; with GNU, busybox and bsd tar alike the archive holds plain files and folders only, and the modes of the CA files (the container user reads them) are kept.
+- UPGRADE.md: the one-time sign-out, the two application hosts in one maintenance window and the warning on the Kubernetes rolling update apply to an upgrade from 1.15.0 or earlier to 1.15.1 or later.
+- The documents carry version 1.15.2.
+
+**Before upgrading:** as for 1.15.1 (see there: one-time sign-out, both application hosts in one maintenance window, the MariaDB and Valkey containers restart, migrations); upgrade from 1.15.0 straight to this release.
+
 ## [1.15.1] – 2026-11-03
 
 ### Magyar
