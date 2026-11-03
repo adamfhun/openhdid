@@ -7,6 +7,7 @@ use App\Clients\ClientTiers;
 use App\Enums\CallStatus;
 use App\Enums\IdChannel;
 use App\Enums\OneTimeCodePurpose;
+use App\Identification\IdentificationException;
 use App\Identification\MobileOtpService;
 use App\Identification\PinService;
 use App\Identification\QaSessionEngine;
@@ -18,9 +19,9 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Support\PhoneNormalizer;
-use App\System\Installation;
 use Closure;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -40,7 +41,7 @@ class CallCenterService
      */
     public static function callLockName(string $externalCallId): string
     {
-        return Installation::lockName('hdid:call:'.$externalCallId);
+        return CallLock::nameFor($externalCallId);
     }
 
     /** The partner's metadata of one call, merged over its events, holds at most this many keys. */
@@ -185,11 +186,7 @@ class CallCenterService
      */
     private function underCallLock(Call $call, Closure $write): Call
     {
-        return Cache::lock(self::callLockName((string) $call->external_call_id), 10)->block(5, function () use ($call, $write): Call {
-            $call->refresh();
-
-            return $write($call);
-        });
+        return CallLock::run($call, $write);
     }
 
     /**
@@ -272,13 +269,16 @@ class CallCenterService
      * in matched to the wrong one). Holder and attachability are decided on
      * the row re-read inside the call lock, so a colleague's take-over in the
      * meantime cannot be moved away under them; the agent's open
-     * question-and-answer session with the previous client closes.
+     * question-and-answer session with the previous client closes. An
+     * identified call moves only when the agent confirmed the move against
+     * the very pass the page showed ($identifiedPassId); the move ends it.
      *
      * @throws AuthorizationException when the call is a colleague's by now, or not attachable by this agent
+     * @throws IdentificationException when the call is identified and the move was not confirmed against its pass
      */
-    public function reassignToClient(Call $call, Client $client, User $agent): Call
+    public function reassignToClient(Call $call, Client $client, User $agent, ?string $identifiedPassId = null): Call
     {
-        return $this->underCallLock($call, function (Call $call) use ($client, $agent): Call {
+        return $this->underCallLock($call, function (Call $call) use ($client, $agent, $identifiedPassId): Call {
             if ($call->isHeldBySomeoneElse($agent)) {
                 throw new AuthorizationException(__('This call is being handled by another agent.'));
             }
@@ -287,23 +287,61 @@ class CallCenterService
                 throw new AuthorizationException(__('Take the call from the dashboard first; a call nobody holds cannot be moved to another client.'));
             }
 
-            if ($call->client_id === $client->id) {
-                return $call;
+            $pass = $call->client_id === $client->id ? null : $call->passedSession();
+
+            if ($pass !== null && $pass->id !== $identifiedPassId) {
+                throw new IdentificationException($identifiedPassId === null
+                    ? __('The caller has already been identified on this call; moving it to another client needs a confirmation.')
+                    : __('The identification on this call changed meanwhile; check it and confirm the move again.'));
             }
 
-            if (($previous = $call->client) !== null) {
-                $this->qaSessions->cancelOpenSessions($previous, $agent, 'call_reassigned');
-                $this->auditor->record('call.client_reassigned', $call, ['from_client_id' => $previous->id, 'to_client_id' => $client->id], $agent);
-            }
-
-            return $this->attachClient($call, $client, $agent);
+            return $this->moveToClient($call, $client, $agent);
         });
     }
 
-    public function attachClient(Call $call, Client $client, ?User $agent = null): Call
+    /**
+     * The move itself, under the call lock the caller holds: every pass made
+     * on the call before the move ends (a pass for one client never vouches
+     * for another, and moving back brings none back), except the one that
+     * triggers the move; the agent's open question-and-answer session with
+     * the previous client closes; a call nobody holds takes the service
+     * level of its new client; the move is audited.
+     *
+     * @param  array<string, mixed>  $context  extra audit detail (channel: ivr)
+     */
+    private function moveToClient(Call $call, Client $client, ?User $agent, ?IdSession $trigger = null, array $context = []): Call
+    {
+        if ($call->client_id === $client->id) {
+            return $call;
+        }
+
+        $voided = IdSession::query()->where('call_id', $call->id)->countingPass()
+            ->when($trigger !== null, fn ($query) => $query->whereKeyNot($trigger->id))
+            ->update(['voided_at' => now(), 'voided_reason' => 'call_moved', 'updated_at' => now()]);
+        $call->unsetRelation('idSessions');
+
+        if (($previous = $call->client) !== null) {
+            if ($agent !== null) {
+                $this->qaSessions->cancelOpenSessions($previous, $agent, 'call_reassigned');
+            }
+
+            $this->auditor->record('call.client_reassigned', $call, ['from_client_id' => $previous->id, 'to_client_id' => $client->id] + $context + ($voided > 0 ? ['passes_ended' => $voided] : []), $agent);
+        }
+
+        if ($call->agent_user_id === null && ! $call->status->isOver()) {
+            $call->tier = $this->tiers->tierForCall($call->queue, $client);
+        }
+
+        return $this->attachClient($call, $client, $agent, $context);
+    }
+
+    /**
+     * @param  array<string, mixed>  $context  extra audit detail (channel: ivr)
+     */
+    public function attachClient(Call $call, Client $client, ?User $agent = null, array $context = []): Call
     {
         $call->forceFill(['client_id' => $client->id])->save();
-        $this->auditor->record('call.client_attached', $call, ['client_id' => $client->id], $agent);
+        $this->auditor->record('call.client_attached', $call, ['client_id' => $client->id] + $context, $agent);
 
         return $call;
     }
@@ -313,11 +351,9 @@ class CallCenterService
      * missed call nobody handled yet) and belong to a handled tier. A missing
      * or forbidden id must never silently become a call-free check.
      */
-    public function attachableCallForAgent(string $callId, User $agent, bool $lock = false): Call
+    public function attachableCallForAgent(string $callId, User $agent): Call
     {
-        $call = Call::query()->whereKey($callId)
-            ->when($lock, fn ($query) => $query->lockForUpdate())
-            ->first();
+        $call = Call::query()->whereKey($callId)->first();
 
         if ($call === null || ! $call->isAttachableBy($agent)
             || ! in_array($call->tier, $agent->handledTiers(), true)) {
@@ -327,22 +363,47 @@ class CallCenterService
         return $call;
     }
 
+    /**
+     * A one-time code the agent typed. On a call the check and the move of
+     * the call to the code's client run under the call's lock, on the call
+     * as it stands then (it has to be still the agent's); a call matched to
+     * another client moves the way an agent's reassignment does.
+     *
+     * @throws AuthorizationException when the call is not the agent's (any more)
+     * @throws IdentificationException
+     */
     public function verifyCodeForAgent(string $code, User $agent, ?string $callId = null): ?IdSession
     {
-        return DB::transaction(function () use ($code, $agent, $callId): ?IdSession {
-            $call = $callId === null ? null : $this->attachableCallForAgent($callId, $agent, lock: true);
-            $session = $this->mobileOtp->verifyCode($code, IdChannel::Manual, $agent, $call);
+        if ($callId === null) {
+            return $this->mobileOtp->verifyCode($code, IdChannel::Manual, $agent);
+        }
 
-            if ($session !== null && $call !== null && $call->client_id !== $session->client_id) {
-                $this->attachClient($call, $session->client, $agent);
+        $call = $this->attachableCallForAgent($callId, $agent);
+
+        return CallLock::runForAgent($call, $agent, function (Call $call) use ($code, $agent): ?IdSession {
+            // The caller is already identified on this call: a code proves
+            // nothing more, and is not consumed (it stays usable).
+            if ($call->isIdentified()) {
+                throw new IdentificationException(__('The caller has already been identified on this call, so a one-time code is not checked on it; the code stays usable.'));
             }
 
-            return $session;
+            return DB::transaction(function () use ($code, $agent, $call): ?IdSession {
+                $session = $this->mobileOtp->verifyCode($code, IdChannel::Manual, $agent, $call);
+
+                if ($session !== null) {
+                    $this->moveToClient($call, $session->client, $agent, $session);
+                }
+
+                return $session;
+            });
         });
     }
 
     /**
-     * IVR: caller typed a PIN.
+     * IVR: caller typed a PIN. The PIN of the client the call is matched to
+     * when the check runs (PinService takes the call lock).
+     *
+     * @throws LockTimeoutException while another action holds the call
      */
     public function ivrVerifyPin(string $externalCallId, string $pin): IvrResult
     {
@@ -355,7 +416,12 @@ class CallCenterService
             return IvrResult::unknownCaller();
         }
 
-        return IvrResult::fromSession($this->pins->verify($client, $pin, IdChannel::Ivr, call: $call));
+        try {
+            return IvrResult::fromSession($this->pins->verify($client, $pin, IdChannel::Ivr, call: $call));
+        } catch (IdentificationException) {
+            // The call left this client meanwhile.
+            return IvrResult::unknownCaller();
+        }
     }
 
     /**
@@ -363,20 +429,56 @@ class CallCenterService
      * requested by the mobile app backend (IVR code). The code alone
      * identifies the client; when the call is known the client is attached.
      */
+    /**
+     * IVR: caller typed a one-time code. With a call, the check and the
+     * matching of the call run under the call's lock.
+     *
+     * @throws LockTimeoutException while another action holds the call
+     */
     public function ivrVerifyCode(?string $externalCallId, string $code): IvrResult
     {
         $call = $externalCallId === null ? null : Call::query()->where('external_call_id', $externalCallId)->first();
-        $session = $this->mobileOtp->verifyCode($code, IdChannel::Ivr, call: $call, purposes: [OneTimeCodePurpose::MobileOtp, OneTimeCodePurpose::IvrCode]);
+        $verify = function (?Call $call) use ($code): IvrResult {
+            $session = $this->mobileOtp->verifyCode($code, IdChannel::Ivr, call: $call, purposes: [OneTimeCodePurpose::MobileOtp, OneTimeCodePurpose::IvrCode]);
 
-        if ($session === null) {
-            return IvrResult::unknownCode();
-        }
+            if ($session === null) {
+                return IvrResult::unknownCode();
+            }
 
-        if ($call !== null && $call->client_id !== $session->client_id) {
-            $this->attachClient($call, $session->client);
-        }
+            if ($call === null || $call->client_id === $session->client_id) {
+                return IvrResult::fromSession($session);
+            }
 
-        return IvrResult::fromSession($session);
+            // A call nobody is matched to gets the code's client; an ongoing
+            // call nobody holds and nobody identified moves to it, the way an
+            // agent's reassignment does. Any other call keeps its client:
+            // the code still identified the caller, and the answer says the
+            // call was kept (owner decision Q8).
+            if ($call->client_id === null) {
+                $this->attachClient($call, $session->client, null, ['channel' => 'ivr']);
+
+                return IvrResult::fromSession($session);
+            }
+
+            $kept = match (true) {
+                $call->status->isOver() => 'ended',
+                $call->isIdentified() => 'identified',
+                $call->agent_user_id !== null => 'held',
+                default => null,
+            };
+
+            if ($kept === null) {
+                $this->moveToClient($call, $session->client, null, $session, ['channel' => 'ivr']);
+
+                return IvrResult::fromSession($session);
+            }
+
+            $this->auditor->record('call.client_reassign_refused', $call, ['from_client_id' => $call->client_id, 'to_client_id' => $session->client_id, 'reason' => $kept, 'channel' => 'ivr']);
+
+            return IvrResult::codeOkCallKept($session);
+        };
+
+        return $call === null ? $verify(null) : CallLock::run($call, $verify);
     }
 
     /**

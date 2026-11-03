@@ -1,6 +1,7 @@
 import { reactive } from 'vue';
 import { get, post, ApiError } from './api';
 import { t } from './i18n';
+import { revokingReasons } from './loginErrors';
 
 const EMPTY_TIER = { background_image: null, login_background_image: null, badge_label: null, support: { email: null, phone: null, hours: null } };
 
@@ -14,7 +15,7 @@ let booting = null;
  * Only then may a failed sign-out request still count as signed out.
  */
 const isSignedOutError = (error) => error instanceof ApiError
-    && (error.status === 401 || (error.status === 403 && ['not_entitled', 'account_closed'].includes(error.reason)));
+    && (error.status === 401 || (error.status === 403 && revokingReasons.includes(error.reason)));
 
 export const store = reactive({
     branding: window.__BRANDING__ ?? { app_name: 'Helpdesk ID', primary_color: '#36495d', palette: {}, tiers: {} },

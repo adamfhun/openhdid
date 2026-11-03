@@ -73,7 +73,7 @@ class AnswersController extends Controller
      */
     public function destroy(Request $request, Question $question): JsonResponse
     {
-        $this->answers->remove($request->user(), $question);
+        $this->answers->remove($request->user(), $question, actor: $request->user());
 
         return response()->json(['message' => __('Answer removed.')]);
     }

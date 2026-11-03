@@ -68,3 +68,39 @@ it('refuses a remember-me cookie with a foreign password part for accounts witho
         ->assertUnauthorized();
     $this->assertGuest('client');
 });
+
+it('refuses a remember-me cookie another installation with the same key issued, with or without a password', function (): void {
+    $staff = User::factory()->synced()->withRole(Role::Agent)->create();
+    $staff->forceFill(['remember_token' => $staffToken = Str::random(60)])->saveQuietly();
+    $ssoOnly = User::factory()->synced()->withRole(Role::Agent)->create(['email' => 'sso.only@corp.hu', 'password' => null]);
+    $ssoOnly->forceFill(['remember_token' => $ssoToken = Str::random(60)])->saveQuietly();
+    $client = Client::factory()->synced()->create();
+    $client->forceFill(['remember_token' => $clientToken = Str::random(60)])->saveQuietly();
+    config()->set('app.url', 'https://hdid.example.test');
+
+    // A clone of the database at another address with the same APP_KEY issued the cookies.
+    config()->set('app.url', 'https://staging.example.test');
+    Auth::forgetGuards();
+    $cookies = [
+        'staff' => rememberCookieFor('web', $staff, $staffToken),
+        'sso' => rememberCookieFor('web', $ssoOnly, $ssoToken),
+        'client' => rememberCookieFor('client', $client, $clientToken),
+    ];
+
+    config()->set('app.url', 'https://hdid.example.test');
+    foreach (['staff', 'sso'] as $account) {
+        Auth::forgetGuards();
+        $this->flushSession();
+        $this->call('GET', '/admin', [], $cookies[$account])->assertRedirect('/admin/login');
+        $this->assertGuest('web');
+    }
+
+    Auth::forgetGuards();
+    $this->flushSession();
+    $this->call('GET', '/api/v1/client/me', [], $cookies['client'], [], ['HTTP_ACCEPT' => 'application/json'])->assertUnauthorized();
+    $this->assertGuest('client');
+
+    // The installation's own cookie still signs in.
+    Auth::forgetGuards();
+    $this->call('GET', '/api/v1/client/me', [], rememberCookieFor('client', $client, $clientToken), [], ['HTTP_ACCEPT' => 'application/json'])->assertOk();
+});

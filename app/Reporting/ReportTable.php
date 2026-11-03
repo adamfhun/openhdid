@@ -20,6 +20,7 @@ final class ReportTable
         public readonly array $rows,
         public readonly ?array $totals = null,
         public readonly ?string $note = null,
+        public readonly ?string $warning = null,
     ) {}
 
     public function rowCount(): int

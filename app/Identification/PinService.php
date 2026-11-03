@@ -4,6 +4,7 @@ namespace App\Identification;
 
 use App\Audit\Auditor;
 use App\Auth\Passwordless\OneTimeCodes;
+use App\CallCenter\CallLock;
 use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
 use App\Enums\IdChannel;
@@ -16,11 +17,13 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\System\Installation;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 /**
  * Pre-defined PIN identification, with lockout after repeated failures.
@@ -126,16 +129,26 @@ class PinService
             throw ValidationException::withMessages(['pin' => __('The PIN must be :min to :max digits.', ['min' => $this->minLength(), 'max' => $this->maxLength()])]);
         }
 
-        Cache::lock(Installation::lockName('hdid:pin-assignment'), 30)->block(5, function () use ($client, $pin): void {
+        // The slow hash first; the number check is repeated on the locked
+        // row, because the last number may go while the PIN is hashed (the
+        // removal clears a PIN on the same row lock).
+        $hash = Hash::make($pin);
+
+        Cache::lock(Installation::lockName('hdid:pin-assignment'), 30)->block(5, function () use ($client, $pin, $hash): void {
             // Outside the transaction, so that the refusal's audit row stays.
             if ($this->uniquenessRequired()) {
                 $this->refuseTakenPin($client, $pin);
             }
 
-            DB::transaction(function () use ($client, $pin): void {
+            DB::transaction(function () use ($client, $pin, $hash): void {
                 $record = Client::query()->whereKey($client->id)->lockForUpdate()->firstOrFail();
+
+                if (! $record->phoneNumbers()->exists()) {
+                    throw ValidationException::withMessages(['pin' => __('A PIN needs at least one registered phone number: the phone menu recognises the caller by the number before it asks for the PIN.')]);
+                }
+
                 $record->forceFill([
-                    'pin_hash' => Hash::make($pin),
+                    'pin_hash' => $hash,
                     'pin_lookup' => $this->lookupOf($pin),
                     'pin_set_at' => now(),
                     'pin_failed_attempts' => 0,
@@ -194,7 +207,13 @@ class PinService
     }
 
     /**
-     * Verify a PIN and record the attempt as an identification session.
+     * Verify a PIN and record the attempt as an identification session. On a
+     * call the decision runs under the call's lock, on the call as it stands
+     * then: an agent's only while the call is still theirs, the phone menu's
+     * only while the call is still matched to this client.
+     *
+     * @throws IdentificationException
+     * @throws LockTimeoutException on the phone menu's path while the call is busy
      */
     public function verify(Client $client, string $pin, IdChannel $channel, ?User $agent = null, ?Call $call = null): IdSession
     {
@@ -202,10 +221,43 @@ class PinService
             throw new IdentificationException(__('Agents may not verify PINs; the caller has to use the phone menu.'));
         }
 
-        if ($channel === IdChannel::Manual && $agent !== null) {
-            $this->agentLimiter->assertAllowed($agent);
+        // An agent's check takes its attempt before the compare and gets it
+        // back when it passes or cannot run.
+        $limited = $channel === IdChannel::Manual && $agent !== null;
+
+        if ($limited) {
+            $this->agentLimiter->reserve($agent);
         }
 
+        try {
+            $session = match (true) {
+                $call === null => $this->verifyOn($client, $pin, $channel, $agent, null),
+                $agent !== null && $channel === IdChannel::Manual => CallLock::runForAgent($call, $agent, fn (Call $call): IdSession => $this->verifyOn($client, $pin, $channel, $agent, $call)),
+                default => CallLock::run($call, function (Call $call) use ($client, $pin, $channel, $agent): IdSession {
+                    if ($call->client_id !== $client->id) {
+                        throw new IdentificationException(__('The call is no longer matched to this client.'));
+                    }
+
+                    return $this->verifyOn($client, $pin, $channel, $agent, $call);
+                }),
+            };
+        } catch (Throwable $e) {
+            if ($limited) {
+                $this->agentLimiter->giveBack($agent);
+            }
+
+            throw $e;
+        }
+
+        if ($limited && $session->status === IdSessionStatus::Passed) {
+            $this->agentLimiter->giveBack($agent);
+        }
+
+        return $session;
+    }
+
+    private function verifyOn(Client $client, string $pin, IdChannel $channel, ?User $agent, ?Call $call): IdSession
+    {
         $session = IdSession::query()->create([
             'client_id' => $client->id,
             'agent_user_id' => $agent?->id,
@@ -218,11 +270,16 @@ class PinService
 
         [$status, $reason] = $this->check($client, $pin, $channel, $call);
 
-        if ($status !== IdSessionStatus::Passed && $channel === IdChannel::Manual && $agent !== null) {
-            $this->agentLimiter->hit($agent);
+        // Only a session still open becomes the verdict: one a take-over or
+        // a release closed meanwhile stays closed.
+        $decided = IdSession::query()->whereKey($session->id)->where('status', IdSessionStatus::Open)
+            ->update(['status' => $status, 'outcome_reason' => $reason, 'updated_at' => now()] + IdSession::instantColumns('decided_at', now()));
+        $session->refresh();
+
+        if ($decided !== 1) {
+            return $session;
         }
 
-        $session->forceFill(['status' => $status, 'outcome_reason' => $reason, 'decided_at' => now()])->save();
         $this->auditor->record('id_session.finished', $session, ['status' => $status->value, 'reason' => $reason, 'method' => 'pin']
             + ($reason === 'account_closed' && ! $client->isClosed() && $this->tiers->heldBackByPremiumOnly($client) ? ['premium_only' => true] : []), $agent);
         app(ClientPhones::class)->verifyFromIdentifiedCall($session);
@@ -239,7 +296,7 @@ class PinService
      */
     private function check(Client $client, string $pin, IdChannel $channel, ?Call $call): array
     {
-        return Cache::lock('hdid:pin:'.$client->id, 10)->block(5, function () use ($client, $pin, $channel, $call): array {
+        return Cache::lock(Installation::lockName('hdid:pin:'.$client->id), 10)->block(5, function () use ($client, $pin, $channel, $call): array {
             $client->refresh();
 
             return $this->checkLocked($client, $pin, $channel, $call);

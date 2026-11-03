@@ -8,12 +8,13 @@ use App\Enums\ClientTier;
 use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Concerns\GuardsUnsavedChanges;
 use App\Filament\Concerns\LinksToDirectory;
+use App\Filament\NotificationText;
 use App\Models\Client;
+use App\Models\ClientLink;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Filament\Actions\Action;
 use Filament\Actions\ForceDeleteAction;
-use Filament\Actions\RestoreAction;
 use Filament\Actions\ViewAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
@@ -35,6 +36,9 @@ class EditClient extends EditRecord
     /** How many linked clients this save reopens by ending the links of a closed sponsor. */
     private int $reopenedBySave = 0;
 
+    /** The sponsor whose link to this client the save ends, because the client gets a premium of its own. */
+    private ?string $ownLinkSponsorBySave = null;
+
     /** The linked clients the question said the save reopens, to stop if that changed meanwhile. */
     #[Locked]
     public ?string $confirmedReopen = null;
@@ -45,15 +49,16 @@ class EditClient extends EditRecord
             ViewAction::make(),
             ClientResource::deleteAction(),
             ForceDeleteAction::make(),
-            RestoreAction::make(),
+            ClientResource::restoreAction(),
         ];
     }
 
     /**
      * Taking the implicit premium package away from a sponsor ends its
-     * links on save, and a new e-mail signs the client out everywhere: the
-     * Save button asks first, naming the consequences. Defined as a named
-     * action so it can be mounted by name (tests, modal).
+     * links on save, giving one to a linked client ends its own link, and a
+     * new e-mail signs the client out everywhere: the Save button asks
+     * first, naming the consequences. Defined as a named action so it can be
+     * mounted by name (tests, modal).
      */
     protected function getSaveFormAction(): Action
     {
@@ -65,11 +70,12 @@ class EditClient extends EditRecord
         return $this->confirmingEmailChange(parent::getSaveFormAction()->submit(null))
             // A custom heading or description opens the modal on its own in Filament;
             // modal() keeps it closed unless a link would really end or the e-mail changes.
-            ->requiresConfirmation(fn (): bool => $this->endingSponsorLinks() > 0 || $this->pendingEmailChange() !== null)
-            ->modal(fn (): bool => $this->endingSponsorLinks() > 0 || $this->pendingEmailChange() !== null)
+            ->requiresConfirmation(fn (): bool => $this->endsLinks() || $this->pendingEmailChange() !== null)
+            ->modal(fn (): bool => $this->endsLinks() || $this->pendingEmailChange() !== null)
             ->modalHeading(fn (): string => match (true) {
-                $this->endingSponsorLinks() > 0 && $this->pendingEmailChange() !== null => __('Save these changes?'),
+                $this->endsLinks() && $this->pendingEmailChange() !== null => __('Save these changes?'),
                 $this->pendingEmailChange() !== null => __('Change the e-mail address?'),
+                $this->endingOwnLink() !== null => __('End the link of this client to its sponsor?'),
                 default => __('End the links of this sponsor?'),
             })
             ->modalDescription(fn (): string|HtmlString|null => $this->saveDescription())
@@ -80,7 +86,7 @@ class EditClient extends EditRecord
             ->action(function (Action $action): void {
                 $this->assertEmailChangeAsConfirmed($action);
 
-                if ($this->endingSponsorLinks() > 0 && $this->reopenFingerprint() !== $this->confirmedReopen) {
+                if ($this->endsLinks() && $this->reopenFingerprint() !== $this->confirmedReopen) {
                     $this->confirmedReopen = $this->reopenFingerprint();
                     Notification::make()->title(__('The consequences changed: check them again'))
                         ->body(__('Which linked clients the save reopens changed while the question was open. The question now shows what saving does; confirm again to save.'))
@@ -101,9 +107,11 @@ class EditClient extends EditRecord
      */
     public function save(bool $shouldRedirect = true, bool $shouldSendSavedNotification = true): void
     {
-        if (! $this->saveConfirmed && $this->endingSponsorLinks() > 0) {
+        if (! $this->saveConfirmed && $this->endsLinks()) {
             Notification::make()->title(__('Confirm the change with the Save button'))
-                ->body(__('The chosen implicit package ends this sponsor\'s active links; the Save button asks for confirmation first.'))
+                ->body(NotificationText::of($this->endingOwnLink() !== null
+                    ? __('The chosen implicit package ends this client\'s link to its sponsor; the Save button asks for confirmation first.')
+                    : __('The chosen implicit package ends this sponsor\'s active links; the Save button asks for confirmation first.')))
                 ->warning()->send();
 
             return;
@@ -131,7 +139,7 @@ class EditClient extends EditRecord
                 'n' => $this->endingSponsorLinks(),
                 'names' => $this->endingLinkNames(),
             ]).$this->reopenSentence()
-            : null;
+            : $this->ownLinkSentence();
         $email = $this->emailChangeDescription();
 
         return match (true) {
@@ -164,12 +172,71 @@ class EditClient extends EditRecord
         ]);
     }
 
+    /**
+     * A linked client given an implicit premium package of its own: the
+     * question names the sponsor whose link ends, and says whether the
+     * client, closed only with that sponsor, reopens.
+     */
+    private function ownLinkSentence(): ?string
+    {
+        $link = $this->endingOwnLink();
+
+        if ($link === null) {
+            return null;
+        }
+
+        /** @var Client $client */
+        $client = $this->getRecord();
+        $sponsor = $link->sponsor?->name ?? __('deleted client');
+        $reopens = $client->isClosed() && $client->closed_reason === ClientLinks::CLOSE_REASON_SPONSOR && app(ClientLinks::class)->keepClosedReason($client) === null;
+
+        return __('The chosen implicit package ":package" is on the premium package list, so this client no longer needs a sponsor: its link to :sponsor ends on save, and closing :sponsor no longer closes this client.', [
+            'package' => $this->chosenImplicitPackage() ?? '—',
+            'sponsor' => $sponsor,
+        ]).($reopens ? ' '.__('The client is closed only because :sponsor is closed, so it reopens on save.', ['sponsor' => $sponsor]) : '');
+    }
+
     private function reopenFingerprint(): ?string
     {
         /** @var Client $client */
         $client = $this->getRecord();
 
-        return $this->endingSponsorLinks() > 0 ? hash('sha256', (string) json_encode(app(ClientLinks::class)->reopenedOnLinkEnd($client)->pluck('id')->sort()->values()->all())) : null;
+        if (! $this->endsLinks()) {
+            return null;
+        }
+
+        return hash('sha256', (string) json_encode([
+            $this->endingSponsorLinks() > 0 ? app(ClientLinks::class)->reopenedOnLinkEnd($client)->pluck('id')->sort()->values()->all() : [],
+            $this->endingOwnLink()?->id,
+        ]));
+    }
+
+    /**
+     * Whether saving the form as it stands ends a link: this sponsor's, or
+     * this linked client's own.
+     */
+    private function endsLinks(): bool
+    {
+        return $this->endingSponsorLinks() > 0 || $this->endingOwnLink() !== null;
+    }
+
+    /**
+     * The link to its sponsor that ends if the form is saved as it stands:
+     * the implicit package changes to a premium one, and a linked client
+     * with an implicit premium of its own no longer needs a sponsor
+     * (ClientLinks::endLinkOfSelfSponsored).
+     */
+    public function endingOwnLink(): ?ClientLink
+    {
+        /** @var Client $client */
+        $client = $this->getRecord();
+        $chosen = $this->chosenImplicitPackage();
+
+        if ($chosen === $client->implicit_package || app(ClientTiers::class)->tierOfPackage($chosen) !== ClientTier::Premium) {
+            return null;
+        }
+
+        return $client->activeSponsorLink()->with(['sponsor' => fn ($query) => $query->withTrashed()])->first();
     }
 
     /**
@@ -236,14 +303,23 @@ class EditClient extends EditRecord
         /** @var Client $client */
         $client = $this->getRecord();
         $this->reopenedBySave = $this->endingSponsorLinks() > 0 ? app(ClientLinks::class)->reopenedOnLinkEnd($client)->count() : 0;
+        $ownLink = $this->endingOwnLink();
+        $this->ownLinkSponsorBySave = $ownLink === null ? null : ($ownLink->sponsor?->name ?? __('deleted client'));
     }
 
     protected function getSavedNotification(): ?Notification
     {
         $notification = $this->withDirectoryLink(parent::getSavedNotification());
 
-        if ($notification !== null && $this->reopenedBySave > 0) {
-            $notification->body(trim(($notification->getBody() ?? '').' '.__(':n linked client(s) closed with this sponsor reopened, because their link ended.', ['n' => $this->reopenedBySave])));
+        if ($notification !== null && ($this->reopenedBySave > 0 || $this->ownLinkSponsorBySave !== null)) {
+            /** @var Client $client */
+            $client = $this->getRecord();
+            $linkText = $this->reopenedBySave > 0
+                ? __(':n linked client(s) closed with this sponsor reopened, because their link ended.', ['n' => $this->reopenedBySave])
+                : __('The link to :sponsor ended: this client has an implicit premium package of its own.', ['sponsor' => $this->ownLinkSponsorBySave]);
+            // The plain texts are joined first and escaped once: the body set
+            // by withDirectoryLink() is escaped already.
+            $notification->body(NotificationText::of(trim(($this->directoryLinkText($client) ?? '').' '.$linkText)));
         }
 
         return $notification;

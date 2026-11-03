@@ -25,6 +25,7 @@ use App\Localization\SetLocale;
 use App\Models\User;
 use Closure;
 use Filament\Actions\Action;
+use Filament\Actions\Contracts\HasActions;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -48,6 +49,7 @@ use Illuminate\Support\Str;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 
 use function Livewire\before;
+use function Livewire\on;
 
 /**
  * The single staff panel: helpdesk agents and administrators share it, the
@@ -68,6 +70,16 @@ class AdminPanelProvider extends PanelProvider
         // the lifecycle hooks, so the table's own updated hook already sees
         // (and stores in the session) the corrected value.
         before('update', fn (object $component, string $path): ?Closure => static::limitTableRecordsPerPage($component, $path));
+
+        // No action opens from the address of a page (?action=, ?tableAction=):
+        // a link could otherwise lead a staff member into a prepared
+        // confirmation. Every dangerous action starts from its own button
+        // (owner decision Q13); revisit if a deep-link feature is wanted.
+        on('call', function (object $component, string $method, array $params, mixed $context, Closure $returnEarly): void {
+            if ($method === 'mountDefaultActions' && $component instanceof HasActions) {
+                $returnEarly();
+            }
+        });
     }
 
     /**

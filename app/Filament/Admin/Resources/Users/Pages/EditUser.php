@@ -11,9 +11,7 @@ use App\Filament\Concerns\GuardsUnsavedChanges;
 use App\Filament\Concerns\LinksToDirectory;
 use App\Models\User;
 use Filament\Actions\Action;
-use Filament\Actions\DeleteAction;
 use Filament\Actions\ForceDeleteAction;
-use Filament\Actions\RestoreAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -64,9 +62,9 @@ class EditUser extends EditRecord
     {
         return [
             UnlockLoginAction::make(),
-            DeleteAction::make(),
+            UserResource::deleteAction(),
             ForceDeleteAction::make(),
-            RestoreAction::make(),
+            UserResource::restoreAction(),
         ];
     }
 

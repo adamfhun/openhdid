@@ -30,6 +30,7 @@ class ClientResource extends JsonResource
         $shared = $settings->bool(SettingKey::PortalSharedNumberNotice) && $this->relationLoaded('phoneNumbers') ? app(ClientPhones::class)->sharedNumbersOf($this->resource) : [];
         $destinations = app(SmsDestinations::class);
         $smsTarget = $this->relationLoaded('phoneNumbers') ? $destinations->targetFor($this->resource) : null;
+        $signInTarget = $this->relationLoaded('phoneNumbers') ? $destinations->signInTargetFor($this->resource) : null;
 
         return [
             'id' => $this->id,
@@ -50,8 +51,13 @@ class ClientResource extends JsonResource
                 'shared' => in_array($p->number_e164, $shared, true),
                 // A landline (or a number of a country no longer accepted): no SMS confirmation, no SMS sign-in code.
                 'sms_capable' => $destinations->allows($p->number_e164),
-                // Where the SMS sign-in code and the PIN by SMS go: the primary number, or the first one that may receive SMS.
+                // Where the PIN by SMS goes: the primary number, or the first one that may receive SMS.
                 'sms_target' => $p->number_e164 === $smsTarget,
+                // Whether the SMS sign-in code may go here: it may receive SMS and it came from the
+                // directory, the helpdesk added it, or it was confirmed (a number the client added is not enough).
+                'sign_in_capable' => $p->vouchedForSignIn() && $destinations->allows($p->number_e164),
+                // Where the SMS sign-in code goes: the first of those, the primary one first.
+                'sign_in_target' => $p->number_e164 === $signInTarget,
             ])->values()),
             // The countries whose numbers the client may add, named in the client's language.
             'phone_countries' => SmsDestinations::regionNames($destinations->allowedRegions()),

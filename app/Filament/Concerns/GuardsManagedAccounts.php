@@ -4,6 +4,7 @@ namespace App\Filament\Concerns;
 
 use App\Auth\Permission;
 use App\Auth\RoleAssignment;
+use App\Filament\NotificationText;
 use App\Models\User;
 use Filament\Notifications\Notification;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -45,7 +46,7 @@ trait GuardsManagedAccounts
         try {
             app(RoleAssignment::class)->assertManageable($actor, $target, $action);
         } catch (AuthorizationException $e) {
-            Notification::make()->title($e->getMessage())->danger()->send();
+            Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
 
             return false;
         }

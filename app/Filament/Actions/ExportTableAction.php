@@ -2,6 +2,7 @@
 
 namespace App\Filament\Actions;
 
+use App\Filament\NotificationText;
 use App\Support\SpreadsheetCells;
 use Closure;
 use Filament\Actions\Action;
@@ -56,7 +57,7 @@ class ExportTableAction
 
         if ($truncated) {
             Notification::make()
-                ->title(__('The export was cut at :n rows', ['n' => self::MAX_ROWS]))
+                ->title(NotificationText::of(__('The export was cut at :n rows', ['n' => self::MAX_ROWS])))
                 ->body(__('Narrow the list with filters and export it in parts, otherwise rows are missing from the file.'))
                 ->warning()
                 ->persistent()

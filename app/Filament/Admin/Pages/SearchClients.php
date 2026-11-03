@@ -4,6 +4,7 @@ namespace App\Filament\Admin\Pages;
 
 use App\Audit\Auditor;
 use App\Auth\Permission;
+use App\CallCenter\CallCenterService;
 use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
 use App\Filament\Admin\NavigationGroup;
@@ -14,6 +15,7 @@ use App\Models\Client;
 use App\Support\InputLimits;
 use BackedEnum;
 use Filament\Pages\Page;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Str;
 use Livewire\Attributes\Url;
@@ -104,13 +106,44 @@ class SearchClients extends Page
         $term = InputLimits::search($value);
 
         if (mb_strlen($term) >= 3) {
-            app(Auditor::class)->record('client.searched', null, ['term' => $term, 'call_id' => $this->callId()]);
+            app(Auditor::class)->record('client.searched', null, ['term' => $term, 'call_id' => $this->usableCallId()]);
         }
     }
 
+    /**
+     * The call of the address, only when the user may work on it: they can
+     * identify, and it is theirs to attach (held by them, or a missed call
+     * nobody handled) in a level they handle. The block exists to attach the
+     * caller; anything else shows no number and travels on nowhere.
+     */
     public function getCallRecordProperty(): ?Call
     {
-        return ($id = $this->callId()) !== null ? Call::query()->find($id) : null;
+        $id = $this->callId();
+
+        if ($id === null || ! (auth()->user()?->can(Permission::IdentificationRun->value) ?? false)) {
+            return null;
+        }
+
+        try {
+            return app(CallCenterService::class)->attachableCallForAgent($id, auth()->user());
+        } catch (AuthorizationException) {
+            return null;
+        }
+    }
+
+    /**
+     * A call id was in the address but names no call the user may work on:
+     * the page says so in one neutral line (the same for an unknown and a
+     * forbidden id).
+     */
+    public function hasUnusableCall(): bool
+    {
+        return $this->callId() !== null && $this->callRecord === null;
+    }
+
+    private function usableCallId(): ?string
+    {
+        return $this->callRecord?->id;
     }
 
     /**
@@ -135,6 +168,6 @@ class SearchClients extends Page
 
     public function identifyUrl(Client $client): string
     {
-        return Identify::getUrl(array_filter(['client' => $client->id, 'call' => $this->callId()]));
+        return Identify::getUrl(array_filter(['client' => $client->id, 'call' => $this->usableCallId()]));
     }
 }

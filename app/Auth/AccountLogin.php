@@ -198,7 +198,11 @@ class AccountLogin
     public function issueToken(Principal $principal, string $method, string $deviceName, array $context = []): string
     {
         $abilities = $principal instanceof Client ? [self::ABILITY_CLIENT_PORTAL] : [self::ABILITY_STAFF];
-        $token = $principal->createToken($deviceName, $abilities)->plainTextToken;
+        // The lifetime is fixed at issue: Sanctum also checks created_at
+        // against SANCTUM_TOKEN_EXPIRATION, but in the hour the clocks go
+        // back that reads an hour late, and a later raise would lengthen it.
+        $minutes = (int) config('sanctum.expiration');
+        $token = $principal->createToken($deviceName, $abilities, $minutes > 0 ? now()->addMinutes($minutes) : null)->plainTextToken;
         $this->recordSuccess($principal, $method, $context + ['device' => $deviceName]);
 
         return $token;
@@ -250,6 +254,17 @@ class AccountLogin
             mb_strtolower(trim((string) $record->email)) !== mb_strtolower(trim($principal->getEmail())) => LoginRejection::ExternalRecordMismatch,
             default => null,
         };
+    }
+
+    /**
+     * Why a signed-in client may not go on: the login rule itself, checked
+     * on every portal request (EnsureClientEntitled), so whatever a sign-in
+     * is refused for also ends a session or token already out there (for
+     * instance one from while CLIENT_LOGIN_REQUIRE_EMD was off).
+     */
+    public function ongoingRejectionFor(Client $client): ?LoginRejection
+    {
+        return $this->rejectionFor($client);
     }
 
     private function rejectionFor(?Principal $principal): ?LoginRejection

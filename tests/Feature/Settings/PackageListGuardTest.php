@@ -2,12 +2,14 @@
 
 use App\Auth\Role;
 use App\Clients\ClientLinks;
+use App\Clients\ClientTiers;
 use App\Clients\PackageListImpact;
 use App\Filament\Admin\Pages\ManageSettings;
 use App\Models\Client;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\Support\HuDate;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Livewire\Livewire;
@@ -130,4 +132,85 @@ it('saves the package lists without confirmation when no open client is affected
         ->assertNotified(__('Settings saved'));
 
     expect(app(Settings::class)->array(SettingKey::PackagesPremium))->toContain('Gold');
+});
+
+it('saves two packages on different lists that differ only in a character without an ASCII spelling', function (): void {
+    Livewire::test(ManageSettings::class)
+        ->fillForm([premiumField() => ['Premium', 'VIP 金'], standardField() => ['Basic', 'VIP 银']])
+        ->mountAction('save')
+        ->assertHasNoFormErrors();
+
+    expect(app(Settings::class)->array(SettingKey::PackagesPremium))->toContain('VIP 金')
+        ->and(app(Settings::class)->array(SettingKey::PackagesStandard))->toContain('VIP 银');
+});
+
+it('refuses a package list entry that has no comparable spelling, naming it', function (): void {
+    Livewire::test(ManageSettings::class)
+        ->fillForm([premiumField() => ['Premium', "\u{200B}"]])
+        ->call('save')
+        ->assertHasFormErrors([premiumField()]);
+
+    expect(app(Settings::class)->array(SettingKey::PackagesPremium))->toBe(['Premium']);
+});
+
+it('asks for confirmation naming the clients that a package added to a list lets into the portal, and says it after saving', function (string $list): void {
+    Client::factory()->synced()->create(['implicit_package' => 'Trial', 'explicit_package' => null, 'name' => 'Trial Tamás']);
+    $lists = $list === 'premium'
+        ? [premiumField() => ['Premium', 'Trial'], standardField() => ['Basic']]
+        : [premiumField() => ['Premium'], standardField() => ['Basic', 'Trial']];
+
+    Livewire::test(ManageSettings::class)
+        ->fillForm($lists)
+        ->mountAction('save')
+        ->assertActionMounted('save')
+        ->assertMountedActionModalSee('Trial Tamás')
+        ->callMountedAction()
+        ->assertHasNoFormErrors()
+        ->assertNotified();
+
+    expect(app(ClientTiers::class)->isEntitled(Client::query()->where('name', 'Trial Tamás')->sole()))->toBeTrue();
+})->with(['premium', 'standard']);
+
+it('names the save that added the package when taking it off would lock its wearers out', function (): void {
+    Livewire::test(ManageSettings::class)
+        ->fillForm([premiumField() => ['Premium', 'Trial'], standardField() => ['Basic']])
+        ->mountAction('save')->assertHasNoFormErrors();
+    Client::factory()->synced()->create(['implicit_package' => 'Trial', 'explicit_package' => null, 'name' => 'Trial Tamás']);
+
+    $errors = app(PackageListImpact::class)->errors(app(PackageListImpact::class)->estimate(['Premium'], ['Basic']));
+
+    expect(implode(' ', $errors))->toContain('Trial Tamás')
+        ->toContain(__('The package :package was added to the lists by the save of :time (:by).', ['package' => 'Trial', 'time' => now()->format(HuDate::DATETIME), 'by' => auth()->user()->name]));
+});
+
+it('names in the confirmation and ends on save the links of linked clients whose own implicit package joins the premium list', function (): void {
+    app(Settings::class)->set(SettingKey::PackagesPremium, ['Premium']);
+    app(Settings::class)->set(SettingKey::PackagesStandard, ['Basic', 'Gold']);
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $open = Client::factory()->synced()->create(['implicit_package' => 'Gold', 'explicit_package' => 'Premium', 'name' => 'Arany Anna']);
+    $openLink = $links->link($sponsor, $open);
+    $closedSponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $closed = Client::factory()->synced()->create(['implicit_package' => 'Gold', 'explicit_package' => 'Premium', 'name' => 'Arany Béla']);
+    $links->link($closedSponsor, $closed);
+    $closedSponsor->close('admin');
+    expect($closed->fresh()->closed_reason)->toBe(ClientLinks::CLOSE_REASON_SPONSOR);
+
+    $impact = app(PackageListImpact::class)->estimate(['Premium', 'Gold'], ['Basic']);
+    expect($impact['self_sponsored']['count'])->toBe(2)
+        ->and($impact['reopened']['sample'])->toBe(['Arany Béla']);
+
+    Livewire::test(ManageSettings::class)
+        ->fillForm([premiumField() => ['Premium', 'Gold'], standardField() => ['Basic']])
+        ->mountAction('save')
+        ->assertActionMounted('save')
+        ->assertMountedActionModalSee('Arany Anna')
+        ->assertMountedActionModalSee('Arany Béla')
+        ->callMountedAction()
+        ->assertHasNoFormErrors()
+        ->assertNotified(__('Settings saved'));
+
+    expect($openLink->fresh()->ended_reason)->toBe(ClientLinks::END_REASON_LINKED_OWN_PREMIUM)
+        ->and($closed->fresh()->isClosed())->toBeFalse()
+        ->and($closedSponsor->fresh()->isClosed())->toBeTrue();
 });

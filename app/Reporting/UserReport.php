@@ -2,6 +2,7 @@
 
 namespace App\Reporting;
 
+use App\Audit\AuditArchive;
 use App\Clients\ClientTiers;
 use App\Enums\CallStatus;
 use App\Enums\ClientTier;
@@ -310,13 +311,22 @@ class UserReport
 
         usort($data, fn (array $a, array $b) => [$b[2], $a[0]] <=> [$a[2], $b[0]]);
 
+        // The nightly task moves the days past the hot window into archive
+        // files, which this part does not read: say which days it covers.
+        $heldSince = app(AuditArchive::class)->heldSince();
+        $note = __('Counted from the audit log: every entry the user caused, logins included.')
+            .($heldSince === null ? '' : ' '.__('The audit log holds entries from :date.', ['date' => $heldSince->format(HuDate::DATE)]));
+
         return new ReportTable(
             ReportSection::Activity,
             ReportSection::Activity->label(),
             [__('User'), __('Logins'), __('Audited actions'), __('Last action')],
             $data,
             [__('Total'), $sum['logins'], $sum['actions'], ''],
-            __('Counted from the audit log: every entry the user caused, logins included.'),
+            $note,
+            $heldSince !== null && $from->lessThan($heldSince)
+                ? __('The audit log holds entries from :date; the earlier days of this period are in the audit archive (System › Audit archive) and are not counted here.', ['date' => $heldSince->format(HuDate::DATE)])
+                : null,
         );
     }
 

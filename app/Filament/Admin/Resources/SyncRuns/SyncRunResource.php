@@ -7,6 +7,7 @@ use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\SyncRunChanges\SyncRunChangeResource;
 use App\Filament\Admin\Resources\SyncRuns\Pages\ManageSyncRuns;
 use App\Models\SyncRun;
+use App\Support\HuDate;
 use App\Support\InputLimits;
 use App\Sync\AccountProvisioner;
 use App\Sync\SyncExternalRecords;
@@ -21,6 +22,7 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Illuminate\Support\Carbon;
 
 class SyncRunResource extends BaseResource
 {
@@ -102,6 +104,23 @@ class SyncRunResource extends BaseResource
                     TextEntry::make('from_external_id')->label(__('Previous external id'))->placeholder('-'),
                     TextEntry::make('kind')->label(__('Classification'))->formatStateUsing(fn ($state) => $state === 'user' ? __('Staff') : __('Client')),
                     TextEntry::make('email')->label(__('E-mail')),
+                ])->columns(4),
+            RepeatableEntry::make('stats.deleted_returned_samples')->label(__('Records of deleted clients (first :n)', ['n' => SyncExternalRecords::CHANGE_SAMPLE_SIZE]))->columnSpanFull()
+                ->visible(fn (SyncRun $record) => ($record->stats['deleted_returned'] ?? 0) > 0)
+                ->helperText(__('An EMD record that belongs to a client an administrator deleted (by the record or by its address) came back. The client stays deleted and closed, and no new account is made for the record; restore it with the Deleted filter of the Clients list and reopen it if it should sign in again.'))
+                ->schema([
+                    TextEntry::make('external_id')->label(__('External id')),
+                    TextEntry::make('email')->label(__('E-mail')),
+                    TextEntry::make('deleted_at')->label(__('Deleted'))->formatStateUsing(fn ($state): string => $state ? Carbon::parse($state)->format(HuDate::DATETIME) : '-'),
+                ])->columns(3),
+            RepeatableEntry::make('stats.linked_reopened_samples')->label(__('Linked clients reopened because their link ended (first :n)', ['n' => SyncExternalRecords::CHANGE_SAMPLE_SIZE]))->columnSpanFull()
+                ->visible(fn (SyncRun $record) => ($record->stats['linked_reopened'] ?? 0) > 0)
+                ->helperText(__('Linked clients closed only because their sponsor is closed. The directory changed the implicit package of the sponsor so that it no longer sponsors anyone, or gave the linked client a premium package of its own; the link ended and the linked client reopened, while the sponsor stays closed. Recorded in the audit log.'))
+                ->schema([
+                    TextEntry::make('name')->label(__('Linked client')),
+                    TextEntry::make('email')->label(__('E-mail'))->placeholder('-'),
+                    TextEntry::make('sponsor')->label(__('Closed sponsor'))->placeholder('-'),
+                    TextEntry::make('sponsor_external_id')->label(__('Sponsor external id'))->placeholder('-'),
                 ])->columns(4),
             Section::make(__('EMD requests'))->description(__('Status codes of the ID list query and the export; the ID list status comes from the configured response path, or from HTTP when none is set.'))
                 ->visible(fn (SyncRun $record): bool => ! empty($record->stats['requests'] ?? null))->columns(3)->schema([

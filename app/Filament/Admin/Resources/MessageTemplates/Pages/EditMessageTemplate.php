@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Resources\MessageTemplates\Pages;
 use App\Enums\OutboundMessageStatus;
 use App\Filament\Admin\Resources\MessageTemplates\MessageTemplateResource;
 use App\Filament\Concerns\GuardsUnsavedChanges;
+use App\Filament\NotificationText;
 use App\Messaging\Channel;
 use App\Messaging\Messenger;
 use App\Messaging\TemplateRenderer;
@@ -75,31 +76,38 @@ class EditMessageTemplate extends EditRecord
                     $record = $this->getRecord();
                     $key = $record->key;
                     $rendered = app(TemplateRenderer::class)->render($key, $record->locale, $key->sampleData());
+                    // Treated like the real message: wiped from the outbound list once
+                    // it is out, and an e-mail keeps no copy in Sent Items.
+                    $secret = $key->carriesSecret();
 
                     try {
                         if ($key->channel() === Channel::Sms) {
                             $phone = app(PhoneNormalizer::class)->normalize($data['phone']) ?? throw new \InvalidArgumentException(__('Invalid phone number.'));
-                            $message = app(Messenger::class)->sendRaw(Channel::Sms, $phone, null, $rendered->body);
+                            $message = app(Messenger::class)->sendRaw(Channel::Sms, $phone, null, $rendered->body, carriesSecret: $secret);
                             $to = $phone;
                         } else {
                             // The prefix must not push the subject past its column (varchar 255).
-                            $message = app(Messenger::class)->sendRaw(Channel::Email, $data['email'], mb_substr('[TEST] '.$rendered->subject, 0, self::SUBJECT_MAX_LENGTH), $rendered->body);
+                            $message = app(Messenger::class)->sendRaw(Channel::Email, $data['email'], mb_substr('[TEST] '.$rendered->subject, 0, self::SUBJECT_MAX_LENGTH), $rendered->body, carriesSecret: $secret);
                             $to = $data['email'];
                         }
                     } catch (Throwable $e) {
-                        Notification::make()->title($e->getMessage())->danger()->send();
+                        Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
 
                         return;
                     }
 
                     // A text message to a number no SMS may go to is cancelled at once: say so.
                     if ($message->status === OutboundMessageStatus::Cancelled) {
-                        Notification::make()->title(__('Test message not sent to :to', ['to' => $to]))->body((string) $message->error)->warning()->send();
+                        Notification::make()->title(NotificationText::of(__('Test message not sent to :to', ['to' => $to])))->body(NotificationText::of((string) $message->error))->warning()->send();
 
                         return;
                     }
 
-                    Notification::make()->title(__('Test message queued to :to', ['to' => $to]))->success()->send();
+                    $queued = Notification::make()->title(NotificationText::of(__('Test message queued to :to', ['to' => $to])))->success();
+                    if ($secret) {
+                        $queued->body(__('Like the real message, its content is wiped from Outbound messages once it is out; a failed test cannot be resent, send a new one.'));
+                    }
+                    $queued->send();
                 }),
         ];
     }

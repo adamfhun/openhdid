@@ -133,6 +133,19 @@ class FakeOidc
     /** Sign tokens without any subject claim (oid, sub). */
     public static bool $withoutSubject = false;
 
+    /**
+     * The public key the fake provider signs with, as one JWKS entry (kid
+     * "test-kid"), for a test that serves the key set itself.
+     *
+     * @return array<string, string>
+     */
+    public static function jwk(): array
+    {
+        self::ensureKeys();
+
+        return self::$jwk;
+    }
+
     private static function ensureKeys(): void
     {
         if (self::$privateKey !== null) {

@@ -22,6 +22,6 @@ class HealthController extends Controller
             'status' => $failed === [] ? 'ok' : 'fail',
             'checks' => array_map(fn ($c) => ['key' => $c->key, 'status' => $c->status->value], $results),
             'checked_at' => now()->toIso8601String(),
-        ], $failed === [] ? 200 : 503)->header('Cache-Control', 'no-store');
+        ], $failed === [] ? 200 : 503, ['Cache-Control' => 'no-store']);
     }
 }

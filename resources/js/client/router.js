@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { store } from './store';
 import { hooks } from './api';
 import { t } from './i18n';
+import { revokingReasons } from './loginErrors';
 import Login from './views/Login.vue';
 import MagicLink from './views/MagicLink.vue';
 import Home from './views/Home.vue';
@@ -50,7 +51,7 @@ router.beforeEach(async (to) => {
 });
 
 hooks.onNotEntitled = (error) => {
-    store.forgetUser(error?.reason === 'account_closed' ? 'account_closed' : 'not_entitled');
+    store.forgetUser(revokingReasons.includes(error?.reason) ? error.reason : 'not_entitled');
     router.push(loginPath());
 };
 

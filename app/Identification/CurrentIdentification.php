@@ -35,13 +35,13 @@ class CurrentIdentification
     {
         $session = IdSession::query()
             ->where('agent_user_id', $agent->id)
-            ->where('status', IdSessionStatus::Passed)
+            ->countingPass()
             ->where(function (Builder $query) use ($agent): void {
-                $query->where('decided_at', '>=', now()->subMinutes(self::RECENT_MINUTES))
+                $query->decidedWithin('>=', now()->subMinutes(self::RECENT_MINUTES))
                     ->orWhereHas('call', fn (Builder $call) => $call->ongoing()->where('agent_user_id', $agent->id));
             })
             ->with(['client', 'call'])
-            ->latest('decided_at')
+            ->latestDecided()
             ->first();
 
         if ($session === null || $session->client === null || ! $this->tiers->isServed($session->client)) {
@@ -64,8 +64,8 @@ class CurrentIdentification
     {
         $query = IdSession::query()
             ->where('client_id', $client->id)
-            ->where('status', IdSessionStatus::Passed)
-            ->latest('decided_at');
+            ->countingPass()
+            ->latestDecided();
 
         if ($call !== null) {
             return $query->where('call_id', $call->id)->first();
@@ -73,8 +73,29 @@ class CurrentIdentification
 
         return $query
             ->where('agent_user_id', $agent->id)
-            ->where('decided_at', '>=', now()->subMinutes(self::RECENT_MINUTES))
+            ->decidedWithin('>=', now()->subMinutes(self::RECENT_MINUTES))
             ->first();
+    }
+
+    /**
+     * The agent's latest decided session with the client, whatever its
+     * outcome: on the current call, or without one in the last
+     * RECENT_MINUTES. The identification page shows it as the last result.
+     */
+    public function latestOutcome(User $agent, Client $client, ?Call $call): ?IdSession
+    {
+        $query = IdSession::query()
+            ->where('client_id', $client->id)
+            ->where('agent_user_id', $agent->id)
+            ->whereNot('status', IdSessionStatus::Open)
+            ->whereNull('voided_at')
+            ->latestDecided();
+
+        if ($call !== null) {
+            return $query->where('call_id', $call->id)->first();
+        }
+
+        return $query->decidedWithin('>=', now()->subMinutes(self::RECENT_MINUTES))->first();
     }
 
     /**

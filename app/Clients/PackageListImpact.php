@@ -3,8 +3,11 @@
 namespace App\Clients;
 
 use App\Enums\ClientTier;
+use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\ClientLink;
+use App\Settings\SettingKey;
+use App\Support\HuDate;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Collection as SupportCollection;
 
@@ -16,7 +19,9 @@ use Illuminate\Support\Collection as SupportCollection;
  * and how many links end, whose tier moves between premium and standard.
  * The links of a closed sponsor end as well, and the linked clients closed
  * only with it reopen on save (ClientLinks::sweepIneligibleSponsors), so
- * those are counted and named too. Clients premium-only mode hides at
+ * those are counted and named too, like the linked clients whose own
+ * implicit package joins the premium list: their link ends on save
+ * (ClientLinks::endLinkOfSelfSponsored). Clients premium-only mode hides at
  * present are counted but not named.
  */
 class PackageListImpact
@@ -41,6 +46,9 @@ class PackageListImpact
      *     reopened_without_access: array{count: int, hidden: int, sample: list<string>},
      *     downgraded: array{count: int, hidden: int, sample: list<string>},
      *     upgraded: array{count: int, hidden: int, sample: list<string>},
+     *     gaining_access: array{count: int, hidden: int, sample: list<string>, unserved: int},
+     *     self_sponsored: array{count: int, hidden: int, sample: list<string>},
+     *     leaving: list<string>,
      * }
      */
     public function estimate(array $premium, array $standard, bool $premiumOnly = false): array
@@ -61,6 +69,12 @@ class PackageListImpact
             'reopened_without_access' => ['count' => 0, 'hidden' => 0, 'sample' => []],
             'downgraded' => ['count' => 0, 'hidden' => 0, 'sample' => []],
             'upgraded' => ['count' => 0, 'hidden' => 0, 'sample' => []],
+            // Clients without portal access so far that the new lists let in.
+            'gaining_access' => ['count' => 0, 'hidden' => 0, 'sample' => [], 'unserved' => 0],
+            // Linked clients whose own implicit package joins the premium list: their link ends.
+            'self_sponsored' => ['count' => 0, 'hidden' => 0, 'sample' => []],
+            // The package names neither new list carries any more.
+            'leaving' => array_values(array_diff([...$oldPremium, ...$oldStandard], [...$newPremium, ...$newStandard])),
             // With only premium clients served, a move to the standard level ends the service.
             'premium_only' => $premiumOnly,
         ];
@@ -84,6 +98,10 @@ class PackageListImpact
 
                     if ($before !== null && $after === null) {
                         self::count($impact['losing_access'], $client->name, $hidden);
+                    } elseif ($before === null && $after !== null) {
+                        self::count($impact['gaining_access'], $client->name, $hidden);
+                        // While only premium clients are served, a standard one gets no service yet.
+                        $impact['gaining_access']['unserved'] += $hidingNow && $after !== ClientTier::Premium ? 1 : 0;
                     } elseif ($before === ClientTier::Premium && $after === ClientTier::Standard) {
                         self::count($impact['downgraded'], $client->name, $hidden);
                     } elseif ($before === ClientTier::Standard && $after === ClientTier::Premium) {
@@ -100,8 +118,49 @@ class PackageListImpact
             });
 
         $this->countClosedSponsors($impact, $oldPremium, $newPremium, $oldStandard, $newStandard, $linkCounts, $hidingNow);
+        $this->countSelfSponsored($impact, $oldPremium, $newPremium, $oldStandard, $hidingNow);
 
         return $impact;
+    }
+
+    /**
+     * The linked clients, open or closed, whose own implicit package joins
+     * the premium list: they no longer need a sponsor, and their link ends
+     * on save; one closed only with its sponsor reopens, unless the
+     * directory dropped or reclassified it (keepClosedReason()). A link whose
+     * sponsor leaves the premium list ends for that reason and is counted
+     * there already.
+     *
+     * @param  array<string, mixed>  $impact
+     * @param  list<string>  $oldPremium
+     * @param  list<string>  $newPremium
+     * @param  list<string>  $oldStandard
+     */
+    private function countSelfSponsored(array &$impact, array $oldPremium, array $newPremium, array $oldStandard, bool $hidingNow): void
+    {
+        $joining = $this->tiers->rawNames(array_values(array_diff($newPremium, $oldPremium)));
+
+        if ($joining === []) {
+            return;
+        }
+
+        $leaving = $this->tiers->rawNames(array_values(array_diff($oldPremium, $newPremium)));
+
+        Client::query()
+            ->whereIn('implicit_package', $joining)
+            ->whereHas('activeSponsorLink', fn ($query) => $query->whereHas('sponsor', fn ($query) => $query->withTrashed()->where(fn ($query) => $query->whereNull('implicit_package')->orWhereNotIn('implicit_package', $leaving))))
+            ->with('externalRecord')
+            ->select(['id', 'name', 'external_record_id', 'implicit_package', 'explicit_package', 'package_override', 'package_override_until', 'closed_at', 'closed_reason'])
+            ->chunkById(500, function (Collection $linkedClients) use (&$impact, $oldPremium, $oldStandard, $hidingNow): void {
+                foreach ($linkedClients as $linked) {
+                    $hidden = $hidingNow && self::tierIn(self::packagesOf($linked), $oldPremium, $oldStandard) !== ClientTier::Premium;
+                    self::count($impact['self_sponsored'], $linked->name, $hidden);
+
+                    if ($linked->isClosed() && $linked->closed_reason === ClientLinks::CLOSE_REASON_SPONSOR && $this->links->keepClosedReason($linked) === null) {
+                        self::count($impact['reopened'], $linked->name, $hidden);
+                    }
+                }
+            });
     }
 
     /**
@@ -185,13 +244,49 @@ class PackageListImpact
         }
 
         if ($impact['losing_access']['count'] > 0) {
-            $errors[] = __(':n open client(s) would lose portal access because their package would be on neither list (:names). Move the package to the standard list, or close those accounts first; a package can only be removed once no open client wears it.', [
+            $errors[] = trim(__(':n open client(s) would lose portal access because their package would be on neither list (:names). Move the package to the standard list, or close those accounts first; a package can only be removed once no open client wears it.', [
                 'n' => $impact['losing_access']['count'],
                 'names' => self::names($impact['losing_access']),
-            ]);
+            ]).' '.$this->addedBy($impact['leaving'] ?? []));
         }
 
         return $errors;
+    }
+
+    /**
+     * Which save put the leaving packages on the lists: the wearers of a
+     * package a recent save added got their access from that save, and the
+     * error names it (the hard rule stays, owner decision Q4).
+     *
+     * @param  list<string>  $leaving
+     */
+    private function addedBy(array $leaving): string
+    {
+        $sentences = [];
+
+        foreach ($leaving as $package) {
+            $added = AuditLog::query()->where('event', 'setting.changed')
+                ->whereIn('context->key', [SettingKey::PackagesPremium->value, SettingKey::PackagesStandard->value])
+                ->latest('id')->limit(50)->get()
+                ->first(function (AuditLog $entry) use ($package): bool {
+                    $was = array_map(fn (mixed $name): ?string => self::normalize(is_string($name) ? $name : null), (array) ($entry->context['from'] ?? []));
+                    $is = array_map(fn (mixed $name): ?string => self::normalize(is_string($name) ? $name : null), (array) ($entry->context['to'] ?? []));
+
+                    return in_array($package, $is, true) && ! in_array($package, $was, true);
+                });
+
+            if ($added !== null) {
+                // The name as the save wrote it.
+                $raw = collect((array) ($added->context['to'] ?? []))->first(fn (mixed $name): bool => is_string($name) && self::normalize($name) === $package);
+                $sentences[] = __('The package :package was added to the lists by the save of :time (:by).', [
+                    'package' => is_string($raw) ? $raw : $package,
+                    'time' => $added->created_at->format(HuDate::DATETIME),
+                    'by' => $added->actor?->name ?? '?',
+                ]);
+            }
+        }
+
+        return implode(' ', $sentences);
     }
 
     /**
@@ -200,6 +295,8 @@ class PackageListImpact
     public function needsConfirmation(array $impact): bool
     {
         return $impact['sponsors']['count'] > 0
+            || ($impact['gaining_access']['count'] ?? 0) > 0
+            || ($impact['self_sponsored']['count'] ?? 0) > 0
             || ($impact['closed_sponsors']['count'] ?? 0) > 0
             || ($impact['reopened']['count'] ?? 0) > 0
             || $impact['downgraded']['count'] > 0
@@ -227,6 +324,12 @@ class PackageListImpact
             ]);
         }
 
+        if (($impact['self_sponsored']['count'] ?? 0) > 0) {
+            $parts[] = __(':n linked client(s) get an implicit premium package of their own with this save, so they no longer need a sponsor: their link ends on save (:names), and closing their sponsor no longer closes them.', [
+                'n' => $impact['self_sponsored']['count'], 'names' => self::names($impact['self_sponsored']),
+            ]);
+        }
+
         if (($impact['reopened']['count'] ?? 0) > 0) {
             $parts[] = __(':n linked client(s), closed only because their sponsor was closed, are reopened on save, because their link ends (:names). They can sign in to the portal and be identified again with whatever their own packages entitle them to.', [
                 'n' => $impact['reopened']['count'], 'names' => self::names($impact['reopened']),
@@ -234,6 +337,16 @@ class PackageListImpact
         }
 
         $premiumOnly = $impact['premium_only'] ?? false;
+
+        if (($impact['gaining_access']['count'] ?? 0) > 0) {
+            $parts[] = __(':n client(s) without portal access so far get it with this save (:names): they can sign in, set a PIN and be identified.', [
+                'n' => $impact['gaining_access']['count'], 'names' => self::names($impact['gaining_access']),
+            ]);
+
+            if (($impact['gaining_access']['unserved'] ?? 0) > 0) {
+                $parts[] = __(':n of them are on the standard level and, as only premium clients are served, are not served yet.', ['n' => $impact['gaining_access']['unserved']]);
+            }
+        }
 
         if ($impact['downgraded']['count'] > 0) {
             $parts[] = $premiumOnly

@@ -1,6 +1,8 @@
 /**
  * Tiny JSON client for /api/v1. Same-origin, cookie-based (Sanctum SPA).
  */
+import { revokingReasons } from './loginErrors';
+
 const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.content ?? '';
 
 const xsrfCookie = () => {
@@ -79,7 +81,7 @@ export async function api(method, path, data, { retried = false } = {}) {
 
     if (!response.ok) {
         const error = new ApiError(response.status, body);
-        if (error.status === 403 && ['not_entitled', 'account_closed'].includes(error.reason)) hooks.onNotEntitled?.(error);
+        if (error.status === 403 && revokingReasons.includes(error.reason)) hooks.onNotEntitled?.(error);
         if (error.status === 401) hooks.onUnauthenticated?.(error);
         throw error;
     }

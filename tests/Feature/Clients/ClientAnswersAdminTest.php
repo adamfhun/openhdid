@@ -4,7 +4,9 @@ use App\Auth\Role;
 use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
 use App\Filament\Admin\Resources\Clients\RelationManagers\AnswersRelationManager;
 use App\Identification\ClientAnswers;
+use App\Models\AuditLog;
 use App\Models\Client;
+use App\Models\ClientAnswer;
 use App\Models\Question;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -39,5 +41,15 @@ it('lets only client managers remove a security answer', function (): void {
         ->assertActionVisible(TestAction::make('delete')->table($this->answer))
         ->callAction(TestAction::make('delete')->table($this->answer));
 
-    expect($this->answer->fresh()->trashed())->toBeTrue();
+    expect(ClientAnswer::withTrashed()->find($this->answer->id))->toBeNull('removed for good, the encrypted answer and its hash too')
+        ->and(AuditLog::query()->where('event', 'client_answer.removed')->sole()->context)->toMatchArray(['via' => 'staff']);
+});
+
+it('deletes for good the answers removed before the upgrade', function (): void {
+    $this->answer->delete();
+    expect(ClientAnswer::withTrashed()->find($this->answer->id))->not->toBeNull();
+
+    (require database_path('migrations/2026_11_02_100004_purge_removed_client_answers.php'))->up();
+
+    expect(ClientAnswer::withTrashed()->find($this->answer->id))->toBeNull();
 });

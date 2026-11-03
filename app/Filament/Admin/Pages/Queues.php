@@ -7,6 +7,7 @@ use App\Filament\Admin\Clusters\System;
 use App\Filament\Admin\Widgets\FailedJobsWidget;
 use App\Filament\Admin\Widgets\OutboundMessagesWidget;
 use App\Filament\Admin\Widgets\PendingJobsWidget;
+use App\Filament\NotificationText;
 use App\System\HealthChecks;
 use App\System\QueueMaintenance;
 use App\System\QueueState;
@@ -97,7 +98,7 @@ class Queues extends Page
             })
             ->requiresConfirmation()
             ->modalHeading(fn (array $arguments): string => __('Clear the ":queue" queue?', ['queue' => $arguments['queue'] ?? '']))
-            ->modalDescription(fn (array $arguments): string => __('Every waiting and in-progress job of the queue is deleted: :n job(s) right now. Queued e-mails and SMS are not lost, the scheduler queues them again within minutes; an EMD sync waiting here stays "queued" on the runs list and has to be started again.', ['n' => $this->pendingOf((string) ($arguments['queue'] ?? ''))]))
+            ->modalDescription(fn (array $arguments): string => __('Every waiting and in-progress job of the queue is deleted: :n job(s) right now. Queued e-mails and SMS are not lost, the scheduler queues them again within minutes; an EMD sync waiting here is marked failed on the runs list, its uploaded file is deleted, and it has to be started again (one a worker already started runs on).', ['n' => $this->pendingOf((string) ($arguments['queue'] ?? ''))]))
             ->modalSubmitActionLabel(__('Clear queue'))
             ->action(function (array $arguments): void {
                 $queue = (string) ($arguments['queue'] ?? '');
@@ -105,7 +106,7 @@ class Queues extends Page
 
                 $count = $this->getMaintenance()->clearQueue($queue);
 
-                Notification::make()->title(__(':n job(s) removed from the ":queue" queue', ['n' => $count, 'queue' => $queue]))->success()->send();
+                Notification::make()->title(NotificationText::of(__(':n job(s) removed from the ":queue" queue', ['n' => $count, 'queue' => $queue])))->success()->send();
             });
     }
 

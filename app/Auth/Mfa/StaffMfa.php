@@ -14,6 +14,8 @@ use App\Settings\Settings;
 use App\Sms\SmsDestinations;
 use App\Support\HuDate;
 use App\Support\PhoneNormalizer;
+use App\System\EnvironmentSafety;
+use App\System\Installation;
 use Filament\Auth\MultiFactor\App\AppAuthentication;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Carbon;
@@ -84,7 +86,7 @@ class StaffMfa
      */
     public static function smsAvailable(): bool
     {
-        return config('hdid.sms.driver') !== 'log' || ! app()->isProduction();
+        return config('hdid.sms.driver') !== 'log' || ! EnvironmentSafety::productionSafeguards();
     }
 
     /**
@@ -143,6 +145,48 @@ class StaffMfa
     }
 
     /**
+     * The SMS numbers the setup page offers, keyed by an opaque choice: the
+     * page (its HTML and its Livewire state) never holds a full number
+     * before the second factor is set up, only the masked label.
+     *
+     * @return array<string, string> choice => masked number
+     */
+    public function smsChoices(User $user): array
+    {
+        $choices = [];
+
+        foreach ($this->smsNumbers($user) as $number) {
+            $choices[$this->smsChoice($user, $number)] = self::mask($number);
+        }
+
+        return $choices;
+    }
+
+    /**
+     * The number behind a choice of smsChoices(), or null for anything that
+     * was not offered (a raw number too).
+     */
+    public function numberForChoice(User $user, ?string $choice): ?string
+    {
+        if ($choice === null || $choice === '') {
+            return null;
+        }
+
+        foreach ($this->smsNumbers($user) as $number) {
+            if (hash_equals($this->smsChoice($user, $number), $choice)) {
+                return $number;
+            }
+        }
+
+        return null;
+    }
+
+    private function smsChoice(User $user, string $number): string
+    {
+        return substr(hash_hmac('sha256', 'mfa-sms-choice:'.$user->getKey().'|'.$number, (string) config('app.key')), 0, 20);
+    }
+
+    /**
      * Mobile numbers of the user's EMD record that no SMS code may go to,
      * because their country is not on the accepted list: the setup page
      * names why the SMS factor is not offered.
@@ -177,9 +221,12 @@ class StaffMfa
     {
         $passed = session()->get(self::PASSED);
 
+        // The mark names the installation that set it: another one reading the
+        // same session (a shared session store, a cloned database) asks again.
         return is_array($passed)
             && ($passed['user'] ?? null) === $user->getKey()
-            && (int) ($passed['epoch'] ?? -1) === (int) $user->session_epoch;
+            && (int) ($passed['epoch'] ?? -1) === (int) $user->session_epoch
+            && ($passed['installation'] ?? null) === Installation::id();
     }
 
     public function needsSetup(User $user): bool
@@ -248,13 +295,20 @@ class StaffMfa
 
         $destination = $this->destination($user, $method, $purpose, $number);
 
+        // Reserve first, decide on the count after it: two overlapping
+        // requests cannot both pass a check made before either was counted.
+        // A request refused by the minute does not use up the quarter hour.
         $minuteKey = 'hdid:mfa-send-minute:'.$user->getKey();
         $quarterKey = 'hdid:mfa-send:'.$user->getKey();
-        if (RateLimiter::tooManyAttempts($minuteKey, 1) || RateLimiter::tooManyAttempts($quarterKey, self::SENDS_PER_QUARTER)) {
+        if (RateLimiter::tooManyAttempts($quarterKey, self::SENDS_PER_QUARTER)) {
+            throw new MfaException($this->quarterLimitMessage($quarterKey));
+        }
+        if (RateLimiter::hit($minuteKey, 60) > 1) {
             throw new MfaException(__('A code was sent a moment ago. Wait a minute before asking for a new one.'));
         }
-        RateLimiter::hit($minuteKey, 60);
-        RateLimiter::hit($quarterKey, 900);
+        if (RateLimiter::hit($quarterKey, 900) > self::SENDS_PER_QUARTER) {
+            throw new MfaException($this->quarterLimitMessage($quarterKey));
+        }
 
         $code = str_pad((string) random_int(0, 10 ** self::CODE_LENGTH - 1), self::CODE_LENGTH, '0', STR_PAD_LEFT);
         $expires = now()->addMinutes(self::CODE_TTL_MINUTES);
@@ -547,7 +601,20 @@ class StaffMfa
         throw new MfaException(self::lockedMessage($until));
     }
 
+    private function quarterLimitMessage(string $quarterKey): string
+    {
+        return __('You asked for :max codes within 15 minutes; you can ask for a new one at :time.', [
+            'max' => self::SENDS_PER_QUARTER,
+            'time' => now()->addSeconds(RateLimiter::availableIn($quarterKey))->format(HuDate::TIME),
+        ]);
+    }
+
     /**
+     * Every try tells the staff member that the factor is locked; the audit
+     * log gets at most one entry a minute per account, the next one with the
+     * number of tries left out meanwhile (suppressed), so repeated tries on
+     * a locked factor cannot flood it.
+     *
      * @throws MfaException
      */
     private function assertNotLocked(User $user, MfaMethod $method): void
@@ -556,7 +623,15 @@ class StaffMfa
             return;
         }
 
-        $this->auditor->record('mfa.failed', $user, ['method' => $method->value, 'reason' => 'locked', 'locked_until' => $user->mfa_locked_until->toIso8601String()], $user);
+        $suppressedKey = Installation::key('hdid:mfa-locked-suppressed:'.$user->getKey());
+
+        if (Cache::add(Installation::key('hdid:mfa-locked-audited:'.$user->getKey()), true, 60)) {
+            $suppressed = (int) Cache::pull($suppressedKey, 0);
+            $this->auditor->record('mfa.failed', $user, ['method' => $method->value, 'reason' => 'locked', 'locked_until' => $user->mfa_locked_until->toIso8601String()] + ($suppressed > 0 ? ['suppressed' => $suppressed] : []), $user);
+        } else {
+            Cache::add($suppressedKey, 0, 3600);
+            Cache::increment($suppressedKey);
+        }
 
         throw new MfaException(self::lockedMessage($user->mfa_locked_until));
     }
@@ -591,7 +666,7 @@ class StaffMfa
     private function markPassed(User $user, ?MfaMethod $method, array $context = []): void
     {
         $session = session();
-        $session->put(self::PASSED, ['user' => $user->getKey(), 'epoch' => (int) $user->session_epoch, 'at' => now()->getTimestamp()]);
+        $session->put(self::PASSED, ['user' => $user->getKey(), 'epoch' => (int) $user->session_epoch, 'installation' => Installation::id(), 'at' => now()->getTimestamp()]);
         // A new identifier: a session id seen before the second factor is worth nothing after it.
         $session->migrate(true);
 
@@ -638,7 +713,7 @@ class StaffMfa
     private function underAccountLock(User $user, callable $work): mixed
     {
         try {
-            return Cache::lock('hdid:mfa:'.$user->getKey(), 10)->block(5, function () use ($user, $work): mixed {
+            return Cache::lock(Installation::lockName('hdid:mfa:'.$user->getKey()), 10)->block(5, function () use ($user, $work): mixed {
                 $user->refresh();
 
                 return $work();
@@ -653,14 +728,19 @@ class StaffMfa
         return AppAuthentication::make()->codeWindow(self::TOTP_WINDOW);
     }
 
+    /**
+     * The sent code and the pending secret carry the installation id: a
+     * cloned database holds the same user ids, and a code sent on one
+     * installation must never pass on another one on the same store.
+     */
     private function codeKey(User $user): string
     {
-        return 'hdid:mfa-code:'.$user->getKey();
+        return Installation::key('hdid:mfa-code:'.$user->getKey());
     }
 
     private function setupKey(User $user): string
     {
-        return 'hdid:mfa-setup:'.$user->getKey();
+        return Installation::key('hdid:mfa-setup:'.$user->getKey());
     }
 
     /**

@@ -6,14 +6,17 @@ use App\Audit\AuditArchive;
 use App\Auth\AccountLogin;
 use App\Auth\Mfa\StaffMfa;
 use App\Auth\Oidc\EntraTenantOverview;
+use App\Auth\Oidc\OidcClient;
 use App\Auth\Oidc\OidcProvider;
 use App\Auth\Oidc\SsoSubjectBinding;
 use App\Auth\Passwordless\LoginMessageCaps;
 use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
+use App\Clients\PackageName;
 use App\Enums\ApiKeyScope;
 use App\Enums\MfaMethod;
 use App\Enums\OutboundMessageStatus;
+use App\Enums\PhoneNumberSource;
 use App\Enums\PrincipalType;
 use App\Enums\SyncRunStatus;
 use App\Mail\Transport\EwsTransport;
@@ -36,6 +39,7 @@ use App\Sync\ApiTokens;
 use App\Sync\SyncExternalRecords;
 use Filament\Facades\Filament;
 use Illuminate\Contracts\Cache\Repository as Cache;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\ConfigurationUrlParser;
@@ -97,15 +101,69 @@ class HealthChecks
         return Check::info('premium_only', $label, __('On: only premium clients are served; :n open standard client(s) held back.', ['n' => $tiers->heldBackCount()]));
     }
 
+    /**
+     * The setting and debug mode both make the panel show the sent login
+     * links (ClientPasswordlessLogin::revealsLinkInPanel); the tile names
+     * which of them does.
+     */
     public function loginLinkPreview(): Check
     {
         $label = __('Login link preview');
+        $setting = app(Settings::class)->bool(SettingKey::ClientLoginMagicLinkPreviewInPanel);
+        $debug = (bool) config('app.debug');
 
-        if (! app(Settings::class)->bool(SettingKey::ClientLoginMagicLinkPreviewInPanel)) {
+        if (! $setting && ! $debug) {
             return Check::ok('login_link_preview', $label, __('Off: sent login links are not shown in the panel.'));
         }
 
-        return Check::warn('login_link_preview', $label, __('On: the panel shows every client login link it sends, so staff could sign in as the client. Switch it off before go-live.'));
+        if (! $setting) {
+            return Check::warn('login_link_preview', $label, __('On because of debug mode (APP_DEBUG=true): the panel shows every client login link it sends, so staff could sign in as the client. Switch debug mode off after debugging.'));
+        }
+
+        return Check::warn('login_link_preview', $label, __('On: the panel shows every client login link it sends, so staff could sign in as the client. Switch it off before go-live.')
+            .($debug ? ' '.__('Debug mode (APP_DEBUG=true) shows them as well.') : ''));
+    }
+
+    /**
+     * How the installation runs. In production a value that switches a
+     * safeguard off is red (the container refuses to start with it, a
+     * classic installation does not), an empty Redis password yellow (the
+     * container refuses that too; deliberately milder here). Outside
+     * production debug mode is yellow, and any other setup information that
+     * says what it relaxes.
+     */
+    public function environment(): Check
+    {
+        $label = __('Environment');
+        $environment = EnvironmentSafety::environment();
+
+        if (! EnvironmentSafety::isKnownEnvironment()) {
+            return Check::fail('environment', $label, __('APP_ENV=:env is not a known environment name (production, staging, demo, local or testing): the framework does not take it for production, so the production safeguards are off. Set APP_ENV=production.', ['env' => $environment]));
+        }
+
+        if (app()->environment('production')) {
+            if (($problems = EnvironmentSafety::productionProblems()) !== []) {
+                return Check::fail('environment', $label, __('Production with a safeguard switched off: :list.', ['list' => implode('; ', $problems)]));
+            }
+
+            if (($stores = EnvironmentSafety::redisWithoutPassword()) !== []) {
+                return Check::warn('environment', $label, __('REDIS_PASSWORD is empty while :stores use Redis/Valkey: anyone who reaches it on the network can read and write the cache, the sessions and the queue.', ['stores' => implode(', ', $stores)]));
+            }
+
+            return Check::ok('environment', $label, __('Production (APP_ENV=production, APP_DEBUG=false).'));
+        }
+
+        $relaxed = __('outside production the demo accounts and records are not refused, .test addresses are accepted, and the log SMS driver is accepted for staff sign-in codes and shows yellow instead of red');
+
+        if ((bool) config('app.debug')) {
+            return Check::warn('environment', $label, __('APP_ENV=:env with APP_DEBUG=true: the panel shows every client login link it sends, and error pages show internals to anyone who triggers an error; :relaxed. Switch debug mode off after debugging.', ['env' => $environment, 'relaxed' => $relaxed]));
+        }
+
+        if (EnvironmentSafety::localUnderPublicAddress()) {
+            return Check::warn('environment', $label, __('APP_ENV=local under the address :url, which is not a developer machine; :relaxed. Use APP_ENV=production (or staging for a test system).', ['url' => (string) config('app.url'), 'relaxed' => $relaxed]));
+        }
+
+        return Check::info('environment', $label, __('APP_ENV=:env: not a production setup; :relaxed.', ['env' => $environment, 'relaxed' => $relaxed]));
     }
 
     public function staffMfa(): Check
@@ -157,6 +215,10 @@ class HealthChecks
 
         if ($refused > 0) {
             return Check::warn('sso_bindings', $label, __(':bound account(s) bound to a sign-in identity; :refused refused in the last :days days because the sign-in came from another identity.', ['bound' => $bound, 'refused' => $refused, 'days' => self::SSO_MISMATCH_WINDOW_DAYS]));
+        }
+
+        if (! (bool) config('hdid.oidc.require_subject', true)) {
+            return Check::info('sso_bindings', $label, __(':bound account(s) bound to a sign-in identity. HDID_SSO_REQUIRE_SUBJECT=false: a company sign-in without a stable identifier signs in an account never bound, unbound; a bound account is still refused.', ['bound' => $bound]));
         }
 
         return Check::ok('sso_bindings', $label, __(':bound account(s) bound to a sign-in identity; no refusal from another identity in the last :days days.', ['bound' => $bound, 'days' => self::SSO_MISMATCH_WINDOW_DAYS]));
@@ -267,6 +329,7 @@ class HealthChecks
             'audit' => [__('Audit log'), $this->auditLog(...)],
             'capacity' => [__('Capacity'), $this->capacity(...)],
             'demo_data' => [__('Demo data'), $this->demoData(...)],
+            'environment' => [__('Environment'), $this->environment(...)],
             'premium_only' => [__('Premium clients only'), $this->premiumOnly(...)],
             'login_link_preview' => [__('Login link preview'), $this->loginLinkPreview(...)],
             'client_login_emd' => [__('Client login and EMD'), $this->clientLoginEmd(...)],
@@ -274,6 +337,8 @@ class HealthChecks
             'adfs_debug' => [__('ADFS debugging'), $this->adfsDebug(...)],
             'package_overrides' => [__('Package overrides'), $this->packageOverrides(...)],
             'shared_numbers' => [__('Shared phone numbers'), $this->sharedPhoneNumbers(...)],
+            'sms_sign_in_numbers' => [__('SMS sign-in numbers'), $this->smsSignInNumbers(...)],
+            'package_names' => [__('Package names'), $this->packageNames(...)],
         ];
 
         // One broken dependency (say, the database) must not turn the whole
@@ -313,7 +378,8 @@ class HealthChecks
     {
         return match ($key) {
             'premium_only' => __('Information: Settings › Clients and levels › "Premium only" is on, so only premium clients are served; standard clients cannot sign in, the phone menu does not recognise them and no staff view shows them. Their data is kept and the sync keeps importing them. Switch it off to serve them again; the number shown is how many open standard clients are held back.'),
-            'login_link_preview' => __('Yellow: Settings › Client portal › "Show the link in the panel after sending" is on, so every sent client login link is shown to the staff member who sends it. Meant for test environments only; switch it off for production.'),
+            'environment' => __('Red: APP_ENV=production with a value that switches a safeguard off (APP_DEBUG=true, TRUSTED_PROXIES with *, **, 0.0.0.0/0 or ::/0, SESSION_SECURE_COOKIE=false, an APP_URL that is not https://, an empty DB_PASSWORD), or an APP_ENV that is not one of production, staging, demo, local, testing. The OpenHDID container refuses to start with these, so there the tile is green in production and information on a test system; on a classic installation correct .env, then run sudo -u www-data sh -c \'umask 027 && php artisan config:cache\' and reload PHP-FPM (on OpenHDID: docker compose up -d). Yellow: APP_DEBUG=true outside production (for a debugging session only: the panel shows sent login links and error pages show internals), APP_ENV=local under a public address, or in production an empty REDIS_PASSWORD while Redis/Valkey is used (deliberately yellow here; the container refuses it). Plain http is red only in production. Information: a staging, demo, local or testing setup, which accepts demo accounts, .test addresses and the log SMS driver.'),
+            'login_link_preview' => __('Yellow: Settings › Client portal › "Show the link in the panel after sending" is on, so every sent client login link is shown to the staff member who sends it. Meant for test environments only; switch it off for production. Debug mode (APP_DEBUG=true) shows the links too: then the tile is yellow with the setting off, and only switching debug mode off (APP_DEBUG=false, then config:cache on a classic installation or docker compose up -d on OpenHDID) ends it.'),
             'mfa' => __('Yellow: some staff have no second factor yet (they set one up at their next sign-in, an app with an e-mail code too) or are locked after wrong codes (Users list, "Unlock login"). Red: two-factor sign-in is on but none of the chosen methods can be used, so nobody can finish signing in; choose another method under Settings › Staff sign-in, or switch it off with "php artisan hdid:mfa-reset --off" (in the container: docker compose exec web php artisan hdid:mfa-reset --off). A staff member who lost the factor: "Reset second factor" on the Users list, or hdid:mfa-reset <e-mail>.'),
             'rate_limit_exemptions' => __('Information: the networks of HDID_RATE_LIMIT_EXEMPT_NETWORKS (in the .env file or the environment of the web container) are not limited by client address: neither the per-address limits of the sign-in, company sign-in and other routes nor the panel\'s login limit, in the container not the nginx request and connection limits either. Meant for a company whose users all come from one address (NAT). The limits per e-mail address, phone number and system (login links, SMS codes) and the API keys\' limits still apply. Red: an entry is not an address or network, or is wider than /8 (IPv4) or /32 (IPv6); then no network is exempt (the container does not start). Behind a load balancer the application must see the real client address: list the balancer in TRUSTED_PROXIES, and in the container use OPENHDID_TLS=off, otherwise every client looks like the balancer. After a change reload the configuration (php artisan config:cache, or restart the containers).'),
             'client_login_emd' => __('Yellow: CLIENT_LOGIN_REQUIRE_EMD=false in the .env file (or the environment of the web container), so client logins do not ask for an EMD record. Closed accounts and clients without an entitling package are still refused. To require the record again, remove the line or set it to true, then reload the configuration (php artisan config:cache, or restart the containers).'),
@@ -327,23 +393,26 @@ class HealthChecks
             'valkey' => __('Red: maxmemory-policy is not noeviction, so when memory runs out Valkey silently drops keys: sessions (everyone signed out), rate limits and lockouts, the replay guard of signed partner requests and one-time tokens, locks and queued jobs. Set maxmemory-policy noeviction: the bundled Valkey of compose.yaml has it; on an external or managed Valkey/Redis set it in valkey.conf (redis.conf) or in the provider\'s console (the managed default often evicts, e.g. volatile-lru). Red without memory figures: the server cannot be reached, check REDIS_HOST, REDIS_PORT and REDIS_PASSWORD. Yellow: memory use is above 80 % of maxmemory, there is no maxmemory (the store grows until the host runs out of memory), keys have been evicted since the server started, or REDIS_PREFIX is the default derived from APP_NAME. Raise the limit of the bundled Valkey with OPENHDID_VALKEY_MAXMEMORY and OPENHDID_VALKEY_MEM_LIMIT in .env, then run docker compose up -d; a managed one by its size; on a classic installation set maxmemory (for example 256mb) and maxmemory-policy noeviction in /etc/valkey/valkey.conf, then systemctl restart valkey. A store that fills up fast usually means a flood of anonymous sign-in pages, each opening a session: give the sessions a Valkey of their own (REDIS_SESSION_HOST, see the Session store tile). One Valkey belongs to one installation (or at least its own database, ACL user and key prefix): set REDIS_PREFIX and CACHE_PREFIX in .env to values of this installation, e.g. openhdid-prod- and openhdid-prod-cache-, only while no job waits: stop the web service and the scheduler first, let the workers finish the queue (php artisan queue:monitor redis:priority,redis:default,redis:sync shows the sizes, or the Queues page), then change the prefix and start everything again (container: docker compose up -d; classic installation: php artisan config:cache, then PHP-FPM and php artisan queue:restart); jobs left under the old prefix stay behind, and every session ends. Information: the provider allows neither INFO nor CONFIG GET; check the policy in its console.'),
             'php' => __('EMD sync and large file imports need a PHP max_execution_time of at least 120 seconds (300 recommended) in both PHP-FPM (the panel, this page) and the CLI (the worker, hdid:emd-sync); 0 means unlimited and is fine. Set it in php.ini or the FPM pool (php_admin_value[max_execution_time]) with request_terminate_timeout above it, then restart PHP-FPM. Below 120 s a sync refuses to start. This tile shows the limit of the process that ran the check: the panel shows PHP-FPM, "php artisan hdid:health" shows the CLI.'),
             'messages' => __('Failed messages of the last 24 hours. Open Outbound messages or the Queues page, look at the error of a failed row and fix the transport (E-mail or SMS tile), then resend from the list (one, the selected ones or every failed one). Queued ones that never leave point to the queue worker; "Send queued now" sends them from the browser without a worker. An SMS the network reported undeliverable (wrong or switched-off number) is not resent on its own: check the number on the client record and resend by hand if it was right. Overdue delivery queries mean the scheduler has not run the minutely SMS delivery checks.').' '.__('Yellow also when a queued message has waited more than 5 minutes, or a sign-in code more than 2: the worker is down, busy with a pile of messages, or does not listen on the priority queue. Sign-in codes (the client\'s SMS login code, the staff sign-in code) go on the queue named by HDID_PRIORITY_QUEUE (empty: default); client login links, which live for hours and can be asked for without signing in, wait on the default queue. The worker has to listen on the priority queue before the default one: on a classic installation queue:work --queue=priority,default (deploy/hdid-queue.service), then php artisan queue:restart; the worker container listens on it by itself. One that expired or was replaced by a newer one while it waited is not sent: the list shows it as cancelled with the reason.').' '.__('Yellow, too, while a system-wide limit of the anonymous login messages (Settings › Client portal › Sign-in methods: login links per hour, SMS codes per hour and per day) turns requests away, naming the channel; it lasts until that window is over, and meanwhile the portal\'s login page tells every visitor that links or SMS codes cannot be requested now. Usually a flood of login requests (login.request_capped in the audit log, with the channel); raise the limit only if real logins reach it. The networks of HDID_RATE_LIMIT_EXEMPT_NETWORKS are not exempt from these limits.'),
-            'mail' => __('Red: the EWS URL or credentials are missing in the environment (MAIL_MAILER, EWS_*), or EWS_AUTH=ntlm is set where the libcurl has no NTLM (the OpenHDID image has it from 1.8.0; elsewhere use basic, oauth or SMTP). Yellow: a log/array mailer is set, so no e-mail leaves the server, fine for testing, not for production; or SMTP runs with MAIL_REQUIRE_TLS=false, so the password and the e-mails go out unencrypted when the server offers no STARTTLS: set MAIL_REQUIRE_TLS=true (the server has to offer STARTTLS) or MAIL_SCHEME=smtps with port 465, then restart the services (docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM and php artisan queue:restart). Red also when e-mails of the last 24 hours failed because the SMTP server offers no STARTTLS (the error of the message says so): turn STARTTLS on at the server, or use MAIL_SCHEME=smtps with port 465 (MAIL_REQUIRE_TLS=false only for a local test server), restart the services the same way, then resend the failed messages from Outbound messages. Test with a magic link to your own client account.'),
+            'mail' => __('Red: the EWS URL or credentials are missing in the environment (MAIL_MAILER, EWS_*), or EWS_AUTH=ntlm is set where the libcurl has no NTLM (the OpenHDID image has it from 1.8.0; elsewhere use basic, oauth or SMTP). Yellow: a log/array mailer is set, so no e-mail leaves the server, fine for testing, not for production; or SMTP runs with MAIL_REQUIRE_TLS=false, so the password and the e-mails go out unencrypted when the server offers no STARTTLS: set MAIL_REQUIRE_TLS=true (the server has to offer STARTTLS) or MAIL_SCHEME=smtps with port 465, then restart the services (docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM and php artisan queue:restart). Red also when e-mails of the last 24 hours failed because the SMTP server offers no STARTTLS (the error of the message says so): turn STARTTLS on at the server, or use MAIL_SCHEME=smtps with port 465 (MAIL_REQUIRE_TLS=false only for a local test server), restart the services the same way, then resend the failed messages from Outbound messages. Test with a magic link to your own client account. EWS_VERIFY_TLS=false (red in production, yellow elsewhere): the certificate of the Exchange server is not checked. On OpenHDID put the CA of an internal certificate in the ca folder and run docker compose restart web worker sync-worker scheduler; on a classic installation add it to the system certificate store, then restart PHP-FPM and run php artisan queue:restart; remove the line in both cases.'),
             'sms' => __('Red with Ozeki: the gateway is unreachable or the credentials are wrong (OZEKI_*), check the Ozeki service and the network path. Red/yellow with the log driver: SMS are only written to the log, set SMS_DRIVER=ozeki for production. Delivery reports are asked for with the gateway\'s message id at the offsets in SMS_DELIVERY_CHECKS (OZEKI_STATUS_ACTION names the query action, OZEKI_DELIVERED_STATUSES and OZEKI_UNDELIVERED_STATUSES the status words); if every SMS stays "report pending" and ends "no report", the query action or the status words do not match your gateway: look at the raw gateway status on a message\'s details.'),
             'sync' => __('Red: the last run failed or no successful run happened in twice the expected interval. Open EMD sync runs for the error; check the API URL/key or upload the file manually. A refused run usually means the export was much smaller than before (row-ratio guard). Yellow with a waiting run: the sync started from the panel was not picked up, start a worker for the EMD_SYNC_QUEUE queue. With {{ ids }} in the export payload, a failed ID list query (EMD_SYNC_ID_LIST_URL, ID list settings) or no selected ID on the list also fails the run; the run details show the status codes. Yellow with accounts closing at the next sync: their records were absent from the last run(s); open EMD records, tab "Closes at the next sync", and check the export (or the ID list selection) before the next run closes them. Yellow with e-mail conflicts: either the directory renamed an account e-mail to an address another account holds (the account kept its old address and cannot sign in until the duplicate is resolved in EMD), or a new record arrived with an address already on an account, possibly written differently (accents, full-width characters, look-alike domain): that existing account is unchanged and keeps working, the record stays without an account. Check in EMD which record is the real one and correct the address there; do not delete the existing account, the look-alike record could then take its place at the next run. Of two new records with look-alike addresses in one run, the one that came first got the account. A changed classification (staff/client) closes the old account only after the same number of runs as a missing record; the run details list the pending ones.').' '.self::staleLockHint(),
             'api_keys' => __('Red: a mobile app backend key has no signing secret, so every request with it is refused (signing is mandatory for this scope). Issue one under API keys › Signing secret and hand it to the operator of the mobile backend, or revoke the key if it is not used. Yellow: a scope (call center or mobile backend) has no active key, so that partner cannot call in; create one under API keys and hand it over, or ignore this while the integration is not live yet.'),
             'package_overrides' => __('Informational: these clients carry a temporary manual package. Nothing to fix, but review the list now and then and end an override EMD has caught up with.'),
+            'package_names' => __('Information: since 1.15.1 a package name keeps a character that has no ASCII spelling (Chinese or Japanese characters, ✓, ®, ™): "VIP 金" and "VIP 银" are two packages, and "Premium®" is not "Premium". Before, such characters were dropped and the names folded together. If one of the listed names should count as a listed package, add it as it is to the premium or standard list (Settings › Clients and levels); the lists show who gains or loses access before saving.'),
+            'sms_sign_in_numbers' => __('Information: the SMS sign-in code goes only to a number from EMD, one the helpdesk added, or one that was confirmed (by SMS code on the portal, by the helpdesk on the Phone numbers tab of the client page, or by an identified call when that switch is on). The number shown is how many open clients have phone numbers but none of these, so they get no SMS sign-in code: they confirm a number on the portal (Settings › Identification › Phone numbers › SMS confirmation on the portal), the helpdesk confirms it, or they sign in with the e-mailed link. The client gets an e-mail when a number of theirs becomes usable for the SMS sign-in.'),
             'shared_numbers' => __('A number on file for more than one client recognises nobody in the phone menu, so those callers are not asked for their PIN. Open Shared phone numbers, decide whose number it is and remove it from the others; a number EMD lists for several people has to be corrected in the directory.'),
             'proxy' => __('Red: HDID_HTTP_PROXY is not a usable address; write it as http://host:port, with a password as http://user:password@host:port (special characters percent-encoded, @ as %40). Proxies with Windows (NTLM) sign-in are not supported. Internal servers reached without the proxy (master data, ADFS, Exchange, SMS gateway) go into HDID_NO_PROXY, comma-separated. After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM and php artisan queue:restart.'),
-            'sso_bindings' => __('Yellow: a company sign-in arrived under an account\'s e-mail address (or employee id) from a directory identity other than the one the account is bound to, or from an identity already bound to another account; that person cannot sign in until you act. Check the audit log (login.rejected with sso_subject_mismatch or sso_subject_taken) and the account; if the identity change is legitimate (re-created directory account, replaced registration), "Clear sign-in binding" on the account, or php artisan hdid:sso-unbind <e-mail> (in the container: docker compose exec web php artisan hdid:sso-unbind <e-mail>). The binding itself is set by the first company sign-in of each account.'),
-            'oidc' => __('Red: a provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*), the Entra tenant list has a problem (the tile names it: a shared endpoint such as common or organizations, an id that is not a GUID, a malformed domain), or USER_/CLIENT_SSO_MATCH holds a value other than email or employee_id. Yellow: CLIENT_ENTRA_TENANT and CLIENT_ENTRA_TENANTS are both set (keep the list only), the same domain is listed under several tenants (check which tenant may sign in those accounts), or a domain of a CLIENT_ENTRA_TENANTS tenant is a staff domain or on no EMD domain list: the sync files staff-domain addresses as staff and skips unlisted ones, so it brings no client of that domain; put the domain on "Client e-mail domains" (and off "Staff e-mail domains") under Settings › Enterprise Master Data (EMD) › Classification, or remove it from the tenant. Settings › Client portal › Sign-in methods lists every tenant with the state of its domains under the Microsoft Entra ID switch. Either fill in the configuration or switch the provider off, otherwise the login button leads to an error. The ADFS claims compared with the account e-mail address come from USER_/CLIENT_ADFS_EMAIL_CLAIM; why a sign-in was refused is in the audit log (login.rejected). After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM.'),
+            'sso_bindings' => __('Yellow: a company sign-in arrived under an account\'s e-mail address (or employee id) from a directory identity other than the one the account is bound to, or from an identity already bound to another account; that person cannot sign in until you act. Check the audit log (login.rejected with sso_subject_mismatch or sso_subject_taken) and the account; if the identity change is legitimate (re-created directory account, replaced registration), "Clear sign-in binding" on the account, or php artisan hdid:sso-unbind <e-mail> (in the container: docker compose exec web php artisan hdid:sso-unbind <e-mail>). The binding itself is set by the first company sign-in of each account. A binding a closed or deleted account yielded to another account stays on it as a marker ("released to …" on the account page): should the account be reopened or restored, its company sign-in is refused until the binding is cleared. Information: HDID_SSO_REQUIRE_SUBJECT=false in the .env file (or the environment of the web container) lets a company sign-in without a stable identifier (Entra oid, ADFS sub) in, unbound, but only for an account never bound; a bound account is refused (clear its binding, or let a sign-in with the identifier renew it).'),
+
+            'oidc' => __('Red: a provider is switched on in Settings but its issuer or tenant, client id or secret is missing in the environment (USER_/CLIENT_ADFS_*, USER_/CLIENT_ENTRA_*), the Entra tenant list has a problem (the tile names it: a shared endpoint such as common or organizations, an id that is not a GUID, a malformed domain), or USER_/CLIENT_SSO_MATCH holds a value other than email or employee_id. Yellow: CLIENT_ENTRA_TENANT and CLIENT_ENTRA_TENANTS are both set (keep the list only), the same domain is listed under several tenants (check which tenant may sign in those accounts), or a domain of a CLIENT_ENTRA_TENANTS tenant is a staff domain or on no EMD domain list: the sync files staff-domain addresses as staff and skips unlisted ones, so it brings no client of that domain; put the domain on "Client e-mail domains" (and off "Staff e-mail domains") under Settings › Enterprise Master Data (EMD) › Classification, or remove it from the tenant. Settings › Client portal › Sign-in methods lists every tenant with the state of its domains under the Microsoft Entra ID switch. Yellow also when a tenant is listed more than once in CLIENT_ENTRA_TENANTS (its domains are taken together, so it is trusted for any domain only when no entry names one; keep one entry), or when the provider\'s key set could not be refreshed for over an hour: sign-ins then go on with the last good key set for up to a day after it was fetched (a key the provider revoked meanwhile is still accepted that long); check that the provider can be reached from the server (DNS, firewall, HDID_HTTP_PROXY). After that day company sign-ins fail with "provider unavailable" until the provider answers again. Either fill in the configuration or switch the provider off, otherwise the login button leads to an error. The ADFS claims compared with the account e-mail address come from USER_/CLIENT_ADFS_EMAIL_CLAIM; why a sign-in was refused is in the audit log (login.rejected). After a change restart the services: docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM.'),
             'adfs_debug' => __('Yellow: HDID_ADFS_DEBUG is on, so every ADFS sign-in writes its decoded tokens, personal data included, to the application log. Meant for setting up the ADFS claims only; set it to false afterwards and restart the services (docker compose up -d, or php artisan config:cache and PHP-FPM on a classic installation).'),
-            'session_store' => __('Yellow with "share the Valkey": the sessions live on the main Valkey (REDIS_SESSION_HOST is empty), so a flood of sign-in pages that fills it also stops the queue, the locks and the rate limits. Give them a Valkey of their own with maxmemory-policy allkeys-lru, which pushes out the sessions not used for the longest time (the flood\'s own first). The compose.yaml of OpenHDID brings one, the valkey-sessions service of the redis profile (REDIS_SESSION_HOST=valkey-sessions, its size from OPENHDID_VALKEY_SESSIONS_MAXMEMORY and OPENHDID_VALKEY_SESSIONS_MEM_LIMIT): docker compose up -d. With an external or managed Valkey (10k and 20k profiles) set up a second instance with allkeys-lru and put its address into REDIS_SESSION_HOST, REDIS_SESSION_PORT, REDIS_SESSION_PASSWORD and REDIS_SESSION_DB (an empty key takes its REDIS_* value), then restart the services. Classic installation: a second valkey-server, for example on port 6380, with the maxmemory of the sizing profile (5k: 384mb, 10k: 576mb, 20k: 1gb), maxmemory-policy allkeys-lru and save 300 1, then REDIS_SESSION_HOST=127.0.0.1 and REDIS_SESSION_PORT=6380 in .env, sudo -u www-data sh -c \'umask 027 && php artisan config:cache\', PHP-FPM restart and php artisan queue:restart. Moving the sessions signs everybody out once. Yellow on the session store itself: maxmemory-policy is noeviction (new sign-ins fail when it is full) or a volatile or random policy: set allkeys-lru; no maxmemory; or sessions were evicted in the last hour, usually a flood of sign-in pages, otherwise a store too small. Red: the session store cannot be reached, so nobody can sign in: check REDIS_SESSION_* and that the server runs.'),
+            'session_store' => __('Yellow with "share the Valkey": the sessions live on the main Valkey (REDIS_SESSION_HOST is empty), so a flood of sign-in pages that fills it also stops the queue, the locks and the rate limits. Give them a Valkey of their own with maxmemory-policy allkeys-lru, which pushes out the sessions not used for the longest time (the flood\'s own first). The compose.yaml of OpenHDID brings one, the valkey-sessions service of the redis profile (REDIS_SESSION_HOST=valkey-sessions, its size from OPENHDID_VALKEY_SESSIONS_MAXMEMORY and OPENHDID_VALKEY_SESSIONS_MEM_LIMIT): docker compose up -d. With an external or managed Valkey (10k and 20k profiles) set up a second instance with allkeys-lru and put its address into REDIS_SESSION_HOST, REDIS_SESSION_PORT, REDIS_SESSION_PASSWORD and REDIS_SESSION_DB (an empty key takes its REDIS_* value), then restart the services. Classic installation: a second valkey-server, for example on port 6380, with the maxmemory of the sizing profile (5k: 384mb, 10k: 576mb, 20k: 1gb), maxmemory-policy allkeys-lru and save 300 1, then REDIS_SESSION_HOST=127.0.0.1 and REDIS_SESSION_PORT=6380 in .env, sudo -u www-data sh -c \'umask 027 && php artisan config:cache\', PHP-FPM restart and php artisan queue:restart. Moving the sessions signs everybody out once. Yellow on the session store itself: maxmemory-policy is noeviction (new sign-ins fail when it is full) or a volatile or random policy: set allkeys-lru; no maxmemory; or sessions were evicted in the last hour, usually a flood of sign-in pages, otherwise a store too small. Red: the session store cannot be reached, so nobody can sign in: check REDIS_SESSION_* and that the server runs. Red with "another installation": a second installation (a test, staging or cloned one) keeps its sessions in the same store under the same key prefix. Neither accepts the other\'s sessions, remember-me cookies or second-factor marks, but a sign-out of everyone or a restore on one also ends the sessions of the other: give each installation a session store of its own, or at least its own database, ACL user and key prefix (REDIS_SESSION_DB, REDIS_SESSION_USERNAME and REDIS_SESSION_PASSWORD; REDIS_PREFIX and CACHE_PREFIX, changed only while the queue is empty), then restart the services; a new database or prefix signs everybody out once. The tile turns green again :minutes minutes after the last sighting.', ['minutes' => Installation::CONFLICT_MINUTES]),
             'file_permissions' => __('Red: a file that holds secrets (.env, the cached configuration in bootstrap/cache with APP_KEY and every password, the logs in storage/logs, the session files in storage/framework/sessions) can be read by any local account of the server, through folders that let that account pass. Classic installation, in the application folder (/var/www/hdid): sudo chown -R <installer>:www-data . && sudo chmod 750 . ; sudo chown -R www-data:www-data storage bootstrap/cache && sudo chmod -R u+rwX,g+rwX,o-rwx storage bootstrap/cache ; sudo chmod 640 .env ; then rebuild the caches as the runtime account: sudo -u www-data sh -c \'umask 027 && php artisan optimize\'. Give PHP-FPM UMask=0027 with the drop-in deploy/php-fpm-umask.conf (systemctl daemon-reload, then restart PHP-FPM); the queue workers and the cron samples already run with it. Daily logs written before keep their mode: sudo chmod o-rwx storage/logs/*. The OpenHDID container is not affected: it runs as one account with umask 027, and its image files are read-only.'),
             'storage' => __('Red: the public disk is not writable, fix the permissions of storage/app/public. Yellow: run "php artisan storage:link" on the server, otherwise uploaded logos and images do not show.'),
             'retention' => __('The daily "hdid:prune" task has not run for days. It runs through the scheduler, so check that tile first; run "php artisan hdid:prune" by hand to catch up.').' '.self::staleLockHint(),
             'audit' => __('The database keeps the audit entries of the last N days (Settings › Operations and retention › Audit log in the database); the nightly "hdid:prune" task moves older days into compressed daily files under storage/app/private/audit-archive with a SHA-256 sidecar, and deletes them from the table. Yellow: entries older than the window are still in the database, so the task has not run (see the Scheduler and Data retention tiles) or could not write the storage disk; run "php artisan hdid:prune" by hand, it archives at most 120 days per run. The files are listed and downloadable on the Audit archive page and go into the backups with the storage volume.'),
             'demo_data' => __('Red: the database holds the demo data (loaded with OPENHDID_DEMO_DATA=true or the demo seeder) and the system runs with APP_ENV=production. The passwords, PIN and answers of the demo accounts are published, so the demo accounts cannot sign in, the EMD sync does not hand a demo record to the real person who has its id (it reports an e-mail conflict instead), and the container\'s migrate service stops. Deleting the demo accounts one by one is not enough: their records, calls and audit entries stay. Start production with an empty database. Container: stop the installation and remove the demo\'s volumes (docker compose down -v removes every volume of the project, the uploaded files too), then docker compose up -d and create the first administrator again (hdid:make-admin). Classic installation: create a new, empty database, put it into DB_DATABASE in .env, run php artisan config:cache, php artisan migrate --force and php artisan db:seed --class=RolesAndPermissionsSeeder --force, then php artisan hdid:make-admin. To keep trying the demo instead, set APP_ENV=demo again. The detail names the addresses found first: if they are not the documented demo accounts but a few real rows that got a .test address (an administrator created with such an address, for example), the database is real, do not delete it: set APP_ENV=staging for a moment (container: docker compose up -d; classic installation: php artisan config:cache), correct those addresses on the panel (Users, Clients) or in EMD, then set APP_ENV=production again. In production a new .test address is refused (on the panel and by hdid:make-admin). Information: demo data outside production (APP_ENV=demo or local) is expected; it is refused only in production.'),
-            'capacity' => __('Accounts active in the last 15 minutes (any request they made), today\'s peak and, on MariaDB, the connections in use against max_connections. With HDID_SIZING_PROFILE set (5k, 10k-single, 10k, 20k) the tile compares the peak with the profile\'s design point and turns yellow at 80 %: time to step up to the next profile (more PHP-FPM processes and workers, Valkey, a second application server or Kubernetes), see the operations manual. Without a profile the numbers are shown for information only.').' '.__('On the panel (PHP-FPM) the tile also shows the pool: busy processes, waiting requests and how often every process was busy. Yellow when requests wait for a free process, when the PHP-FPM processes × memory_limit and the opcache exceed the memory limit of the web container (OPENHDID_FPM_MAX_CHILDREN, OPENHDID_FPM_MEMORY_LIMIT, OPENHDID_WEB_MEM_LIMIT; Kubernetes: the web pod\'s limit), or when max_connections is below the connections this web server may open with the workers (OPENHDID_DB_MAX_CONNECTIONS, or the managed database). php artisan hdid:health runs outside PHP-FPM and does not show these.'),
+            'capacity' => __('Accounts active in the last 15 minutes (any request they made), today\'s peak and, on MariaDB, the connections in use against max_connections. With HDID_SIZING_PROFILE set (5k, 10k-single, 10k, 20k) the tile compares the peak with the profile\'s design point and turns yellow at 80 %: time to step up to the next profile (more PHP-FPM processes and workers, Valkey, a second application server or Kubernetes), see the operations manual. Without a profile the numbers are shown for information only. In the OpenHDID web container the sum also counts the nginx workers, the memory-backed /tmp (request bodies and uploads are buffered there) and a spare of 64 MB, as the start check does; a /tmp line shows how full it is (yellow from 80 %). At most 13 uploads at once from all clients together are let through (429 above that), so uploads cannot fill /tmp.').' '.__('On the panel (PHP-FPM) the tile also shows the pool: busy processes, waiting requests and how often every process was busy. Yellow when requests wait for a free process, when the PHP-FPM processes × memory_limit and the opcache exceed the memory limit of the web container (OPENHDID_FPM_MAX_CHILDREN, OPENHDID_FPM_MEMORY_LIMIT, OPENHDID_WEB_MEM_LIMIT; Kubernetes: the web pod\'s limit), or when max_connections is below the connections this web server may open with the workers (OPENHDID_DB_MAX_CONNECTIONS, or the managed database). php artisan hdid:health runs outside PHP-FPM and does not show these.'),
             default => null,
         };
     }
@@ -486,7 +555,7 @@ class HealthChecks
             ? __('a heartbeat job of the ":queue" queue', ['queue' => substr($conflict['source'], strlen('queue:'))])
             : __('the scheduler heartbeat');
 
-        return __('Another installation (:other) uses the same Valkey/Redis and key prefix as this one (:own), last seen :when in :where. Their queued jobs, heartbeats and rate limits mix (the locks and the scheduler\'s marks carry the installation id, so each runs its own scheduled tasks), so this tile cannot tell whether the workers and the scheduler of this installation run.', [
+        return __('Another installation (:other) uses the same Valkey/Redis and key prefix as this one (:own), last seen :when in :where. Kept apart by the installation id: the locks and the scheduler\'s marks (so each runs its own scheduled tasks), the settings cache, the rate limits and the sign-in ceilings with their notices, the second-factor codes, and the sessions with their remember-me cookies (neither installation accepts the other\'s). Still shared: the queued jobs, the heartbeats, the short-lived counts of the dashboard and the status page, and a session store both use (a sign-out of everyone or a restore on one also ends the sessions of the other). So this tile cannot tell whether the workers and the scheduler of this installation run.', [
             'other' => $conflict['installation'],
             'own' => Installation::id(),
             'where' => $where,
@@ -494,9 +563,6 @@ class HealthChecks
         ]);
     }
 
-    /**
-     * What to do when the queue or scheduler tile names another installation.
-     */
     /**
      * A scheduled task late behind an overlap lock that outlived a scheduler
      * restart: the command that releases it (install.sh check finds it too).
@@ -506,9 +572,13 @@ class HealthChecks
         return __('If a task is late while the scheduler runs (the EMD token refresh, the EMD sync or hdid:prune, for example), its lock may have outlived a restart of the scheduler: docker compose exec scheduler php artisan schedule:clear-cache (on a classic installation: sudo -u www-data sh -c \'umask 027 && php artisan schedule:clear-cache\'). From 1.15.0 a lock lives at most as long as its task may run.');
     }
 
+    /**
+     * What to do when the queue or scheduler tile names another installation,
+     * and what the installation id keeps apart meanwhile.
+     */
     private static function sharedStoreHint(): string
     {
-        return __('Red with "another installation": a second installation (a test or staging one) uses the same Valkey/Redis under the same key prefix, so the two take each other\'s jobs and write each other\'s heartbeats. Give each installation a Valkey of its own, or at least its own database, ACL user and key prefix (REDIS_PREFIX and CACHE_PREFIX in .env, changed only while the queue is empty), then restart the services (docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM and php artisan queue:restart). The tile turns green again :minutes minutes after the last sighting.', ['minutes' => Installation::CONFLICT_MINUTES]);
+        return __('Red with "another installation": a second installation (a test or staging one) uses the same Valkey/Redis under the same key prefix, so the two take each other\'s jobs and write each other\'s heartbeats. The locks, the scheduler\'s marks, the settings cache, the rate limits, the sign-in ceilings, the second-factor codes and the sessions with their remember-me cookies carry the installation id and stay apart; the queued jobs, the heartbeats and the short-lived counts do not, and on a shared session store a sign-out of everyone or a restore on one also ends the sessions of the other. Give each installation a Valkey of its own, or at least its own database, ACL user and key prefix (REDIS_PREFIX and CACHE_PREFIX in .env, changed only while the queue is empty), then restart the services (docker compose up -d, or on a classic installation php artisan config:cache, then PHP-FPM and php artisan queue:restart). The tile turns green again :minutes minutes after the last sighting.', ['minutes' => Installation::CONFLICT_MINUTES]);
     }
 
     /**
@@ -607,7 +677,7 @@ class HealthChecks
         $prefix = (string) config('database.redis.options.prefix', '');
         $bundled = strtolower((string) config('database.redis.'.reset($uses).'.host')) === 'valkey';
         if ($prefix === Str::slug((string) config('app.name')).'-database-') {
-            $text = __('REDIS_PREFIX is not set: the keys carry ":prefix", which every installation named ":name" (APP_NAME) gets; on a Valkey another installation also uses, the two mix their sessions, queues, locks and heartbeats.', ['prefix' => $prefix, 'name' => (string) config('app.name')]);
+            $text = __('REDIS_PREFIX is not set: the keys carry ":prefix", which every installation named ":name" (APP_NAME) gets; on a Valkey another installation also uses, the two mix their queued jobs and heartbeats and keep their sessions side by side (the locks, the rate limits, the settings and the sessions carry the installation id, so neither accepts the other\'s sign-ins).', ['prefix' => $prefix, 'name' => (string) config('app.name')]);
             if ($bundled) {
                 $notes[] = $text.' '.__('This one is the Valkey of the installation\'s own compose project, which nothing else reaches.');
             } else {
@@ -639,7 +709,45 @@ class HealthChecks
     public function sessionStore(): Check
     {
         $label = __('Session store');
+        $check = $this->sessionStoreState($label);
 
+        // An unreachable store is red already, and no sighting can be read from
+        // it: asking it again would only wait out a second connection timeout.
+        if ($check->status === CheckStatus::Fail) {
+            return $check;
+        }
+
+        $shared = $this->sharedSessionStoreProblem();
+
+        return $shared === null ? $check : Check::fail('session_store', $label, $shared.' · '.$check->detail);
+    }
+
+    /**
+     * Another installation's heartbeat seen in the session store, in words,
+     * or null. The sessions, the remember-me cookies and the second-factor
+     * marks are bound to the installation (AuthSessions), so neither accepts
+     * the other's; what still reaches across is the store itself.
+     */
+    public function sharedSessionStoreProblem(): ?string
+    {
+        $conflict = SessionStore::conflict();
+
+        if ($conflict === null) {
+            return null;
+        }
+
+        return __('Another installation (:other) writes its heartbeat into the same session store as this one (:own), last seen :when. The sessions, the remember-me cookies and the second-factor marks carry the installation id, so neither accepts the other\'s sign-ins; but a sign-out of everyone or a restore on one also ends the sessions of the other, and a flood of sign-in pages on one pushes out the sessions of the other.', [
+            'other' => $conflict['installation'],
+            'own' => Installation::id(),
+            'when' => $conflict['at']->diffForHumans(),
+        ]);
+    }
+
+    /**
+     * The session store's driver, server, eviction policy and memory.
+     */
+    private function sessionStoreState(string $label): Check
+    {
         if (! SessionStore::onRedis()) {
             return Check::ok('session_store', $label, __('Sessions use the :driver driver; a Valkey of their own applies with SESSION_DRIVER=redis only.', ['driver' => (string) config('session.driver')]));
         }
@@ -877,6 +985,22 @@ class HealthChecks
             : Check::ok('messages', $label, $detail);
     }
 
+    /**
+     * EWS with the certificate check off (EWS_VERIFY_TLS=false): anyone in
+     * between can read the Exchange password and every e-mail. Red in
+     * production, where the container does not even start with it.
+     */
+    private function ewsWithoutCertificateCheck(string $label): ?Check
+    {
+        if ((bool) config('hdid.ews.verify_tls', true)) {
+            return null;
+        }
+
+        $detail = __('EWS_VERIFY_TLS=false: the certificate of the Exchange server is not checked, so anyone in between can read the Exchange password and every e-mail. Put the CA of an internal certificate in the ca folder (or the system certificate store) and remove the line.');
+
+        return app()->environment('production') ? Check::fail('mail', $label, $detail) : Check::warn('mail', $label, $detail);
+    }
+
     public function mail(): Check
     {
         $label = __('E-mail transport');
@@ -893,6 +1017,10 @@ class HealthChecks
                 return Check::fail('mail', $label, EwsTransport::ntlmUnavailableMessage());
             }
 
+            if ($configured && ($unverified = $this->ewsWithoutCertificateCheck($label)) !== null) {
+                return $unverified;
+            }
+
             return $configured
                 ? Check::ok('mail', $label, __('EWS (:auth) · from :from', ['auth' => $cfg['auth'] ?? 'basic', 'from' => $from]))
                 : Check::fail('mail', $label, __('EWS is selected but URL or credentials are missing'));
@@ -900,6 +1028,11 @@ class HealthChecks
 
         if (in_array($mailer, ['log', 'array'], true)) {
             return Check::warn('mail', $label, __('Mailer ":m": nothing leaves the server', ['m' => $mailer]));
+        }
+
+        // An EWS leg of a failover or round-robin chain carries the same credentials.
+        if (in_array('ews', (array) config("mail.mailers.{$mailer}.mailers", []), true) && ($unverified = $this->ewsWithoutCertificateCheck($label)) !== null) {
+            return $unverified;
         }
 
         // SMTP alone or as a leg of a failover/round-robin chain.
@@ -991,6 +1124,12 @@ class HealthChecks
         }
 
         $detail = $source.' · '.__('last run :status :when', ['status' => __($last->status->value), 'when' => ($last->finished_at ?? $last->started_at)?->diffForHumans()]);
+
+        // Deleted clients stay deleted: the records that came back for them
+        // are only mentioned, the deletion was deliberate.
+        if (($returned = (int) ($last->stats['deleted_returned'] ?? 0)) > 0) {
+            $detail .= ' · '.__(':n EMD record(s) of deleted clients came back; the clients stay deleted (see the run details)', ['n' => $returned]);
+        }
 
         if ($last->status === SyncRunStatus::Failed) {
             return Check::fail('sync', $label, $detail);
@@ -1092,6 +1231,51 @@ class HealthChecks
             : Check::info('shared_numbers', $label, __(':n phone number(s) on file for more than one client; the phone menu recognises nobody from them.', ['n' => $count]));
     }
 
+    /**
+     * Open clients with phone numbers of which none may get the SMS sign-in
+     * code (each one added by the client and nobody confirmed it): they do
+     * not get the code until a number is confirmed.
+     */
+    public function smsSignInNumbers(): Check
+    {
+        $label = __('SMS sign-in numbers');
+
+        if (! $this->settings->bool(SettingKey::ClientLoginOtpSmsEnabled)) {
+            return Check::ok('sms_sign_in_numbers', $label, __('The SMS sign-in is off.'));
+        }
+
+        $count = Client::query()->whereNull('closed_at')
+            ->whereHas('phoneNumbers')
+            ->whereDoesntHave('phoneNumbers', fn (Builder $query) => $query->where(fn (Builder $query) => $query
+                ->whereNotNull('verified_at')
+                ->orWhereIn('source', [PhoneNumberSource::Sync, PhoneNumberSource::Admin])))
+            ->tap(fn ($query) => app(ClientTiers::class)->scopeServed($query))
+            ->count();
+
+        return $count === 0
+            ? Check::ok('sms_sign_in_numbers', $label, __('Every client with a phone number has one the SMS sign-in code may go to.'))
+            : Check::info('sms_sign_in_numbers', $label, __(':n client(s) have only numbers they added themselves and nobody confirmed, so no SMS sign-in code goes to them.', ['n' => $count]));
+    }
+
+    /**
+     * Package names in use with a character that has no ASCII spelling (CJK,
+     * ✓, ®): since 1.15.1 they no longer fold onto the name without it, so a
+     * list entry without the character does not count for them any more.
+     */
+    public function packageNames(): Check
+    {
+        $label = __('Package names');
+        $names = Client::query()->whereNull('closed_at')
+            ->select('implicit_package')->distinct()->pluck('implicit_package')
+            ->merge(Client::query()->whereNull('closed_at')->select('explicit_package')->distinct()->pluck('explicit_package'))
+            ->filter(fn (?string $name): bool => is_string($name) && PackageName::hasCharactersWithoutAscii($name))
+            ->unique()->sort()->values();
+
+        return $names->isEmpty()
+            ? Check::ok('package_names', $label, __('No package name in use carries a character without an ASCII spelling.'))
+            : Check::info('package_names', $label, __(':n package name(s) in use carry a character without an ASCII spelling and compare only with themselves: :list', ['n' => $names->count(), 'list' => $names->take(10)->implode(', ')]));
+    }
+
     public function apiKeys(): Check
     {
         $label = __('API keys');
@@ -1163,6 +1347,16 @@ class HealthChecks
                         $state .= ' · '.$domainNote;
                         $noted = true;
                     }
+                }
+
+                // Sign-ins on the last good key set while the provider cannot be reached (read from the cache only).
+                if ($enabled && $configured && ($keys = app(OidcClient::class)->keySetState($config)) !== null && ($keys['stale'] || $keys['failed'])) {
+                    $since = Carbon::createFromTimestamp($keys['fetched_at'], config('app.timezone'));
+                    $state .= ' · '.__('the key set could not be refreshed since :time; sign-ins use the last good set until :until', [
+                        'time' => $since->format(HuDate::DATETIME),
+                        'until' => $since->copy()->addSeconds(OidcClient::KEEP_SECONDS)->format(HuDate::DATETIME),
+                    ]);
+                    $noted = true;
                 }
 
                 $parts[] = __($principal->value).'/'.$provider->value.': '.$state;
@@ -1384,7 +1578,26 @@ class HealthChecks
         $perRequest = $limits->requestMemoryLimit();
         $container = $limits->containerMemoryLimit();
 
-        if ($children !== null && $perRequest !== null && $container !== null) {
+        // In the web container nginx and the memory-backed /tmp (request bodies, uploads)
+        // live under the same limit, with a spare: the same sum as the start check.
+        $nginxWorkers = $limits->nginxWorkers();
+        $tmpfs = $limits->tmpfsBytes();
+
+        if ($children !== null && $perRequest !== null && $container !== null && $nginxWorkers !== null) {
+            $need = $children * ($perRequest + RuntimeLimits::FPM_PROCESS_OVERHEAD) + $limits->opcacheBytes()
+                + $nginxWorkers * RuntimeLimits::NGINX_WORKER + ($tmpfs ?? 0) + RuntimeLimits::WEB_SPARE;
+
+            if ($need > $container) {
+                $problems[] = __('PHP-FPM and nginx may take :need (:children processes with memory_limit :limit each, the opcache, :workers nginx worker(s), the memory-backed /tmp of :tmp for request bodies and uploads, and a spare of 64 MB), more than the memory limit of the web container, :max: under load the kernel stops the whole web server. Lower OPENHDID_FPM_MAX_CHILDREN, OPENHDID_FPM_MEMORY_LIMIT or OPENHDID_NGINX_WORKERS, or raise OPENHDID_WEB_MEM_LIMIT (Kubernetes: the memory limit of the web pod).', [
+                    'need' => $this->humanBytes($need),
+                    'children' => $children,
+                    'limit' => $this->humanBytes($perRequest),
+                    'workers' => $nginxWorkers,
+                    'tmp' => $tmpfs === null ? '0 MB' : $this->humanBytes($tmpfs),
+                    'max' => $this->humanBytes($container),
+                ]);
+            }
+        } elseif ($children !== null && $perRequest !== null && $container !== null) {
             $need = $children * ($perRequest + RuntimeLimits::FPM_PROCESS_OVERHEAD) + $limits->opcacheBytes();
 
             if ($need > $container) {
@@ -1394,6 +1607,16 @@ class HealthChecks
                     'limit' => $this->humanBytes($perRequest),
                     'max' => $this->humanBytes($container),
                 ]);
+            }
+        }
+
+        $tmp = $limits->tmpUsage();
+        if ($tmp !== null && $tmp['total'] > 0) {
+            $line = __('/tmp :used MB of :total MB', ['used' => intdiv($tmp['used'], 1_048_576), 'total' => intdiv($tmp['total'], 1_048_576)]);
+            $figures = $figures === null ? $line : $figures.' · '.$line;
+
+            if ($tmp['used'] / $tmp['total'] >= 0.8) {
+                $problems[] = __('The memory-backed /tmp of the web container is :percent % full: request bodies above 16 KB, uploads and large downloads fail once it is full. Look for a flood of uploads in the web log, or raise the size of /tmp together with OPENHDID_WEB_MEM_LIMIT.', ['percent' => (int) round($tmp['used'] / $tmp['total'] * 100)]);
             }
         }
 

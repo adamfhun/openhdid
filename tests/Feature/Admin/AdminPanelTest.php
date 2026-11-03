@@ -228,6 +228,21 @@ it('records that a login link was shown in the panel and names the staff member 
     expect($login->context['link_revealed_to'])->toBe($this->admin->email);
 });
 
+it('says in the sent link notification whether the setting or debug mode shows the link', function (bool $setting, string $lead): void {
+    Mail::fake();
+    config()->set('app.debug', true);
+    app(Settings::class)->set(SettingKey::ClientLoginMagicLinkPreviewInPanel, $setting);
+    $client = Client::factory()->synced()->create();
+
+    Livewire::test(ClientResource::getPages()['index']->getPage())
+        ->callTableAction('sendMagicLink', $client);
+
+    expect(html_entity_decode(renderedNotifications()))->toContain(__($lead));
+})->with([
+    'debug mode only' => [false, 'Debug mode (APP_DEBUG=true) shows the link; it is'],
+    'the setting' => [true, 'Link preview is on; the link is'],
+]);
+
 it('keeps a login link that was only e-mailed free of any panel mark', function (): void {
     Mail::fake();
     config()->set('app.debug', false);

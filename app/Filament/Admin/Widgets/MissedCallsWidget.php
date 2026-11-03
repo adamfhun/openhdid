@@ -3,16 +3,20 @@
 namespace App\Filament\Admin\Widgets;
 
 use App\Auth\Permission;
+use App\CallCenter\CallLock;
 use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
 use App\Filament\Admin\Pages\Identify;
 use App\Filament\Admin\Pages\SearchClients;
 use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
 use App\Filament\Concerns\LimitsSearchInput;
+use App\Filament\NotificationText;
+use App\Identification\IdentificationException;
 use App\Models\Call;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Filament\Actions\Action;
+use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Filament\Widgets\TableWidget;
@@ -74,7 +78,13 @@ class MissedCallsWidget extends TableWidget
                     ->modalHeading(__('Mark this missed call as handled?'))
                     ->modalDescription(fn (Call $call) => __('The call from :number leaves this list; it stays in the Calls list marked as handled by you. Do this once the caller has been called back or the case is closed.', ['number' => $call->callerNumber() ?? __('withheld number')]))
                     ->modalSubmitActionLabel(__('Mark as handled'))
-                    ->action(fn (Call $call) => $call->markHandled(auth()->user())),
+                    ->action(function (Call $record): void {
+                        try {
+                            CallLock::runOrRefuse($record, fn (Call $call) => $call->markHandled(auth()->user()));
+                        } catch (IdentificationException $e) {
+                            Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
+                        }
+                    }),
             ]);
     }
 }

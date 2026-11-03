@@ -5,7 +5,10 @@ namespace App\Auth\Passwordless;
 use App\Enums\OneTimeCodePurpose;
 use App\Models\Client;
 use App\Models\OneTimeCode;
+use App\System\Installation;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -21,11 +24,19 @@ use Illuminate\Support\Str;
  * The lookup is unique among live secrets: it is cleared the moment a secret
  * is consumed or invalidated, and a collision on insert (two clients drawing
  * the same code at the same instant) makes the issuer draw again.
+ *
+ * A client has at most one live secret per purpose: replacing the old ones
+ * and inserting the new one run under a per-client lock. The hashing is done
+ * before the lock; when the lock cannot be had, the issue throws
+ * LockTimeoutException and the caller treats it as not issued.
  */
 class OneTimeCodes
 {
     /** An opaque token (a login link's) is this many ASCII letters and digits. */
     public const TOKEN_LENGTH = 64;
+
+    /** Lock around one client's replace-and-insert of a purpose. */
+    private const ISSUE_LOCK_PREFIX = 'hdid:otc:';
 
     /**
      * @return array{code: string, record: OneTimeCode}
@@ -80,10 +91,11 @@ class OneTimeCodes
     }
 
     /**
-     * The hashing a real issue costs, spent without storing anything, so a
-     * request that issues nothing takes as long as one that does.
+     * One bcrypt operation's worth of work, spent without storing anything:
+     * a request that issues or checks nothing takes as long as one that
+     * does, so the answer time tells nothing about the account.
      */
-    public function matchIssueCost(): void
+    public function matchHashCost(): void
     {
         Hash::make(Str::random(16));
     }
@@ -98,30 +110,47 @@ class OneTimeCodes
     }
 
     /**
-     * Verify a code for a known client. Every guess is counted before the
-     * slow hash compare, with a conditional update that only succeeds while
-     * attempts are left, so overlapping guesses can never exceed the limit.
+     * Verify a code for a known client; with a destination, only a code sent
+     * there counts (a phone number confirmation). Every guess is counted
+     * before the slow hash compare, with a conditional update that only
+     * succeeds while attempts are left, so overlapping guesses can never
+     * exceed the limit. Always one hash compare, or the same work.
      */
-    public function verify(Client $client, OneTimeCodePurpose $purpose, string $code): bool
+    public function verify(Client $client, OneTimeCodePurpose $purpose, string $code, ?string $destination = null): bool
     {
+        return $this->verifyRecord($client, $purpose, $code, $destination) !== null;
+    }
+
+    /**
+     * As verify(), returning the consumed record (its destination tells
+     * which number the code went to), or null.
+     */
+    public function verifyRecord(Client $client, OneTimeCodePurpose $purpose, string $code, ?string $destination = null): ?OneTimeCode
+    {
+        // One query: the code that is checked is the one that was sent to
+        // the destination, even when another one runs out meanwhile.
         $record = OneTimeCode::query()
             ->where('client_id', $client->id)
             ->where('purpose', $purpose)
+            ->when($destination !== null, fn ($query) => $query->where('destination', $destination))
             ->usable()
             ->latest('id')
             ->first();
 
         if ($record === null) {
-            return false;
+            $this->matchHashCost();
+
+            return null;
         }
 
         $counted = OneTimeCode::query()->whereKey($record->id)
-            ->whereNull('consumed_at')
-            ->whereColumn('attempts', '<', 'max_attempts')
+            ->usable()
             ->update(['attempts' => DB::raw('attempts + 1')]);
 
         if ($counted !== 1) {
-            return false;
+            $this->matchHashCost();
+
+            return null;
         }
 
         if (! Hash::check($code, $record->code_hash)) {
@@ -131,10 +160,36 @@ class OneTimeCodes
                 $record->forceFill(['lookup' => null])->save();
             }
 
+            return null;
+        }
+
+        return $this->markConsumed($record) ? $record : null;
+    }
+
+    /**
+     * Whether a refused guess is the client's own previous code, which a
+     * newer request replaced while it still had time left: the owner typing
+     * the earlier message, not somebody guessing. Always one hash compare,
+     * or the same work.
+     */
+    public function matchesReplaced(Client $client, OneTimeCodePurpose $purpose, string $code): bool
+    {
+        $latest = OneTimeCode::query()
+            ->where('client_id', $client->id)
+            ->where('purpose', $purpose)
+            ->unexpired()
+            ->latest('id')
+            ->limit(2)
+            ->get();
+        $replaced = $latest->count() === 2 && $latest[1]->consumed_at !== null ? $latest[1] : null;
+
+        if ($replaced === null) {
+            $this->matchHashCost();
+
             return false;
         }
 
-        return $this->markConsumed($record);
+        return Hash::check($code, $replaced->code_hash);
     }
 
     /**
@@ -239,9 +294,10 @@ class OneTimeCodes
     }
 
     /**
-     * Consume the secret only if nobody else did in the meantime: a
-     * conditional update, so that two overlapping requests redeeming the same
-     * secret cannot both win. Returns whether this call was the one to win.
+     * Consume the secret only if nobody else did in the meantime and it has
+     * not expired during the hash compare: a conditional update, so that two
+     * overlapping requests redeeming the same secret cannot both win. Returns
+     * whether this call was the one to win.
      */
     private function markConsumed(OneTimeCode $record): bool
     {
@@ -253,6 +309,7 @@ class OneTimeCodes
         $won = OneTimeCode::query()
             ->whereKey($record->id)
             ->whereNull('consumed_at')
+            ->unexpired()
             ->update($consumed) === 1;
 
         if ($won) {
@@ -262,23 +319,32 @@ class OneTimeCodes
         return $won;
     }
 
+    /**
+     * @throws LockTimeoutException when another request of the client is
+     *                              issuing a secret of the purpose right now
+     */
     private function store(Client $client, OneTimeCodePurpose $purpose, string $secret, int $ttlMinutes, int $maxAttempts, ?string $destination, bool $keepPlain = false, bool $withLookup = true): OneTimeCode
     {
-        OneTimeCode::query()
-            ->where('client_id', $client->id)
-            ->where('purpose', $purpose)
-            ->whereNull('consumed_at')
-            ->update(['consumed_at' => now(), 'lookup' => null, 'secret_encrypted' => null, 'updated_at' => now()]);
-
-        return OneTimeCode::query()->create([
+        // The slow work is done before the lock, so the lock is short and a
+        // request that loses it has spent the same time as one that wins.
+        $attributes = [
             'client_id' => $client->id,
             'purpose' => $purpose,
             'code_hash' => Hash::make($secret),
             'lookup' => $withLookup ? $this->lookupOf($purpose, $secret) : null,
             'secret_encrypted' => $keepPlain ? Crypt::encryptString($secret) : null,
             'destination' => $destination,
-            'expires_at' => now()->addMinutes($ttlMinutes),
             'max_attempts' => $maxAttempts,
-        ]);
+        ];
+
+        return Cache::lock(Installation::lockName(self::ISSUE_LOCK_PREFIX.$client->id.':'.$purpose->value), 10)->block(5, function () use ($client, $purpose, $ttlMinutes, $attributes): OneTimeCode {
+            OneTimeCode::query()
+                ->where('client_id', $client->id)
+                ->where('purpose', $purpose)
+                ->whereNull('consumed_at')
+                ->update(['consumed_at' => now(), 'lookup' => null, 'secret_encrypted' => null, 'updated_at' => now()]);
+
+            return OneTimeCode::query()->create($attributes + ['expires_at' => now()->addMinutes($ttlMinutes)]);
+        });
     }
 }

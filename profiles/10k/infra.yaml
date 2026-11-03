@@ -35,8 +35,13 @@ x-logging: &logging
 
 services:
   mariadb:
-    image: mariadb:12.3.3@sha256:99c125f103f5d081ebbc9ffe064e63daf7f688ac33a5f7f29af2d7260a96debf
+    image: mariadb:12.3.3@sha256:d46e102fa8b9b72bfcdeb56f9dd538742092119dc8b11f31fe662605cd234cd9
     restart: unless-stopped
+    # LOAD DATA LOCAL off on the server too: a restored dump (or any client) cannot make the server
+    # read a file of the client's host. A command, not configs.content: a changed command makes a
+    # plain "docker compose up -d" recreate the container. A compose.override.yaml that sets its own
+    # command (the replica's binary log) must repeat --local-infile=0.
+    command: [--local-infile=0]
     # Relative paths of a Compose file start at its own folder: db.env is the one next to .env.
     env_file: [../../db.env]
     environment:
@@ -65,7 +70,7 @@ services:
 
   # A sor, a zárak, a korlátszámlálók és a gyorsítótár (REDIS_HOST az alkalmazásgépeken).
   valkey:
-    image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
+    image: valkey/valkey:9.1.3-alpine3.24@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
     restart: unless-stopped
     command: [valkey-server, /etc/valkey/valkey.conf]
     configs:
@@ -89,7 +94,7 @@ services:
 
   # A munkamenetek (REDIS_SESSION_HOST az alkalmazásgépeken), saját jelszóval.
   valkey-sessions:
-    image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
+    image: valkey/valkey:9.1.3-alpine3.24@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
     restart: unless-stopped
     command: [valkey-server, /etc/valkey/valkey.conf]
     configs:

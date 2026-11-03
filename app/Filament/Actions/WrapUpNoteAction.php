@@ -2,6 +2,9 @@
 
 namespace App\Filament\Actions;
 
+use App\CallCenter\CallLock;
+use App\Filament\NotificationText;
+use App\Identification\IdentificationException;
 use App\Models\Call;
 use Closure;
 use Filament\Actions\Action;
@@ -42,7 +45,15 @@ class WrapUpNoteAction extends Action
                 $held = $call() ?? abort(403);
 
                 $note = trim((string) ($data['note'] ?? ''));
-                $held->forceFill(['wrap_up_note' => $note === '' ? null : $note])->save();
+
+                try {
+                    CallLock::runOrRefuse($held, fn (Call $held) => $held->forceFill(['wrap_up_note' => $note === '' ? null : $note])->save());
+                } catch (IdentificationException $e) {
+                    Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
+
+                    return;
+                }
+
                 Notification::make()->title(__('Call note saved'))->success()->send();
             });
     }

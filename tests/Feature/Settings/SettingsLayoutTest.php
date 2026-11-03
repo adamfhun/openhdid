@@ -192,3 +192,12 @@ it('opens the readable view of the export payload from the field without changin
 
     expect($settings->string(SettingKey::SyncExportPayload))->toBe('{"filter":{"from":"{{ now }}"}}');
 });
+
+it('finds the SMS login-code budget settings by their former label', function (): void {
+    $index = collect(Livewire::test(ManageSettings::class)->instance()->searchIndex())->keyBy('key');
+
+    expect(SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour->label())->toBe(__('Codes to one number or one client per hour, at most'))
+        ->and($index[SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute->value]['text'])->toContain(__('Codes to one number per minute, at most'))
+        ->and($index[SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour->value]['text'])->toContain(__('Codes to one number per hour, at most'))
+        ->and($index[SettingKey::ClientLoginOtpSmsMaxPerNumberPerDay->value]['text'])->toContain(__('Codes to one number per day, at most'));
+});

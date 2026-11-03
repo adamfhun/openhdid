@@ -54,4 +54,17 @@ class SsoIdentityFactory extends Factory
             'claim' => $provider === OidcProvider::Entra ? 'oid' : 'sub',
         ]);
     }
+
+    /**
+     * A marker: the binding went to another account (SsoSubjectBinding::release()).
+     */
+    public function released(Principal&Model $to): static
+    {
+        return $this->state([
+            'lookup' => null,
+            'released_at' => now(),
+            'released_to_type' => $to->principalType(),
+            'released_to_id' => $to->getKey(),
+        ]);
+    }
 }

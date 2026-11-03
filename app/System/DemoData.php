@@ -7,6 +7,8 @@ use App\Enums\PrincipalType;
 use App\Models\Call;
 use App\Models\Client;
 use App\Models\ExternalRecord;
+use App\Models\SyncIdListItem;
+use App\Models\SyncRun;
 use App\Models\User;
 
 /**
@@ -29,11 +31,12 @@ final class DemoData
     public const CALL_ID_PREFIXES = ['demo-call-', 'demo-hist-'];
 
     /**
-     * Whether demo data is refused here: in production only.
+     * Whether demo data is refused here: in production, and under an
+     * environment name the framework does not know (EnvironmentSafety).
      */
     public static function refusedHere(): bool
     {
-        return app()->isProduction();
+        return EnvironmentSafety::productionSafeguards();
     }
 
     public static function isDemoAddress(?string $email): bool
@@ -89,6 +92,26 @@ final class DemoData
     public function present(): bool
     {
         return array_sum($this->found()) > 0;
+    }
+
+    /**
+     * What the database holds that is not demo data: EMD records and
+     * clients under a real address, sync runs, and an ID list while no demo
+     * data is there. Staff with a local record (hdid:make-admin) do not
+     * count. Demo data goes only into a database without any of these.
+     *
+     * @return array{records: int, clients: int, sync_runs: int, id_list: int}
+     */
+    public function foreignData(): array
+    {
+        $address = '%'.self::RESERVED_DOMAIN;
+
+        return [
+            'records' => ExternalRecord::withTrashed()->fromDirectory()->where('email', 'not like', $address)->count(),
+            'clients' => Client::withTrashed()->where('email', 'not like', $address)->count(),
+            'sync_runs' => SyncRun::withTrashed()->count(),
+            'id_list' => $this->present() ? 0 : SyncIdListItem::query()->count(),
+        ];
     }
 
     /**

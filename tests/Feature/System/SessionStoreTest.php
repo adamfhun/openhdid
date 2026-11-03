@@ -229,14 +229,15 @@ it('warns when sessions were evicted within the last hour, and turns green again
     Cache::forget('hdid.health.session_evictions');
 });
 
-it('fails when the session store cannot be reached, since nobody can sign in then', function (): void {
+it('fails when the session store cannot be reached, since nobody can sign in then, and waits on it only once', function (): void {
     sessionsOnRedis();
     fakeRedisServers(['session' => new RuntimeException('Connection refused')]);
 
     $check = app(HealthChecks::class)->sessionStore();
 
     expect($check->status)->toBe(CheckStatus::Fail)
-        ->and($check->detail)->toContain('Connection refused', 'nobody can sign in');
+        ->and($check->detail)->toContain('Connection refused', 'nobody can sign in')
+        ->and(array_keys(app('session')->getDrivers()))->not->toContain('redis');
 });
 
 it('leaves the sessions on a server of their own out of the main Valkey tile', function (): void {

@@ -221,3 +221,45 @@ it('offers the limits in the portal sign-in block, the e-mail one generous, the 
         ->and($valid(SettingKey::ClientLoginOtpSmsMaxPerNumberPerDay, 101))->toBeFalse()
         ->and(SettingKey::ClientLoginMagicLinkMaxPerHour->details())->toContain('Exchange Online');
 });
+
+it('keeps the per-number login-code budget for the client too, so rotating the primary number sends no more codes per hour', function (): void {
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute, 1);
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsMaxPerNumberPerHour, 3);
+    $client = capClient('c@x.hu');
+
+    foreach (['+36301111111', '+36302222222', '+36303333333', '+36304444444'] as $number) {
+        $client->phoneNumbers()->update(['is_primary' => false]);
+        $client->phoneNumbers()->create(['number_e164' => $number, 'source' => PhoneNumberSource::Admin, 'is_primary' => true]);
+        $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+        $this->travel(61)->seconds();
+    }
+
+    expect($this->sms->sent)->toHaveCount(3);
+    $refused = AuditLog::query()->where('event', 'message.refused')->where('subject_id', $client->id)->sole();
+    expect($refused->context)->toMatchArray(['reason' => 'sms_limit_per_hour', 'scope' => 'client', 'limit' => 3]);
+});
+
+it('sends one client at most one login code a minute, whichever number it is sent to', function (): void {
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute, 1);
+    $client = capClient('c@x.hu', '+36301111111');
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+
+    $client->phoneNumbers()->update(['is_primary' => false]);
+    $client->phoneNumbers()->create(['number_e164' => '+36302222222', 'source' => PhoneNumberSource::Admin, 'is_primary' => true]);
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+
+    expect($this->sms->sent)->toHaveCount(1)
+        ->and(AuditLog::query()->where('event', 'message.refused')->sole()->context)->toMatchArray(['reason' => 'sms_limit_per_minute', 'scope' => 'client']);
+});
+
+it('still refuses on the per-number budget when two clients share one number', function (): void {
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute, 1);
+    capClient('a@x.hu', '+36301111111');
+    capClient('b@x.hu', '+36301111111');
+
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'a@x.hu'])->assertOk();
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'b@x.hu'])->assertOk();
+
+    expect($this->sms->sent)->toHaveCount(1)
+        ->and(AuditLog::query()->where('event', 'message.refused')->sole()->context)->toMatchArray(['reason' => 'sms_limit_per_minute', 'scope' => 'number']);
+});

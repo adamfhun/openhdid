@@ -22,6 +22,7 @@ use App\System\HealthChecks;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Sanctum;
@@ -35,7 +36,7 @@ function sharedNumber(): string
 it('refuses a pin for a client without a registered phone number, on every path', function (): void {
     $this->seed(RolesAndPermissionsSeeder::class);
     Filament::setCurrentPanel('admin');
-    $client = Client::factory()->create();
+    $client = Client::factory()->synced()->create();
     $pins = app(PinService::class);
 
     expect($pins->canSetPin($client))->toBeFalse()
@@ -62,7 +63,7 @@ it('refuses a pin for a client without a registered phone number, on every path'
 it('removes the pin together with the last registered number, whoever removes it', function (): void {
     $this->seed(RolesAndPermissionsSeeder::class);
     Filament::setCurrentPanel('admin');
-    $client = Client::factory()->withPin('123456')->create();
+    $client = Client::factory()->synced()->withPin('123456')->create();
     $self = $client->phoneNumbers()->create(['number_e164' => '+36302222222', 'source' => PhoneNumberSource::ClientSelf]);
     $admin = $client->phoneNumbers()->create(['number_e164' => '+36303333333', 'source' => PhoneNumberSource::Admin, 'verified_at' => now()]);
 
@@ -80,7 +81,7 @@ it('removes the pin together with the last registered number, whoever removes it
 });
 
 it('tells the client on the portal when the last number took the pin with it', function (): void {
-    $client = Client::factory()->withPin('123456')->create();
+    $client = Client::factory()->synced()->withPin('123456')->create();
     $only = $client->phoneNumbers()->create(['number_e164' => '+36302222222', 'source' => PhoneNumberSource::ClientSelf]);
 
     Sanctum::actingAs($client, ['client:portal'], 'client');
@@ -203,7 +204,7 @@ it('lists shared numbers for client managers only, with the count on the menu an
 it('shows a shared number to the client only when the operator switched the notice on', function (): void {
     $other = Client::factory()->create();
     $other->phoneNumbers()->create(['number_e164' => sharedNumber(), 'source' => PhoneNumberSource::Sync, 'verified_at' => now()]);
-    $client = Client::factory()->create();
+    $client = Client::factory()->synced()->create();
     $client->phoneNumbers()->create(['number_e164' => sharedNumber(), 'source' => PhoneNumberSource::ClientSelf]);
     Sanctum::actingAs($client, ['client:portal'], 'client');
 
@@ -220,10 +221,26 @@ it('refuses to promise a verification sms while the gateway is down', function (
     config()->set('hdid.ozeki.url', 'http://ozeki.test/api');
     config()->set('hdid.ozeki.username', 'user');
     Http::fake(['ozeki.test/*' => Http::response('down', 500)]);
-    $client = Client::factory()->create();
+    $client = Client::factory()->synced()->create();
     $phone = $client->phoneNumbers()->create(['number_e164' => '+36302222222', 'source' => PhoneNumberSource::ClientSelf]);
     Sanctum::actingAs($client, ['client:portal'], 'client');
 
     $this->postJson('/api/v1/client/phone-numbers/'.$phone->id.'/verify/request')->assertStatus(503);
     $this->assertDatabaseMissing('outbound_messages', ['client_id' => $client->id]);
+});
+
+it('does not leave a PIN without a number when the last number is removed while the PIN is set', function (): void {
+    $client = Client::factory()->create();
+    $phone = $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Admin, 'is_primary' => true]);
+    $hasher = app('hash')->driver();
+
+    // The last number goes while the new PIN is being hashed.
+    Hash::partialMock()->shouldReceive('make')->andReturnUsing(function (string $value) use ($phone, $hasher): string {
+        $phone->delete();
+
+        return $hasher->make($value);
+    });
+
+    expect(fn () => app(PinService::class)->setPin($client, '123456'))->toThrow(ValidationException::class)
+        ->and($client->fresh()->pin_hash)->toBeNull();
 });

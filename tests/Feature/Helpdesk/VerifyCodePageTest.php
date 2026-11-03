@@ -9,6 +9,7 @@ use App\Filament\Admin\Pages\VerifyCode;
 use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
 use App\Identification\MobileOtpService;
+use App\Models\AuditLog;
 use App\Models\Call;
 use App\Models\Client;
 use App\Models\IdSession;
@@ -130,4 +131,45 @@ it('opens the verify code page for a missed call reached from the identification
     Livewire::test(VerifyCode::class, ['call' => $missed->id])
         ->assertOk()
         ->assertSee($missed->callerNumber());
+});
+
+it('moves the call to the client of a one-time code through the reassignment, with its audit and the previous client\'s session closed', function (): void {
+    $anna = Client::factory()->synced()->create(['name' => 'Anna']);
+    $bela = Client::factory()->synced()->create(['name' => 'Béla']);
+    $call = Call::factory()->create(['client_id' => $anna->id, 'agent_user_id' => $this->agent->id, 'status' => CallStatus::Active]);
+    $open = IdSession::factory()->create(['client_id' => $anna->id, 'agent_user_id' => $this->agent->id, 'call_id' => $call->id, 'status' => IdSessionStatus::Open]);
+    $code = app(MobileOtpService::class)->issue($bela)['code'];
+
+    Livewire::test(VerifyCode::class, ['call' => $call->id])->set('data.code', $code)->assertRedirect();
+
+    expect($call->fresh()->client_id)->toBe($bela->id)
+        ->and(AuditLog::query()->where('event', 'call.client_reassigned')->where('subject_id', $call->id)->sole()->context)->toMatchArray(['from_client_id' => $anna->id, 'to_client_id' => $bela->id])
+        ->and($open->fresh()->status)->toBe(IdSessionStatus::Cancelled)
+        ->and($open->fresh()->outcome_reason)->toBe('call_reassigned');
+});
+
+it('says the call was taken over, as a notification, when a colleague took it after the page was opened', function (): void {
+    $client = Client::factory()->synced()->create();
+    $call = Call::factory()->create(['client_id' => null, 'agent_user_id' => $this->agent->id, 'status' => CallStatus::Active]);
+    $code = app(MobileOtpService::class)->issue($client)['code'];
+    $page = Livewire::test(VerifyCode::class, ['call' => $call->id]);
+
+    $call->forceFill(['agent_user_id' => User::factory()->withRole(Role::Agent)->create()->id])->save();
+    $page->set('data.code', $code)->assertNotified()->assertNoRedirect();
+
+    expect(app(MobileOtpService::class)->current($client))->not->toBeNull('the code stays usable')
+        ->and(IdSession::query()->exists())->toBeFalse();
+});
+
+it('refuses a one-time code on a call that is already identified and keeps the code usable', function (): void {
+    $anna = Client::factory()->synced()->create();
+    $bela = Client::factory()->synced()->create();
+    $call = Call::factory()->create(['client_id' => $anna->id, 'agent_user_id' => $this->agent->id, 'status' => CallStatus::Active]);
+    IdSession::factory()->create(['client_id' => $anna->id, 'agent_user_id' => $this->agent->id, 'call_id' => $call->id, 'status' => IdSessionStatus::Passed, 'decided_at' => now()]);
+    $code = app(MobileOtpService::class)->issue($bela)['code'];
+
+    Livewire::test(VerifyCode::class, ['call' => $call->id])->set('data.code', $code)->assertNotified()->assertNoRedirect();
+
+    expect($call->fresh()->client_id)->toBe($anna->id)
+        ->and(app(MobileOtpService::class)->current($bela))->not->toBeNull();
 });

@@ -22,6 +22,7 @@ use Illuminate\Support\Arr;
 use Symfony\Component\HttpFoundation\Exception\SuspiciousOperationException;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -43,6 +44,12 @@ return Application::configure(basePath: dirname(__DIR__))
             fn (string $host): string => str_starts_with($host, '*.') ? '^.+\.'.preg_quote(substr($host, 2)).'$' : '^'.preg_quote($host).'$',
             array_values(array_filter([parse_url((string) config('app.url'), PHP_URL_HOST), 'localhost', ...(array) config('hdid.extra_hosts', [])], 'is_string')),
         ), subdomains: false);
+        // A guest on an "auth" route: the framework's default sends them to a
+        // route named "login", which does not exist here (a 500). The API
+        // answers JSON 401 (null: no redirect); everything else that is not
+        // the panel (the panel names its own login page) is a staff route,
+        // such as the call-view switch. The closure runs per request.
+        $middleware->redirectGuestsTo(fn (Request $request): ?string => $request->is('api', 'api/*') ? null : route('filament.admin.auth.login'));
         $middleware->append(SecurityHeaders::class);
         $middleware->statefulApi();
         $middleware->web(append: [SetLocale::class, EnforceAuthSessions::class, TouchLastSeen::class]);
@@ -66,21 +73,42 @@ return Application::configure(basePath: dirname(__DIR__))
             fn (Request $request) => $request->is('api', 'api/*') || $request->expectsJson(),
         );
 
-        $exceptions->respond(function (Response $response, Throwable $e, Request $request): Response {
-            if ($request->is('api', 'api/*') && $response instanceof JsonResponse && $response->isClientError()) {
-                $data = Arr::except($response->getData(true), ['exception', 'file', 'line', 'trace']);
-
-                // The framework builds its 404 text from the model class name
-                // ("No query results for model [App\Models\Client] …"), which
-                // leaks the internal structure even with debug off.
-                if ($response->getStatusCode() === 404 && str_contains((string) ($data['message'] ?? ''), 'No query results for model')) {
-                    $data['message'] = __('Not found.');
-                }
-
-                $response->setData($data);
+        // Every JSON error answer, on every path (any request that expects
+        // JSON gets one, see above) and whatever APP_DEBUG says, is free of
+        // the debug fields (exception class, file, line, trace); the details
+        // stay in the log, as reporting is unchanged. In debug mode the
+        // framework also puts the internal message of an unexpected server
+        // error into the answer: that becomes the neutral "Server Error" it
+        // gives without debug. An HTTP exception (maintenance mode, abort())
+        // keeps its message and headers, and the application's own JSON
+        // renders (provider_unavailable, unknown_host) carry no trace, so
+        // they keep their fields.
+        $exceptions->respond(function (Response $response, Throwable $e): Response {
+            if (! $response instanceof JsonResponse || $response->getStatusCode() < 400) {
+                return $response;
             }
 
-            return $response;
+            $data = $response->getData(true);
+
+            if (! is_array($data)) {
+                return $response;
+            }
+
+            $frameworkDebug = array_key_exists('trace', $data);
+            $data = Arr::except($data, ['exception', 'file', 'line', 'trace']);
+
+            if ($frameworkDebug && $response->isServerError() && ! $e instanceof HttpExceptionInterface) {
+                $data = ['message' => 'Server Error'];
+            }
+
+            // The framework builds its 404 text from the model class name
+            // ("No query results for model [App\Models\Client] …"), which
+            // leaks the internal structure even with debug off.
+            if ($response->getStatusCode() === 404 && str_contains((string) ($data['message'] ?? ''), 'No query results for model')) {
+                $data['message'] = __('Not found.');
+            }
+
+            return $response->setData($data);
         });
 
         // An expired or tampered magic link lands on the branded login page,

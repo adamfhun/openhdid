@@ -166,3 +166,17 @@ it('refuses a hot window shorter than the minimum on the settings page', functio
 
     expect(app(AuditArchive::class)->hotDays())->toBe(200);
 });
+
+it('leaves no temporary file behind when writing the archive file fails', function (): void {
+    app(Settings::class)->set(SettingKey::RetentionAuditHotDays, 150);
+    auditEntryOn('login.succeeded', 200);
+    $disk = Mockery::mock(Storage::disk('local'))->makePartial();
+    $disk->shouldReceive('put')->andReturnFalse();
+    Storage::set('local', $disk);
+    $before = glob(sys_get_temp_dir().'/hdid-audit-*') ?: [];
+
+    expect(fn () => app(AuditArchive::class)->archive())->toThrow(RuntimeException::class);
+
+    expect(array_values(array_diff(glob(sys_get_temp_dir().'/hdid-audit-*') ?: [], $before)))->toBe([])
+        ->and(AuditLog::query()->where('event', 'login.succeeded')->exists())->toBeTrue('nothing leaves the table without its file');
+});

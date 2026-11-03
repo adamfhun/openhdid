@@ -6,6 +6,7 @@ use App\Auth\Permission;
 use App\Clients\ClientExporter;
 use App\Clients\ClientLinks;
 use App\Clients\ClientPhones;
+use App\Clients\ClientRemoval;
 use App\Clients\ClientTiers;
 use App\Clients\PackageOverrides;
 use App\Enums\ClientTier;
@@ -25,6 +26,7 @@ use App\Filament\Admin\Resources\Clients\RelationManagers\IdSessionsRelationMana
 use App\Filament\Admin\Resources\Clients\RelationManagers\LinkedClientsRelationManager;
 use App\Filament\Admin\Resources\Clients\RelationManagers\PhoneNumbersRelationManager;
 use App\Filament\Admin\Resources\ExternalRecords\ExternalRecordResource;
+use App\Filament\NotificationText;
 use App\Identification\ClientAnswers;
 use App\Identification\PinService;
 use App\Models\Call;
@@ -37,6 +39,7 @@ use App\Support\HuDate;
 use App\Support\InputLimits;
 use App\Support\PhoneNormalizer;
 use App\System\NotDemoAddressRule;
+use App\System\Retention;
 use BackedEnum;
 use Closure;
 use Filament\Actions\Action;
@@ -64,8 +67,10 @@ use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Filters\TrashedFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
@@ -166,7 +171,7 @@ class ClientResource extends BaseResource
                     app(PackageOverrides::class)->set($record, $data['package'], $data['reason'], Carbon::parse($data['until'])->endOfDay(), auth()->user());
                     Notification::make()->title(__('Package override set'))->success()->send();
                 } catch (ValidationException $e) {
-                    Notification::make()->title($e->validator->errors()->first())->danger()->send();
+                    Notification::make()->title(NotificationText::of($e->validator->errors()->first()))->danger()->send();
                 }
             });
     }
@@ -218,7 +223,7 @@ class ClientResource extends BaseResource
                     $links->link(static::sponsorCandidates()->findOrFail($data['sponsor_id']), $record, auth()->user());
                     Notification::make()->title(__('Client linked'))->success()->send();
                 } catch (ValidationException $e) {
-                    Notification::make()->title($e->validator->errors()->first())->danger()->send();
+                    Notification::make()->title(NotificationText::of($e->validator->errors()->first()))->danger()->send();
                 }
             });
     }
@@ -308,7 +313,7 @@ class ClientResource extends BaseResource
                     app(ClientLinks::class)->muteWarning($record, $data['reason'], filled($data['until'] ?? null) ? Carbon::parse($data['until'])->endOfDay() : null, auth()->user());
                     Notification::make()->title(__('Link warning muted'))->success()->send();
                 } catch (ValidationException $e) {
-                    Notification::make()->title($e->validator->errors()->first())->danger()->send();
+                    Notification::make()->title(NotificationText::of($e->validator->errors()->first()))->danger()->send();
                 }
             });
     }
@@ -463,12 +468,59 @@ class ClientResource extends BaseResource
     public static function deleteAction(): DeleteAction
     {
         return DeleteAction::make()
-            ->modalDescription(fn (Client $record): string => __('The account is closed before the row is removed; the row can be restored later.').' '.static::closeWarning($record))
-            ->before(function (Client $record): void {
-                if (! $record->isClosed()) {
-                    $record->close('admin');
-                }
-            });
+            ->modalHeading(fn (Client $record): string => __('Delete the client :name (:email)?', ['name' => $record->name, 'email' => $record->email]))
+            ->modalDescription(fn (Client $record): string => trim(__('The account is closed by an administrator and signed out everywhere before the row is removed; a returning EMD record neither restores nor reopens it. It can be restored with the Deleted filter and the Restore button, and stays closed until reopened.')
+                .' '.__('It can be restored until :date; after that the daily prune deletes it for good with everything it carried.', ['date' => app(Retention::class)->purgeDateOf()->format(HuDate::DATE)])
+                .($record->isClosed() && $record->closed_reason !== 'admin' ? ' '.__('It was closed for: :reason; the reason becomes the administrator\'s.', ['reason' => __($record->closed_reason)]) : '')
+                .' '.static::closeWarning($record)))
+            ->using(fn (Client $record): bool => app(ClientRemoval::class)->delete($record, auth()->user()));
+    }
+
+    /**
+     * Shown while the Deleted filter lists deleted rows: when the row was
+     * deleted, and the day the daily prune deletes it for good.
+     */
+    public static function deletedColumn(): TextColumn
+    {
+        return TextColumn::make('deleted_at')->label(__('Deleted'))->date(HuDate::DATE)->placeholder('-')
+            ->description(fn (Model $record): ?string => $record->getAttribute('deleted_at') === null ? null : __('deleted for good on :date', ['date' => app(Retention::class)->purgeDateOf($record->getAttribute('deleted_at'))->format(HuDate::DATE)]))
+            ->visible(fn ($livewire): bool => filled($livewire->tableFilters['trashed']['value'] ?? null));
+    }
+
+    /**
+     * The restore, naming the client and saying the account stays closed.
+     */
+    public static function restoreAction(): RestoreAction
+    {
+        return RestoreAction::make()
+            ->modalHeading(fn (Client $record): string => __('Restore the client :name (:email)?', ['name' => $record->name, 'email' => $record->email]))
+            ->modalDescription(__('The row comes back with its data, closed; reopen the account separately if it should sign in again. A company sign-in binding it had must be cleared before company sign-in works.'));
+    }
+
+    /**
+     * A filter's value as the list may use it: a non-empty text, or nothing
+     * (a forged link or a stale session can carry anything).
+     *
+     * @param  array<string, mixed>  $data
+     */
+    public static function filterValue(array $data): ?string
+    {
+        $value = $data['value'] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
+     * The level filter's value, only when it names a level in use; anything
+     * else filters nothing.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    public static function filterTier(array $data): ?ClientTier
+    {
+        $tier = ClientTier::tryFrom((string) static::filterValue($data));
+
+        return $tier !== null && in_array($tier, app(ClientTiers::class)->activeTiers(), true) ? $tier : null;
     }
 
     /**
@@ -476,20 +528,34 @@ class ClientResource extends BaseResource
      */
     public static function closeWarning(Client $client): string
     {
-        $linked = $client->activeLinks()->with('linked')->get()->map(fn ($link) => $link->linked)->filter(fn ($c) => $c !== null && ! $c->isClosed());
+        $tiers = app(ClientTiers::class);
+        $all = $client->activeLinks()->with('linked')->get()->map(fn ($link) => $link->linked)->filter(fn ($c) => $c !== null);
+        // A linked client with an implicit premium of its own is not closed: its link ends (ClientLinks::closeLinkedClients).
+        $ownPremium = $all->filter(fn (Client $c): bool => $tiers->hasImplicitPremium($c));
+        $linked = $all->filter(fn (Client $c): bool => ! $c->isClosed() && ! $tiers->hasImplicitPremium($c));
+        $ownPremiumSentence = $ownPremium->isEmpty() ? '' : ' '.__(':n linked client(s) have an implicit premium package of their own (:names): they stay open, and their link ends.', ['n' => $ownPremium->count(), 'names' => static::linkedNames($ownPremium)]);
 
         if ($linked->isEmpty()) {
-            return __('The client can no longer sign in to the portal and cannot be identified until reopened.');
+            return __('The client can no longer sign in to the portal and cannot be identified until reopened.').$ownPremiumSentence;
         }
 
-        // Clients hidden by premium-only mode are closed too, so they are counted, but not named.
-        $named = $linked->filter(fn (Client $c): bool => app(ClientTiers::class)->isServed($c));
-        $names = $named->take(8)->map(fn (Client $c) => $c->name.' ('.$c->email.')')
-            ->when($linked->count() > $named->count(), fn ($list) => $list->push(__(':n client(s) not served at present', ['n' => $linked->count() - $named->count()])))
-            ->implode(', ');
-        $more = $named->count() > 8 ? ' '.__('and :n more', ['n' => $named->count() - 8]) : '';
+        return __('This client sponsors :n linked client(s). Closing it also closes their accounts: :names. Reopening this client reopens them.', ['n' => $linked->count(), 'names' => static::linkedNames($linked)]).$ownPremiumSentence;
+    }
 
-        return __('This client sponsors :n linked client(s). Closing it also closes their accounts: :names:more. Reopening this client reopens them.', ['n' => $linked->count(), 'names' => $names, 'more' => $more]);
+    /**
+     * Linked clients by name and address, at most eight; clients hidden by
+     * premium-only mode are counted, but not named.
+     *
+     * @param  Collection<int, Client>  $clients
+     */
+    private static function linkedNames(Collection $clients): string
+    {
+        $named = $clients->filter(fn (Client $c): bool => app(ClientTiers::class)->isServed($c));
+        $names = $named->take(8)->map(fn (Client $c) => $c->name.' ('.$c->email.')')
+            ->when($clients->count() > $named->count(), fn ($list) => $list->push(__(':n client(s) not served at present', ['n' => $clients->count() - $named->count()])))
+            ->implode(', ');
+
+        return $names.($named->count() > 8 ? ' '.__('and :n more', ['n' => $named->count() - 8]) : '');
     }
 
     public static function supportOf(Client $client): ?array
@@ -845,6 +911,7 @@ class ClientResource extends BaseResource
                 IconColumn::make('externalRecord.id')->label(__('Linked to EMD'))->boolean()->alignCenter()->toggleable()
                     ->color(fn (Client $record) => $record->externalRecord === null ? 'danger' : ($record->externalRecord->isMissing() ? 'warning' : 'success')),
                 TextColumn::make('closed_at')->label(__('Closed'))->since()->placeholder(__('open'))->badge()->color('danger')->toggleable(isToggledHiddenByDefault: true),
+                static::deletedColumn(),
                 ...static::directoryFieldColumns(),
             ])
             ->filters([
@@ -860,13 +927,13 @@ class ClientResource extends BaseResource
                 SelectFilter::make('tier')->label(__('Level'))
                     ->visible(fn () => count(app(ClientTiers::class)->activeTiers()) > 1)
                     ->options(collect(app(ClientTiers::class)->activeTiers())->mapWithKeys(fn (ClientTier $t) => [$t->value => $t->label()])->all())
-                    ->query(fn (Builder $query, array $data) => $query->when($data['value'] ?? null, fn (Builder $q, string $v) => app(ClientTiers::class)->scopeClients($q, [ClientTier::from($v)]))),
+                    ->query(fn (Builder $query, array $data) => $query->when(static::filterTier($data), fn (Builder $q, ClientTier $tier) => app(ClientTiers::class)->scopeClients($q, [$tier]))),
                 SelectFilter::make('company')->label(__('Company'))->searchable()
                     ->options(fn () => static::servedRecords()->whereNotNull('company')->distinct()->orderBy('company')->pluck('company', 'company'))
-                    ->query(fn (Builder $query, array $data) => $query->when($data['value'] ?? null, fn (Builder $q, string $v) => $q->whereHas('externalRecord', fn ($r) => $r->where('company', $v)))),
+                    ->query(fn (Builder $query, array $data) => $query->when(static::filterValue($data), fn (Builder $q, string $v) => $q->whereHas('externalRecord', fn ($r) => $r->where('company', $v)))),
                 SelectFilter::make('email_domain')->label(__('E-mail domain'))->searchable()
                     ->options(fn () => static::servedRecords()->whereNotNull('email_domain')->distinct()->orderBy('email_domain')->pluck('email_domain', 'email_domain'))
-                    ->query(fn (Builder $query, array $data) => $query->when($data['value'] ?? null, fn (Builder $q, string $v) => $q->whereHas('externalRecord', fn ($r) => $r->where('email_domain', $v)))),
+                    ->query(fn (Builder $query, array $data) => $query->when(static::filterValue($data), fn (Builder $q, string $v) => $q->whereHas('externalRecord', fn ($r) => $r->where('email_domain', $v)))),
                 SelectFilter::make('implicit_package')->label(__('Implicit package'))->searchable()
                     ->options(fn () => Client::query()->whereNotNull('implicit_package')->distinct()->orderBy('implicit_package')->pluck('implicit_package', 'implicit_package')),
                 SelectFilter::make('explicit_package')->label(__('Explicit package'))->searchable()
@@ -918,7 +985,7 @@ class ClientResource extends BaseResource
                         static::closeAction(),
                         static::reopenAction(),
                         static::deleteAction(),
-                        RestoreAction::make(),
+                        static::restoreAction(),
                     ])->dropdown(false),
                 ])->icon('heroicon-m-ellipsis-vertical')->color('gray')->tooltip(__('More')),
             ])

@@ -42,7 +42,7 @@ set -euo pipefail
 umask 077
 
 # The release this script belongs to; the release process writes it (like OPENHDID_VERSION in env.example).
-OPENHDID_RELEASE=1.15.0
+OPENHDID_RELEASE=1.15.1
 
 DIR=$(cd -- "$(dirname -- "$0")" && pwd -P)
 SELF="$DIR/$(basename -- "$0")"
@@ -2684,14 +2684,14 @@ next_steps_infra() {
     say "        $(msg i_replica_2)"
     say "            services:"
     say "              mariadb:"
-    say "                command: [--server-id=1, --log-bin=mariadb-bin, --binlog-format=ROW]   # $(msg i_replica_replica_id)"
+    say "                command: [--local-infile=0, --server-id=1, --log-bin=mariadb-bin, --binlog-format=ROW]   # $(msg i_replica_replica_id)"
     say "        $(msg i_replica_3)"
     say "            docker compose exec mariadb mariadb -uroot -p"
     say "            CREATE USER 'repl'@'<$(msg i_replica_address)>' IDENTIFIED BY '<REPL_JELSZÓ>';"
     say "            GRANT REPLICATION SLAVE ON *.* TO 'repl'@'<$(msg i_replica_address)>';"
     say "        $(msg i_replica_4)"
     say "            docker compose exec -T mariadb sh -c 'MYSQL_PWD=\"\$MARIADB_ROOT_PASSWORD\" exec mariadb-dump -uroot --all-databases --single-transaction --master-data=2 --gtid' | gzip > replika-alap.sql.gz"
-    say "            gunzip -c replika-alap.sql.gz | docker compose exec -T mariadb sh -c 'MYSQL_PWD=\"\$MARIADB_ROOT_PASSWORD\" exec mariadb -uroot'     # $(msg i_replica_on_replica)"
+    say "            gunzip -c replika-alap.sql.gz | docker compose exec -T mariadb sh -c 'MYSQL_PWD=\"\$MARIADB_ROOT_PASSWORD\" exec mariadb --sandbox --local-infile=0 -uroot'     # $(msg i_replica_on_replica)"
     say "        $(msg i_replica_5)"
     say "            CHANGE MASTER TO MASTER_HOST='$A_INFRA_ADDRESS', MASTER_PORT=$A_INFRA_DB_PORT, MASTER_USER='repl', MASTER_PASSWORD='<REPL_JELSZÓ>', MASTER_USE_GTID=slave_pos;"
     say "            START SLAVE;"
@@ -3194,6 +3194,10 @@ ck_env_static() {
     if [[ $app_env == production ]]; then
         [[ $(ev APP_DEBUG) != true ]] || finding ENV-06 error env "$(msg c_env06_t)" "$(msg c_env06_debug)" "$(msg c_env06_a)" "TROUBLESHOOTING.md 3." ""
         [[ $(ev SESSION_SECURE_COOKIE) != false ]] || finding ENV-06 error env "$(msg c_env06_t)" "$(msg c_env06_cookie)" "$(msg c_env06_a)" "TROUBLESHOOTING.md 3." ""
+        case "$(ev MAIL_MAILER)/$(ev EWS_VERIFY_TLS | tr '[:upper:]' '[:lower:]')" in
+            ews/false | ews/0 | ews/off | ews/no | failover/false | failover/0 | failover/off | failover/no | roundrobin/false | roundrobin/0 | roundrobin/off | roundrobin/no)
+                finding ENV-06 error env "$(msg c_env06_t)" "$(msg c_env06_ews_tls)" "$(msg c_env06_ews_tls_a)" "TROUBLESHOOTING.md 10." "" ;;
+        esac
         IFS=', ' read -r -a items <<<"$(ev TRUSTED_PROXIES)"
         for item in ${items[@]+"${items[@]}"}; do
             case $item in
@@ -3366,7 +3370,7 @@ ck_container_env() {
         case $text in
             *HDID_RATE_LIMIT_EXEMPT_NETWORKS*) id=ENV-11 key=c_env11_t ;;
             *"REDIS_PASSWORD is empty"*) id=ENV-08 key=c_env08_t ;;
-            *TRUSTED_PROXIES=* | *APP_ENV* | *APP_DEBUG* | *SESSION_SECURE_COOKIE*) id=ENV-06 key=c_env06_t ;;
+            *TRUSTED_PROXIES=* | *APP_ENV* | *APP_DEBUG* | *SESSION_SECURE_COOKIE* | *EWS_VERIFY_TLS*) id=ENV-06 key=c_env06_t ;;
             *APP_KEY*) id=ENV-04 key=c_env04_t ;;
             *APP_URL*) id=ENV-05 key=c_env05_t ;;
             *DB_PASSWORD*) id=ENV-21 key=c_env21_t ;;
@@ -3625,6 +3629,8 @@ HEALTH_TSV_PHP='$d = json_decode(stream_get_contents(STDIN), true); if (! is_arr
 RESOLVE_PHP='foreach (array_slice($argv, 1) as $n) { echo "NAME\x1f", $n, "\x1f", gethostbyname($n), PHP_EOL; }'
 # shellcheck disable=SC2016
 GRANTS_PHP='foreach (Illuminate\Support\Facades\DB::select("SHOW GRANTS") as $r) { echo "GRANT\x1f", implode(" ", (array) $r), PHP_EOL; }'
+# Whether the database server allows LOAD DATA LOCAL (1) or refuses it (0).
+INFILE_PHP='echo "INFILE\x1f", (int) Illuminate\Support\Facades\DB::selectOne("SELECT @@GLOBAL.local_infile AS local_infile")->local_infile, PHP_EOL;'
 # The overlap locks held now: name, artisan command, background (1/0), lifetime in minutes.
 # shellcheck disable=SC2016
 LOCKS_PHP='foreach (app(Illuminate\Console\Scheduling\Schedule::class)->events() as $e) { if ($e->withoutOverlapping && $e->mutex->exists($e)) { $c = preg_match("/artisan.? +([^ ]+)/", (string) $e->command, $m) ? $m[1] : ""; echo "LOCK\x1f", $e->description ?: $c, "\x1f", $c, "\x1f", $e->runInBackground ? 1 : 0, "\x1f", $e->expiresAt, PHP_EOL; } }'
@@ -3715,7 +3721,27 @@ ck_database() {
     elif [[ $out == *GRANT* ]]; then
         check_ok
     fi
+    # DB-04: the database server refuses LOAD DATA LOCAL (the bundled one by its command, from 1.15.1).
+    out=$(dc exec -T web php artisan tinker --execute "$INFILE_PHP" 2>/dev/null) || true
+    while IFS=$'\x1f' read -r tag text; do
+        [[ $tag == INFILE ]] || continue
+        if [[ $text == 1 ]]; then
+            local_infile_finding
+        elif [[ $text == 0 ]]; then
+            check_ok
+        fi
+    done <<<"$out"
     return 0
+}
+
+# DB-04: the bundled server takes local_infile=0 from the compose.yaml command, which a plain up -d
+# applies once the file is new; an external one from its own configuration.
+local_infile_finding() {
+    if configured mariadb; then
+        finding DB-04 warning db "$(msg c_db04_t)" "" "$(msg c_db04_a)" "TROUBLESHOOTING.md 14." "" "docker compose up -d --force-recreate mariadb"
+    else
+        finding DB-04 warning db "$(msg c_db04_t)" "" "$(msg c_db04_external_a)" "TROUBLESHOOTING.md 14." ""
+    fi
 }
 
 # PING (or another valkey-cli command) on a bundled Valkey with the password in REDISCLI_AUTH only.
@@ -3933,6 +3959,12 @@ ck_infra() {
         else
             check_ok
         fi
+        # shellcheck disable=SC2016 # the container's shell expands the root password from its own environment
+        out=$(dc exec -T mariadb sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -uroot -N -B -e "SELECT @@GLOBAL.local_infile"' 2>&1) || true
+        case $(last_lines 1 "$out") in
+            1) local_infile_finding ;;
+            0) check_ok ;;
+        esac
     fi
     return 0
 }
@@ -5426,8 +5458,8 @@ M_i_replica_1_hu='1. Egy második gépen ugyanez a mappa (profiles/10k/infra.yam
 M_i_replica_1_en='1. On a second host the same folder (a copy of profiles/10k/infra.yaml, .env, db.env), with the mariadb service only.'
 M_i_replica_2_hu='2. Bináris napló mindkét gépen egy compose.override.yaml-lal (a COMPOSE_FILE végére: :compose.override.yaml), majd docker compose up -d mariadb:'
 M_i_replica_2_en='2. Binary log on both hosts with a compose.override.yaml (at the end of COMPOSE_FILE: :compose.override.yaml), then docker compose up -d mariadb:'
-M_i_replica_replica_id_hu='a replikán --server-id=2 és --read-only=1'
-M_i_replica_replica_id_en='on the replica --server-id=2 and --read-only=1'
+M_i_replica_replica_id_hu='a replikán --server-id=2 és --read-only=1; a --local-infile=0 mindkét gépen marad'
+M_i_replica_replica_id_en='on the replica --server-id=2 and --read-only=1; keep --local-infile=0 on both hosts'
 M_i_replica_3_hu='3. Replikációs fiók ezen a gépen (a root-jelszó a db.env-ben; a jelszót a kliens kéri):'
 M_i_replica_3_en='3. A replication account on this host (the root password is in db.env; the client asks for it):'
 M_i_replica_address_hu='a replika címe'
@@ -5657,6 +5689,10 @@ M_c_env06_cookie_hu='SESSION_SECURE_COOKIE=false élesben'
 M_c_env06_cookie_en='SESSION_SECURE_COOKIE=false in production'
 M_c_env06_proxies_hu='TRUSTED_PROXIES=%s: mindenkit megbízhatónak vesz'
 M_c_env06_proxies_en='TRUSTED_PROXIES=%s trusts every address'
+M_c_env06_ews_tls_hu='EWS_VERIFY_TLS=false élesben: az Exchange-kiszolgáló tanúsítványát semmi nem ellenőrzi, a jelszó és minden levél útközben olvasható'
+M_c_env06_ews_tls_en='EWS_VERIFY_TLS=false in production: nothing checks the certificate of the Exchange server, the password and every e-mail are readable on the way'
+M_c_env06_ews_tls_a_hu='A belső CA-t tedd a ca mappába (docker compose restart web worker sync-worker scheduler), és töröld a sort a .env-ből; a konténer induláskor ugyanezt ellenőrzi és megáll.'
+M_c_env06_ews_tls_a_en='Put the internal CA in the ca folder (docker compose restart web worker sync-worker scheduler) and remove the line from .env; the container checks the same at start and stops.'
 M_c_env06_a_hu='Javítás a .env-ben (a konténer induláskor ugyanezt ellenőrzi és megáll); hibakereséshez APP_ENV=staging és APP_DEBUG=true együtt, utána vissza.'
 M_c_env06_a_en='Fix it in .env (the container checks the same at start and stops); for debugging APP_ENV=staging together with APP_DEBUG=true, then revert both.'
 M_c_env07_t_hu='Régi, adatbázisos alapértékű telepítés'
@@ -5816,6 +5852,12 @@ M_c_db03_t_hu='A futási fióknak sémamódosító joga van'
 M_c_db03_t_en='The runtime account may change the schema'
 M_c_db03_a_hu='A futási fiók csak SELECT, INSERT, UPDATE, DELETE jogot kapjon; a sémát a db.env migrációs fiókja módosítja (REVOKE az adatbázis üzemeltetőjével).'
 M_c_db03_a_en='Give the runtime account SELECT, INSERT, UPDATE, DELETE only; the migration account of db.env changes the schema (REVOKE with the database operator).'
+M_c_db04_t_hu='Az adatbázis-kiszolgáló engedi a LOAD DATA LOCAL parancsot (local_infile=1)'
+M_c_db04_t_en='The database server allows LOAD DATA LOCAL (local_infile=1)'
+M_c_db04_a_hu='Az 1.15.1-es compose.yaml a beépített MariaDB-t --local-infile=0 kapcsolóval indítja: a régi konténert hozza létre újra (lent); ha egy compose.override.yaml saját command sort ad a mariadb szolgáltatásnak (replika), abba is kerüljön be a --local-infile=0. A visszaállítás kliense magában is elutasítja.'
+M_c_db04_a_en='The compose.yaml of 1.15.1 starts the bundled MariaDB with --local-infile=0: recreate the old container (below); if a compose.override.yaml gives the mariadb service a command of its own (replica), add --local-infile=0 there too. The restore client refuses it on its own as well.'
+M_c_db04_external_a_hu='Külső adatbázisnál az adatbázis üzemeltetője állítsa be a kiszolgálón: local_infile = 0 (a [mariadbd] szakaszban), majd újraindítás; a kétgépes 10k infra gépén: docker compose up -d --force-recreate mariadb, az ottani 1.15.1-es infra.yaml-lel. A visszaállítás kliense (backup.sh) magában is elutasítja.'
+M_c_db04_external_a_en='On an external database the database operator sets it on the server: local_infile = 0 (in the [mariadbd] section), then a restart; on the infra host of the two-host 10k: docker compose up -d --force-recreate mariadb, with the infra.yaml of 1.15.1 there. The restore client (backup.sh) refuses it on its own as well.'
 
 M_c_svc01_t_hu='A(z) %s szolgáltatás nem fut rendben'
 M_c_svc01_t_en='Service %s is not running properly'

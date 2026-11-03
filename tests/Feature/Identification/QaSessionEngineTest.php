@@ -17,6 +17,7 @@ use App\Models\Question;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\Installation;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -222,7 +223,7 @@ it('holds a per-client lock while a question-and-answer session is being opened'
             return;
         }
 
-        $lock = Cache::lock(QA_START_LOCK_PREFIX.$session->client_id, 10);
+        $lock = Cache::lock(Installation::lockName(QA_START_LOCK_PREFIX.$session->client_id), 10);
         $lockWasFree = $lock->get();
 
         if ($lockWasFree) {
@@ -232,7 +233,7 @@ it('holds a per-client lock while a question-and-answer session is being opened'
 
     $this->engine->start($client, $this->agent);
 
-    expect($lockWasFree)->toBeFalse('the open-session check and the insert must run inside Cache::lock(\'hdid:qa:<client>\')');
+    expect($lockWasFree)->toBeFalse('the open-session check and the insert must run inside the client\'s lock (\'hdid-<installation>:hdid:qa:<client>\')');
 });
 
 it('keeps a single open question-and-answer session when two agents start at the same moment', function (): void {
@@ -251,7 +252,7 @@ it('keeps a single open question-and-answer session when two agents start at the
         }
         $interleaved = true;
 
-        $lock = Cache::lock(QA_START_LOCK_PREFIX.$session->client_id, 10);
+        $lock = Cache::lock(Installation::lockName(QA_START_LOCK_PREFIX.$session->client_id), 10);
         if (! $lock->get()) {
             $interleavedResult = 'blocked by lock';
 

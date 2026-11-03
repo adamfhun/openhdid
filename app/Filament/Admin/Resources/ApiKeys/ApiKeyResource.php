@@ -67,7 +67,7 @@ class ApiKeyResource extends BaseResource
             ])
             ->recordActions([
                 Action::make('rotateSecret')->label(__('Signing secret'))->icon('heroicon-o-finger-print')->color('gray')
-                    ->modalHeading(__('Issue a new signing secret'))
+                    ->modalHeading(fn (ApiKey $record): string => __('Issue a new signing secret for :name?', ['name' => $record->name]))
                     ->modalDescription(__('Every request with this key must then carry X-Timestamp and X-Signature (HMAC-SHA256 of "timestamp, method, request URI and body, joined by newlines"); a signature is accepted once. The partner has to switch at the same time.'))
                     ->requiresConfirmation()
                     ->visible(fn (ApiKey $record) => ! $record->isRevoked())
@@ -82,6 +82,7 @@ class ApiKeyResource extends BaseResource
                             ->send();
                     }),
                 Action::make('removeSecret')->label(__('Remove signature'))->icon('heroicon-o-lock-open')->color('warning')->requiresConfirmation()
+                    ->modalHeading(fn (ApiKey $record): string => __('Remove the signature of :name?', ['name' => $record->name]))
                     ->modalDescription(__('Requests with this key are then accepted without X-Timestamp and X-Signature; the partner may stop signing.'))
                     ->visible(fn (ApiKey $record) => ! $record->isRevoked() && $record->requiresSignature())
                     ->disabled(fn (ApiKey $record) => $record->scope->signatureRequired())
@@ -91,6 +92,7 @@ class ApiKeyResource extends BaseResource
                         $record->removeSigningSecret();
                     }),
                 Action::make('revoke')->label(__('Revoke'))->icon('heroicon-o-no-symbol')->color('danger')->requiresConfirmation()
+                    ->modalHeading(fn (ApiKey $record): string => __('Revoke the key :name?', ['name' => $record->name]))
                     ->modalDescription(__('Requests with this key get 401 at once. A revoked key cannot be restored; create a new one if needed.'))
                     ->visible(fn (ApiKey $record) => ! $record->isRevoked())
                     ->action(fn (ApiKey $record) => $record->revoke()),

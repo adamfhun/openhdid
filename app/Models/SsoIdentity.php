@@ -20,7 +20,7 @@ use Illuminate\Database\Eloquent\Model;
  * itself (sso.subject_bound, sso.subject_unbound), so the model is not
  * Auditable.
  */
-#[Fillable(['principal_type', 'principal_id', 'provider', 'issuer', 'client_id', 'subject', 'lookup', 'claim', 'bound_via', 'bound_at', 'last_used_at', 'last_mismatch_at', 'mismatch_count'])]
+#[Fillable(['principal_type', 'principal_id', 'provider', 'issuer', 'client_id', 'subject', 'lookup', 'claim', 'bound_via', 'bound_at', 'last_used_at', 'last_mismatch_at', 'mismatch_count', 'released_at', 'released_to_type', 'released_to_id'])]
 class SsoIdentity extends Model
 {
     /** @use HasFactory<SsoIdentityFactory> */
@@ -38,7 +38,34 @@ class SsoIdentity extends Model
             'last_used_at' => 'datetime',
             'last_mismatch_at' => 'datetime',
             'mismatch_count' => 'integer',
+            'released_at' => 'datetime',
+            'released_to_type' => PrincipalType::class,
         ];
+    }
+
+    /**
+     * A binding the account yielded to another account (it was closed or
+     * deleted): kept as a marker, so the account, should it come back,
+     * signs in with no company identity until an administrator clears it.
+     */
+    public function isReleased(): bool
+    {
+        return $this->released_at !== null;
+    }
+
+    /**
+     * The account a released binding went to, soft-deleted ones included.
+     */
+    public function releasedTo(): (Principal&Model)|null
+    {
+        if ($this->released_to_type === null || $this->released_to_id === null) {
+            return null;
+        }
+
+        /** @var (Principal&Model)|null $principal */
+        $principal = $this->released_to_type->modelClass()::withTrashed()->find($this->released_to_id);
+
+        return $principal;
     }
 
     /**

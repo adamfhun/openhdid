@@ -8,6 +8,7 @@ use App\Auth\Oidc\OidcProvider;
 use App\Auth\Permission;
 use App\Clients\ClientLinks;
 use App\Clients\PackageListImpact;
+use App\Clients\PackageName;
 use App\Enums\ClientTier;
 use App\Enums\MfaMethod;
 use App\Enums\PrincipalType;
@@ -15,6 +16,7 @@ use App\Filament\Actions\ExportTableAction;
 use App\Filament\Admin\Clusters\System;
 use App\Filament\Concerns\GuardsUnsavedChanges;
 use App\Filament\Concerns\LimitsSearchInput;
+use App\Filament\NotificationText;
 use App\Identification\MobileOtpService;
 use App\Identification\PinService;
 use App\Models\Call;
@@ -385,14 +387,18 @@ class ManageSettings extends Page implements HasTable
         $this->fillFromSettings();
 
         $saved = Notification::make()->title(__('Settings saved'))->success();
-        if ($ended['links'] > 0 || $ended['reopened'] > 0 || $impact['downgraded']['count'] > 0 || $impact['upgraded']['count'] > 0) {
+        $gaining = (int) ($impact['gaining_access']['count'] ?? 0);
+        if ($ended['links'] > 0 || $ended['reopened'] > 0 || $impact['downgraded']['count'] > 0 || $impact['upgraded']['count'] > 0 || $gaining > 0) {
             $body = __('Package lists applied: :links link(s) ended, :down client(s) moved to the standard tier, :up to premium.', [
                 'links' => $ended['links'], 'down' => $impact['downgraded']['count'], 'up' => $impact['upgraded']['count'],
             ]);
+            if ($gaining > 0) {
+                $body .= ' '.__(':n client(s) got portal access.', ['n' => $gaining]);
+            }
             if ($ended['reopened'] > 0) {
                 $body .= ' '.__(':n linked client(s), closed only because their sponsor was closed, reopened.', ['n' => $ended['reopened']]);
             }
-            $saved->body($body)->persistent();
+            $saved->body(NotificationText::of($body))->persistent();
         }
         $saved->send();
 
@@ -401,7 +407,7 @@ class ManageSettings extends Page implements HasTable
         if ($missing = $this->idsReadiness()) {
             Notification::make()->warning()->persistent()
                 ->title(__('The export uses {{ ids }}, but the sync does not run yet'))
-                ->body(__('Still missing: :list.', ['list' => implode('; ', $missing)]))
+                ->body(NotificationText::of(__('Still missing: :list.', ['list' => implode('; ', $missing)])))
                 ->send();
         }
     }
@@ -424,7 +430,7 @@ class ManageSettings extends Page implements HasTable
         $errors = app(PackageListImpact::class)->errors($impact);
 
         if ($errors !== []) {
-            Notification::make()->title(__('Settings not saved'))->body(implode(' ', $errors))->danger()->persistent()->send();
+            Notification::make()->title(__('Settings not saved'))->body(NotificationText::of(implode(' ', $errors)))->danger()->persistent()->send();
             throw ValidationException::withMessages(['data.'.static::fieldName(SettingKey::PackagesPremium) => $errors]);
         }
 
@@ -511,7 +517,7 @@ class ManageSettings extends Page implements HasTable
             foreach ($errors as $key => $list) {
                 $messages['data.'.static::fieldName(SettingKey::from($key))] = $list;
             }
-            Notification::make()->title(__('Settings not saved'))->body(implode(' ', array_map(fn (array $l) => $l[0], $errors)))->danger()->send();
+            Notification::make()->title(__('Settings not saved'))->body(NotificationText::of(implode(' ', array_map(fn (array $l) => $l[0], $errors))))->danger()->send();
 
             throw ValidationException::withMessages($messages);
         }
@@ -538,7 +544,7 @@ class ManageSettings extends Page implements HasTable
         }
 
         if ($errors !== []) {
-            Notification::make()->title(__('The identification settings contradict each other'))->body(implode(' ', $errors))->danger()->send();
+            Notification::make()->title(__('The identification settings contradict each other'))->body(NotificationText::of(implode(' ', $errors)))->danger()->send();
 
             throw ValidationException::withMessages($errors);
         }
@@ -751,7 +757,7 @@ class ManageSettings extends Page implements HasTable
     private function notifySelection(int $changed, bool $selected): void
     {
         Notification::make()->success()
-            ->title($selected ? __(':n ID(s) selected', ['n' => $changed]) : __(':n ID(s) deselected', ['n' => $changed]))
+            ->title(NotificationText::of($selected ? __(':n ID(s) selected', ['n' => $changed]) : __(':n ID(s) deselected', ['n' => $changed])))
             ->send();
     }
 
@@ -764,7 +770,7 @@ class ManageSettings extends Page implements HasTable
         // A typo must not empty the selection: "only these" with no known ID changes nothing.
         if ($known === []) {
             Notification::make()->warning()->title(__('None of the IDs is on the list; nothing changed.'))
-                ->body($unknown === [] ? null : __('Not on the list: :list.', ['list' => implode(', ', array_slice($unknown, 0, 30)).(count($unknown) > 30 ? ' …' : '')]))
+                ->body(NotificationText::of($unknown === [] ? null : __('Not on the list: :list.', ['list' => implode(', ', array_slice($unknown, 0, 30)).(count($unknown) > 30 ? ' …' : '')])))
                 ->send();
 
             return;
@@ -773,8 +779,8 @@ class ManageSettings extends Page implements HasTable
         $result = $mode === 'only' ? $idList->replaceSelection($known) : ['added' => $idList->setSelected($known, true), 'removed' => 0];
 
         Notification::make()->success()->persistent()
-            ->title(__('Selection updated: :added selected, :removed deselected.', $result))
-            ->body($unknown === [] ? null : __('Not on the list, left out: :list.', ['list' => implode(', ', array_slice($unknown, 0, 30)).(count($unknown) > 30 ? ' …' : '')]))
+            ->title(NotificationText::of(__('Selection updated: :added selected, :removed deselected.', $result)))
+            ->body(NotificationText::of($unknown === [] ? null : __('Not on the list, left out: :list.', ['list' => implode(', ', array_slice($unknown, 0, 30)).(count($unknown) > 30 ? ' …' : '')])))
             ->send();
     }
 
@@ -821,15 +827,15 @@ class ManageSettings extends Page implements HasTable
         try {
             $result = app(IdList::class)->fetchNow();
         } catch (RuntimeException $exception) {
-            Notification::make()->title(__('The ID list could not be fetched'))->body($exception->getMessage())->danger()->persistent()->send();
+            Notification::make()->title(__('The ID list could not be fetched'))->body(NotificationText::of($exception->getMessage()))->danger()->persistent()->send();
 
             return;
         }
 
-        Notification::make()->title(__('ID list fetched'))->success()->body(__('Status :status (HTTP :http), :count IDs; new: :added, renamed: :renamed, removed: :removed, returned: :returned.', [
+        Notification::make()->title(__('ID list fetched'))->success()->body(NotificationText::of(__('Status :status (HTTP :http), :count IDs; new: :added, renamed: :renamed, removed: :removed, returned: :returned.', [
             'status' => $result['status'], 'http' => $result['http_status'], 'count' => $result['received'],
             'added' => $result['added'], 'renamed' => $result['renamed'], 'removed' => $result['removed'], 'returned' => $result['returned'],
-        ]))->send();
+        ])))->send();
     }
 
     private function idListStatus(): string
@@ -1335,7 +1341,7 @@ class ManageSettings extends Page implements HasTable
             $key === SettingKey::SyncApiDataPath => [...$string, 'regex:/^[A-Za-z0-9_\-]+(\.[A-Za-z0-9_\-]+)*$/'],
             $key === SettingKey::SyncApiPageParam => [...$string, 'regex:/^[A-Za-z0-9_\-.\[\]]+$/'],
             $key->type() === SettingType::Color => ['nullable', 'string', 'regex:/^#[0-9a-f]{6}$/i'],
-            in_array($key, [SettingKey::PackagesPremium, SettingKey::PackagesStandard], true) => [self::listRule(self::LIST_MAX_ITEMS, InputLimits::NAME)],
+            in_array($key, [SettingKey::PackagesPremium, SettingKey::PackagesStandard], true) => [self::listRule(self::LIST_MAX_ITEMS, InputLimits::NAME, PackageName::problem(...))],
             in_array($key, [SettingKey::SyncUserDomains, SettingKey::SyncClientDomains], true) => [self::listRule(self::LIST_MAX_ITEMS, DomainNameRule::MAX_LENGTH, DomainNameRule::problem(...))],
             $key === SettingKey::CallsQueueTiers => [self::mapRule(self::QUEUE_TIERS_MAX_ITEMS, self::QUEUE_NAME_MAX_LENGTH, self::QUEUE_NAME_MAX_LENGTH, array_map(fn (ClientTier $tier): string => $tier->value, ClientTier::cases()))],
             $key === SettingKey::ClientsDirectoryFields => [self::mapRule(self::DIRECTORY_FIELDS_MAX_ITEMS, InputLimits::NAME, self::DIRECTORY_LABEL_MAX_LENGTH)],

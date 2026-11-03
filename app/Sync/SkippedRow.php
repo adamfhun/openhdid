@@ -41,7 +41,7 @@ final readonly class SkippedRow
         foreach (['external_id', 'email', 'name'] as $target) {
             $column = $mapping[$target] ?? $target;
             $column = is_string($column) && array_key_exists($column, $row) ? $column : $target;
-            if (array_key_exists($column, $row)) {
+            if (array_key_exists($column, $row) && is_scalar($row[$column])) {
                 $sample[$target] = mb_substr((string) $row[$column], 0, 80);
             }
         }

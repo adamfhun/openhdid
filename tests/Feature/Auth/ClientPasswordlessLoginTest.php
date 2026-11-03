@@ -4,6 +4,7 @@ use App\Auth\Passwordless\ClientPasswordlessLogin;
 use App\Auth\Passwordless\OneTimeCodes;
 use App\Enums\OneTimeCodePurpose;
 use App\Enums\PhoneNumberSource;
+use App\Enums\PhoneVerificationSource;
 use App\Mail\MagicLinkMail;
 use App\Messaging\MessageKey;
 use App\Messaging\Messenger;
@@ -12,11 +13,13 @@ use App\Models\Client;
 use App\Models\ExternalRecord;
 use App\Models\MessageTemplate;
 use App\Models\OneTimeCode;
+use App\Models\OutboundMessage;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Sms\FakeSmsSender;
 use App\Sms\SmsSender;
+use App\System\Installation;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Cache;
@@ -162,7 +165,7 @@ it('checks one login code of a client at a time, under the client lock', functio
 
     $lockWasFree = null;
     OneTimeCode::retrieved(function () use ($client, &$lockWasFree): void {
-        $probe = Cache::lock('hdid:login-otp:'.$client->id, 1);
+        $probe = Cache::lock(Installation::lockName('hdid:login-otp:'.$client->id), 1);
         $lockWasFree ??= $probe->get();
         if ($lockWasFree) {
             $probe->release();
@@ -269,7 +272,7 @@ it('sends one login code a minute and three an hour to a number, refusing the re
     app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
     $client = Client::factory()->synced()->create(['email' => 'c@x.hu']);
     $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Admin, 'is_primary' => true]);
-    $request = fn () => $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk()->assertJsonPath('message', __('If the account exists and has a phone number, a code has been sent.'));
+    $request = fn () => $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk()->assertJsonPath('message', __('If the account exists and has a number that can receive sign-in codes, a code has been sent to it. Only the newest code works: a new request replaces the earlier one.'));
 
     $request();
     $request(); // a second one within the minute
@@ -343,4 +346,173 @@ it('applies the 2026-10-03 migrations more than once without harm', function ():
 
     expect(app(Settings::class)->int(SettingKey::ClientLoginMagicLinkTtlMinutes))->toBe(720)
         ->and(User::query()->whereNotNull('remember_token')->count())->toBe(0);
+});
+
+/**
+ * A client who may use the SMS sign-in, with a directory number.
+ */
+function smsSignInClient(): Client
+{
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
+    $client = Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Admin, 'is_primary' => true]);
+
+    return $client;
+}
+
+it('spends the same hashing work on every refused SMS code check, so the answer time does not tell an eligible account from any other', function (string $case, int $makes, int $checks): void {
+    $client = smsSignInClient();
+
+    if ($case !== 'unknown address' && $case !== 'no live code') {
+        app(OneTimeCodes::class)->issueNumeric($client, OneTimeCodePurpose::LoginOtp, 6, 5, 3, '+36301234567');
+    }
+
+    if ($case === 'locked account') {
+        $client->forceFill(['locked_until' => now()->addHour()])->save();
+    }
+
+    Hash::spy();
+    $email = $case === 'unknown address' ? 'nobody@x.hu' : 'c@x.hu';
+    $this->postJson('/api/v1/client/auth/otp/verify', ['email' => $email, 'code' => '000000'])->assertForbidden();
+
+    $makes === 0 ? Hash::shouldNotHaveReceived('make') : Hash::shouldHaveReceived('make')->times($makes);
+    $checks === 0 ? Hash::shouldNotHaveReceived('check') : Hash::shouldHaveReceived('check')->times($checks);
+})->with([
+    ['unknown address', 2, 0],
+    ['no live code', 2, 0],
+    ['locked account', 2, 0],
+    ['wrong guess', 1, 1],
+]);
+
+it('does not count a guess with the client\'s own code that a newer request replaced towards the lockout', function (): void {
+    $this->withoutMiddleware(ThrottleRequests::class);
+    $client = smsSignInClient();
+    $this->withHeader('Referer', config('app.url'));
+
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+    preg_match('/(\d{6})/', (string) $this->sms->lastTo('+36301234567'), $first);
+    $this->travel(61)->seconds();
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+
+    $this->postJson('/api/v1/client/auth/otp/verify', ['email' => 'c@x.hu', 'code' => $first[1]])
+        ->assertForbidden()->assertJsonPath('reason', 'invalid_credentials');
+
+    expect($client->fresh()->failed_login_attempts)->toBe(0)
+        ->and(AuditLog::query()->where('event', 'login.rejected')->where('context->detail', 'replaced_code')->count())->toBe(1);
+});
+
+it('still counts a wrong guess that matches no recent code of the client', function (): void {
+    $this->withoutMiddleware(ThrottleRequests::class);
+    $client = smsSignInClient();
+    $this->withHeader('Referer', config('app.url'));
+
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+    preg_match('/(\d{6})/', (string) $this->sms->lastTo('+36301234567'), $code);
+    $wrong = str_pad((string) (((int) $code[1] + 1) % 1000000), 6, '0', STR_PAD_LEFT);
+
+    $this->postJson('/api/v1/client/auth/otp/verify', ['email' => 'c@x.hu', 'code' => $wrong])->assertForbidden();
+
+    expect($client->fresh()->failed_login_attempts)->toBe(1);
+});
+
+it('counts a guess with a replaced code once that code has expired', function (): void {
+    $this->withoutMiddleware(ThrottleRequests::class);
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsTtlMinutes, 5);
+    $client = smsSignInClient();
+    $this->withHeader('Referer', config('app.url'));
+
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+    preg_match('/(\d{6})/', (string) $this->sms->lastTo('+36301234567'), $first);
+    $this->travel(3)->minutes();
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+    // The first code ran out; the second still lives.
+    $this->travel(3)->minutes();
+
+    $this->postJson('/api/v1/client/auth/otp/verify', ['email' => 'c@x.hu', 'code' => $first[1]])->assertForbidden();
+
+    expect($client->fresh()->failed_login_attempts)->toBe(1);
+});
+
+it('tells the client after a request that only the newest link or code works', function (): void {
+    smsSignInClient();
+
+    $this->postJson('/api/v1/client/auth/magic-link', ['email' => 'c@x.hu'])->assertOk()
+        ->assertJsonPath('message', __('If the account exists, a login link has been sent. Only the newest link works: a new request replaces the earlier one.'));
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk()
+        ->assertJsonPath('message', __('If the account exists and has a number that can receive sign-in codes, a code has been sent to it. Only the newest code works: a new request replaces the earlier one.'));
+});
+
+it('names the number source and the staff member who vouched for it in the audit entry of an SMS sign-in', function (): void {
+    $staff = User::factory()->create();
+    $client = smsSignInClient();
+    $client->phoneNumbers()->sole()->forceFill(['verified_at' => now(), 'verified_via' => PhoneVerificationSource::Staff, 'verified_by_user_id' => $staff->id])->save();
+    $this->withHeader('Referer', config('app.url'));
+
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+    preg_match('/(\d{6})/', (string) $this->sms->lastTo('+36301234567'), $code);
+    $this->postJson('/api/v1/client/auth/otp/verify', ['email' => 'c@x.hu', 'code' => $code[1]])->assertOk();
+
+    $succeeded = AuditLog::query()->where('event', 'login.succeeded')->sole();
+    expect($succeeded->context)->toMatchArray([
+        'method' => 'otp_sms',
+        'number_source' => 'admin',
+        'number_verified_via' => 'staff',
+        'number_vouched_by' => $staff->id,
+    ]);
+});
+
+it('sends no SMS sign-in code to a number the client added and nobody confirmed, even when it is the primary one', function (): void {
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
+    $client = Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::ClientSelf, 'is_primary' => true]);
+
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+
+    expect($this->sms->sent)->toBe([])
+        ->and(AuditLog::query()->where('event', 'login.otp_refused')->sole()->context)->toMatchArray(['reason' => 'no_sign_in_number']);
+});
+
+it('sends the SMS sign-in code to a vouched number when the primary one is a self-added, unconfirmed number', function (): void {
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
+    $client = Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    // Somebody signed in as the client added their own number and made it primary.
+    $client->phoneNumbers()->create(['number_e164' => '+36309999999', 'source' => PhoneNumberSource::ClientSelf, 'is_primary' => true]);
+    $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Sync, 'is_primary' => false]);
+
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+
+    expect(array_column($this->sms->sent, 'to'))->toBe(['+36301234567']);
+});
+
+it('sends the SMS sign-in code to directory, helpdesk-added and confirmed numbers', function (PhoneNumberSource $source, ?PhoneVerificationSource $via): void {
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
+    $client = Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => $source, 'is_primary' => true, 'verified_at' => $via === null ? null : now(), 'verified_via' => $via]);
+
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+
+    expect(array_column($this->sms->sent, 'to'))->toBe(['+36301234567']);
+})->with([
+    'from the directory' => [PhoneNumberSource::Sync, null],
+    'added by the helpdesk' => [PhoneNumberSource::Admin, null],
+    'confirmed by SMS' => [PhoneNumberSource::ClientSelf, PhoneVerificationSource::Sms],
+    'confirmed by the helpdesk' => [PhoneNumberSource::ClientSelf, PhoneVerificationSource::Staff],
+    'confirmed by an identified call' => [PhoneNumberSource::ClientSelf, PhoneVerificationSource::IdentifiedCall],
+]);
+
+it('checks and sends a client\'s login codes under the client lock', function (): void {
+    $client = smsSignInClient();
+    $lockWasFree = null;
+    OutboundMessage::creating(function () use (&$lockWasFree, $client): void {
+        $lock = Cache::lock(Installation::lockName('sms-budget:client:'.$client->id), 1);
+        $lockWasFree = $lock->get();
+
+        if ($lockWasFree) {
+            $lock->release();
+        }
+    });
+
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+
+    expect($lockWasFree)->toBeFalse();
 });

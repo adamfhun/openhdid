@@ -190,7 +190,7 @@ it('splits the tiles into an operation block and a modes block, and reports deli
     $grouped = app(HealthChecks::class)->grouped();
 
     expect(array_keys($grouped))->toBe(['operation', 'modes'])
-        ->and(collect($grouped['modes'])->pluck('key')->all())->toBe(['premium_only', 'login_link_preview', 'client_login_emd', 'rate_limit_exemptions', 'adfs_debug', 'package_overrides', 'shared_numbers'])
+        ->and(collect($grouped['modes'])->pluck('key')->all())->toBe(['environment', 'premium_only', 'login_link_preview', 'client_login_emd', 'rate_limit_exemptions', 'adfs_debug', 'package_overrides', 'shared_numbers', 'sms_sign_in_numbers', 'package_names'])
         ->and(collect($grouped['operation'])->pluck('key')->all())->toContain('database', 'queue', 'mfa', 'oidc', 'capacity')
         ->and(collect($grouped['operation'])->pluck('key')->all())->not->toContain('premium_only');
 

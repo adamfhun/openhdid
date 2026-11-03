@@ -2,6 +2,7 @@
 
 namespace App\Filament\Admin\Pages;
 
+use App\Audit\AuditArchive;
 use App\Auth\Permission;
 use App\Filament\Admin\NavigationGroup;
 use App\Reporting\ReportFormat;
@@ -9,6 +10,7 @@ use App\Reporting\ReportPeriodTooLongException;
 use App\Reporting\ReportSection;
 use App\Reporting\ReportWriter;
 use App\Reporting\UserReport;
+use App\Support\HuDate;
 use BackedEnum;
 use Carbon\CarbonImmutable;
 use Filament\Actions\Action;
@@ -79,12 +81,18 @@ class Reports extends Page
                     DatePicker::make('from')->label(__('From'))->native(false)->format('Y-m-d')->mutateStateForValidationUsing($dateOnly)->required()->maxDate(fn () => today()->endOfDay()),
                     DatePicker::make('until')->label(__('Until'))->native(false)->format('Y-m-d')->mutateStateForValidationUsing($dateOnly)->required()->maxDate(fn () => today()->endOfDay())->afterOrEqual('from'),
                 ]),
-                Section::make(__('Parts of the report'))->schema([
-                    CheckboxList::make('sections')->hiddenLabel()->required()
-                        ->options(ReportSection::options())
-                        ->descriptions(collect(ReportSection::cases())->mapWithKeys(fn (ReportSection $s) => [$s->value => $s->description()])->all())
-                        ->bulkToggleable(),
-                ]),
+                Section::make(__('Parts of the report'))
+                    ->description(function (): ?string {
+                        $heldSince = once(fn () => app(AuditArchive::class)->heldSince());
+
+                        return $heldSince === null ? null : __('The activity part counts the audit log from :date; earlier days are in the audit archive.', ['date' => $heldSince->format(HuDate::DATE)]);
+                    })
+                    ->schema([
+                        CheckboxList::make('sections')->hiddenLabel()->required()
+                            ->options(ReportSection::options())
+                            ->descriptions(collect(ReportSection::cases())->mapWithKeys(fn (ReportSection $s) => [$s->value => $s->description()])->all())
+                            ->bulkToggleable(),
+                    ]),
                 Section::make(__('Format'))->schema([
                     Radio::make('format')->hiddenLabel()->required()
                         ->options(collect(ReportFormat::cases())->mapWithKeys(fn (ReportFormat $f) => [$f->value => $f->label()])->all()),

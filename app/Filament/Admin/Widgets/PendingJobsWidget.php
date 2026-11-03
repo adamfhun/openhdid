@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Widgets;
 use App\Auth\Permission;
 use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
 use App\Filament\Concerns\LimitsSearchInput;
+use App\Filament\NotificationText;
 use App\Models\QueuedJob;
 use App\Support\HuDate;
 use App\System\QueueMaintenance;
@@ -69,11 +70,11 @@ class PendingJobsWidget extends TableWidget
                     ->disabled(fn (QueuedJob $record): bool => $record->isReserved())
                     ->tooltip(fn (QueuedJob $record): ?string => $record->isReserved() ? __('A job in progress belongs to its worker; if the worker died, the queue releases it after :m minutes.', ['m' => $retryAfter]) : null)
                     ->requiresConfirmation()
-                    ->modalDescription(__('The waiting job is deleted and never runs. A queued e-mail or SMS is not lost: the scheduler queues it again within minutes; an EMD sync has to be started again.'))
+                    ->modalDescription(__('The waiting job is deleted and never runs. A queued e-mail or SMS is not lost: the scheduler queues it again within minutes; a waiting EMD sync is marked failed, its uploaded file is deleted, and it has to be started again.'))
                     ->action(function (QueuedJob $record) use ($maintenance): void {
                         $deleted = $maintenance->deleteWaiting($record);
                         Notification::make()
-                            ->title($deleted ? __('Waiting job deleted') : __('The job was already picked up by a worker'))
+                            ->title(NotificationText::of($deleted ? __('Waiting job deleted') : __('The job was already picked up by a worker')))
                             ->status($deleted ? 'success' : 'warning')
                             ->send();
                     }),
@@ -82,12 +83,12 @@ class PendingJobsWidget extends TableWidget
                 BulkAction::make('delete')->label(__('Delete selected'))->icon('heroicon-o-trash')->color('danger')
                     ->authorize(fn (): bool => static::canView())
                     ->requiresConfirmation()
-                    ->modalDescription(fn (Collection $records): string => __(':n of the selected job(s) are waiting and will be deleted; jobs in progress are left alone.', ['n' => $records->reject(fn (QueuedJob $record): bool => $record->isReserved())->count()]))
+                    ->modalDescription(fn (Collection $records): string => __(':n of the selected job(s) are waiting and will be deleted; jobs in progress are left alone. A waiting EMD sync among them is marked failed and its uploaded file is deleted.', ['n' => $records->reject(fn (QueuedJob $record): bool => $record->isReserved())->count()]))
                     ->modalSubmitActionLabel(__('Delete selected'))
                     ->deselectRecordsAfterCompletion()
                     ->action(function (Collection $records) use ($maintenance): void {
                         $deleted = $records->filter(fn (QueuedJob $record): bool => $maintenance->deleteWaiting($record))->count();
-                        Notification::make()->title(__(':n waiting job(s) deleted', ['n' => $deleted]))->success()->send();
+                        Notification::make()->title(NotificationText::of(__(':n waiting job(s) deleted', ['n' => $deleted])))->success()->send();
                     }),
             ]);
     }

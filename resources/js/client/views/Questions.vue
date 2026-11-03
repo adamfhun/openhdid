@@ -177,7 +177,7 @@ onMounted(load);
                     </form>
 
                     <div v-else-if="removingId === q.id" class="mt-3 flex flex-wrap items-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
-                        <span class="flex-1">{{ t('Remove this answer? The helpdesk will no longer be able to ask this question.') }}</span>
+                        <span class="flex-1">{{ t('Remove this answer for good? The helpdesk will no longer be able to ask this question until you answer it again.') }}</span>
                         <button type="button" class="btn-danger !py-1.5" :disabled="busy === q.id" @click="remove(q)">{{ t('Remove') }}</button>
                         <button type="button" class="btn-secondary !py-1.5" @click="removingId = null">{{ t('Cancel') }}</button>
                     </div>

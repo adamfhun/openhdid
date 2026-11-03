@@ -13,6 +13,7 @@ use Filament\Forms\Components\Field;
 use Filament\Forms\Components\Select;
 use Filament\Schemas\Components\Text;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role as RoleModel;
 use Spatie\Permission\PermissionRegistrar;
@@ -267,3 +268,38 @@ it('refuses odd spellings of a role id the actor cannot grant', function (string
 
     expect($keeper->fresh()->hasRole(Role::Admin->value))->toBeFalse();
 })->with(['leading zero' => ['0{id}'], 'exponent' => ['{id}e0'], 'leading space' => [' {id}']]);
+
+it('reads the locked roles once per render however many role options the form greys out', function (): void {
+    grantSubsetRole('Narrow keeper', [Permission::AdminAccess, Permission::UsersManage]);
+    foreach (['Extra one', 'Extra two', 'Extra three'] as $name) {
+        grantSubsetRole($name, [Permission::AdminAccess, Permission::ClientsManage]);
+    }
+    $keeper = tap(User::factory()->create())->assignRole('Narrow keeper');
+    $target = tap(User::factory()->create())->assignRole('Narrow keeper');
+    $this->actingAs($keeper);
+
+    DB::flushQueryLog();
+    DB::enableQueryLog();
+    Livewire::test(EditUser::class, ['record' => $target->id]);
+    $roleListQueries = collect(DB::getQueryLog())->filter(fn (array $query): bool => preg_match('/from "roles" where "guard_name"/', $query['query']) === 1)->count();
+    DB::disableQueryLog();
+
+    expect($roleListQueries)->toBeLessThanOrEqual(1);
+});
+
+it('greys out a role on the next render after the editor lost one of its permissions', function (): void {
+    $keeperRole = grantSubsetRole('Narrow keeper', [Permission::AdminAccess, Permission::UsersManage, Permission::ClientsManage]);
+    $extra = grantSubsetRole('Clients only', [Permission::AdminAccess, Permission::ClientsManage]);
+    $keeper = tap(User::factory()->create())->assignRole('Narrow keeper');
+    $target = tap(User::factory()->create())->assignRole('Narrow keeper');
+    $this->actingAs($keeper);
+
+    expect(app(RoleAssignment::class)->lockedRoles($keeper))->not->toHaveKey($extra->getKey());
+
+    $keeperRole->revokePermissionTo(Permission::ClientsManage->value);
+    app(PermissionRegistrar::class)->forgetCachedPermissions();
+    $keeper->refresh();
+
+    expect(app(RoleAssignment::class)->lockedRoles($keeper))->toHaveKey($extra->getKey())
+        ->and(fn () => app(RoleAssignment::class)->assertAssignable($keeper, collect([$extra->name]), $target))->toThrow(AuthorizationException::class);
+});

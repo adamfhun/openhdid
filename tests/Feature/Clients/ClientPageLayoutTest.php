@@ -185,3 +185,12 @@ it('clears a staff binding from the binding block of the edit form, only while o
 
     expect($user->ssoIdentities()->count())->toBe(0);
 });
+
+it('names in the send-login-link confirmation that the client\'s earlier link stops working', function (): void {
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    $client = Client::factory()->synced()->create();
+
+    Livewire::test(ViewClient::class, ['record' => $client->id])
+        ->mountAction(entryAction('sendMagicLink', 'last_login_at'))
+        ->assertMountedActionModalSee(__('The link signs the client in once and expires after the configured minutes. Any login link sent to the client earlier stops working.'));
+});

@@ -25,6 +25,9 @@ final class InstallerSandbox
      * The fake application key the fake image prints; split in two, so the secret scan of the
      * release export (gitleaks, laravel-app-key rule) does not take the literal for a real key.
      */
+    /** The release an installed() folder runs (its .env OPENHDID_VERSION), whatever the installer's own release. */
+    public const INSTALLED_VERSION = '1.15.0';
+
     public const FAKE_APP_KEY = 'base64:'.'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=';
 
     public string $root;
@@ -95,6 +98,17 @@ final class InstallerSandbox
         }
 
         test()->markTestSkipped('The container release files are not part of this tree.');
+    }
+
+    /**
+     * The release the installer of this tree carries (OPENHDID_RELEASE): the
+     * export writes the release number, this repository keeps the last one.
+     */
+    public static function releaseVersion(): string
+    {
+        preg_match('/^OPENHDID_RELEASE=([0-9][0-9A-Za-z.-]*)$/m', (string) file_get_contents(self::releaseRoot().'/install.sh'), $match);
+
+        return $match[1] ?? test()->fail('install.sh names no OPENHDID_RELEASE');
     }
 
     public static function cleanUpAll(): void
@@ -208,7 +222,7 @@ final class InstallerSandbox
         File::copyDirectory($this->release.'/profiles', $this->dir.'/profiles');
 
         $values = [
-            'OPENHDID_VERSION' => '1.15.0', 'COMPOSE_FILE' => $composeFile, 'COMPOSE_PROFILES' => 'db,redis',
+            'OPENHDID_VERSION' => self::INSTALLED_VERSION, 'COMPOSE_FILE' => $composeFile, 'COMPOSE_PROFILES' => 'db,redis',
             'OPENHDID_TLS' => 'off', 'TRUSTED_PROXIES' => '10.0.0.2', 'OPENHDID_MONITORING_ALLOW' => '10.0.0.2',
             'APP_ENV' => 'production', 'APP_KEY' => self::FAKE_APP_KEY, 'APP_URL' => 'https://hdid.example.org',
             'DB_PASSWORD' => self::DB_PASSWORD, 'REDIS_PASSWORD' => self::REDIS_PASSWORD,

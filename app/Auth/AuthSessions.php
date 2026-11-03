@@ -6,9 +6,12 @@ use App\Auth\Contracts\Principal;
 use App\Enums\PrincipalType;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\Installation;
+use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Contracts\Auth\Factory as AuthFactory;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cookie;
 
@@ -18,12 +21,20 @@ use Illuminate\Support\Facades\Cookie;
  * everywhere, closure, lost entitlement), whatever the session store. A
  * remember-me cookie, when allowed and still valid, signs the account in
  * again with a fresh session; revokeAccess rotates it, so it cannot.
+ *
+ * Sessions and remember-me cookies belong to the installation that issued
+ * them (Installation::id()): another installation reading the same session
+ * store, or a clone of the database with the same APP_KEY and remember
+ * tokens, accepts neither. A session without the installation stamp (from
+ * before it existed) ends once.
  */
 class AuthSessions
 {
     private const STARTED = 'auth_session.started_at.';
 
     private const EPOCH = 'auth_session.epoch.';
+
+    private const INSTALLATION = 'auth_session.installation.';
 
     public function __construct(
         private readonly AuthFactory $auth,
@@ -32,8 +43,39 @@ class AuthSessions
     ) {}
 
     /**
+     * The session guards (staff and client), built as the framework builds
+     * them (AuthManager::createSessionDriver), except that the password part
+     * of a remember-me cookie is keyed with APP_KEY and this installation's
+     * id: a cookie another installation issued, a clone with the same key
+     * and the same remember tokens, signs nobody in here.
+     *
+     * @param  array<string, mixed>  $config
+     */
+    public static function sessionGuard(AuthManager $auth, Application $app, string $name, array $config): SessionGuard
+    {
+        $guard = new SessionGuard(
+            $name,
+            $auth->createUserProvider($config['provider'] ?? null),
+            $app['session.store'],
+            rehashOnLogin: $app['config']->get('hashing.rehash_on_login', true),
+            timeboxDuration: $app['config']->get('auth.timebox_duration', 200000),
+            hashKey: (string) $app['config']->get('app.key').'|'.Installation::id(),
+        );
+
+        $guard->setCookieJar($app['cookie']);
+        $guard->setDispatcher($app['events']);
+        $guard->setRequest($app->refresh('request', $guard, 'setRequest'));
+
+        if (isset($config['remember'])) {
+            $guard->setRememberDuration($config['remember']);
+        }
+
+        return $guard;
+    }
+
+    /**
      * Every session login (form, SSO, link, code, remember-me cookie) stamps
-     * the session with its start and the account's epoch.
+     * the session with its start, the account's epoch and this installation.
      */
     public function stamp(Login $event): void
     {
@@ -44,19 +86,24 @@ class AuthSessions
         request()->session()->put([
             self::STARTED.$event->guard => now()->getTimestamp(),
             self::EPOCH.$event->guard => (int) $event->user->session_epoch,
+            self::INSTALLATION.$event->guard => Installation::id(),
         ]);
     }
 
     /**
-     * Ends an expired or revoked session before the request is authenticated.
+     * Ends an expired or revoked session, another installation's, and a
+     * closed staff member's, before the request is authenticated.
+     *
+     * @return list<PrincipalType> the account types whose session ended because the account is closed
      */
-    public function enforce(Request $request): void
+    public function enforce(Request $request): array
     {
         if (! $request->hasSession()) {
-            return;
+            return [];
         }
 
         $session = $request->session();
+        $endedByClosure = [];
 
         foreach (PrincipalType::cases() as $type) {
             $guard = $this->auth->guard($type->guard());
@@ -65,21 +112,33 @@ class AuthSessions
                 continue;
             }
 
+            // Another installation's session (a shared session store, a cloned
+            // database), or one from before the stamp named the installation
+            // (signed out once at the upgrade), is not this installation's.
+            if ($session->get(self::INSTALLATION.$type->guard()) !== Installation::id()) {
+                $this->endGuardSession($request, $guard, $type);
+
+                continue;
+            }
+
             // Read from the table, not from a cached model: the epoch may have
             // moved on since the account was loaded.
             $account = $type->modelClass()::query()->whereKey($id)->first(['session_epoch', 'closed_at']);
             $started = $session->get(self::STARTED.$type->guard());
 
-            // A session that started before this check existed gets its stamp now.
-            if ($started === null && $account !== null) {
-                $session->put([self::STARTED.$type->guard() => now()->getTimestamp(), self::EPOCH.$type->guard() => (int) $account->session_epoch]);
-
-                continue;
-            }
-
-            // A closed account is signed out by the per-request checks, which
-            // also tell the reason (account_closed); its epoch moved on too.
+            // A closed client is signed out by the per-request entitlement
+            // check, which also tells the portal the reason (account_closed).
+            // A closed staff member's session ends here, on every route and
+            // every session store: the routes outside the panel (interface
+            // documents, the call-view switch) have no closure check of their
+            // own. The caller tells the reason on the panel's login page,
+            // since the password form there stays neutral.
             if ($account?->closed_at !== null) {
+                if ($type !== PrincipalType::Client) {
+                    $this->endGuardSession($request, $guard, $type);
+                    $endedByClosure[] = $type;
+                }
+
                 continue;
             }
 
@@ -90,6 +149,8 @@ class AuthSessions
                 $this->endGuardSession($request, $guard, $type);
             }
         }
+
+        return $endedByClosure;
     }
 
     /**
@@ -103,7 +164,7 @@ class AuthSessions
     private function endGuardSession(Request $request, SessionGuard $guard, PrincipalType $type): void
     {
         $session = $request->session();
-        $session->forget([$guard->getName(), 'password_hash_'.$type->guard(), self::STARTED.$type->guard(), self::EPOCH.$type->guard()]);
+        $session->forget([$guard->getName(), 'password_hash_'.$type->guard(), self::STARTED.$type->guard(), self::EPOCH.$type->guard(), self::INSTALLATION.$type->guard()]);
         $guard->forgetUser();
 
         $othersLoggedIn = collect(PrincipalType::cases())

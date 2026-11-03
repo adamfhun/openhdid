@@ -66,6 +66,10 @@ class Auditor
             $context = self::clipTexts($context);
         }
 
+        if (($callerRequestId = $this->callerRequestId()) !== null) {
+            $context += ['caller_request_id' => $callerRequestId];
+        }
+
         $attributes = [
             'event' => $event,
             'actor_type' => $actor instanceof Model ? $actor->getMorphClass() : null,
@@ -136,8 +140,10 @@ class Auditor
 
     /**
      * One id per HTTP request, so the entries of a single request can be read
-     * together: the caller's X-Request-Id if it sent one, otherwise generated
-     * on first use and echoed back in the response header (SecurityHeaders).
+     * together: always generated here, on first use, and echoed back in the
+     * response header (SecurityHeaders). The caller's X-Request-Id never
+     * becomes it, or an anonymous request could tie its entries to someone
+     * else's; a well-formed one is kept as the caller_request_id detail.
      */
     public const REQUEST_ID_ATTRIBUTE = 'hdid.request_id';
 
@@ -148,13 +154,26 @@ class Auditor
             return null;
         }
 
-        $id = $this->request->attributes->get(self::REQUEST_ID_ATTRIBUTE)
-            ?? mb_substr(trim((string) $this->request->header('X-Request-Id')), 0, 64)
-            ?: (string) Str::uuid7();
+        $id = $this->request->attributes->get(self::REQUEST_ID_ATTRIBUTE) ?? (string) Str::uuid7();
 
         $this->request->attributes->set(self::REQUEST_ID_ATTRIBUTE, $id);
 
         return $id;
+    }
+
+    /**
+     * The caller's own X-Request-Id (a load balancer's, a partner's), when it
+     * is a short token of letters, digits and ._:- only.
+     */
+    private function callerRequestId(): ?string
+    {
+        if ($this->request === null || $this->request->route() === null) {
+            return null;
+        }
+
+        $given = trim((string) $this->request->header('X-Request-Id'));
+
+        return preg_match('/^[A-Za-z0-9._:-]{1,64}$/', $given) === 1 ? $given : null;
     }
 
     private function currentActor(): ?Authenticatable

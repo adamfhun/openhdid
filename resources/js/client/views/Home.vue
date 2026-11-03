@@ -20,6 +20,13 @@ async function logoutEverywhere() {
 
 const id = computed(() => store.user?.identification ?? {});
 const phones = computed(() => store.user?.phone_numbers ?? []);
+// The numbers an SMS sign-in code can go to: the client should know them before signing out everywhere.
+const signInNumbers = computed(() => (store.loginMethods.otp_sms ? phones.value.filter((phone) => phone.sign_in_capable).map((phone) => phone.number) : []));
+const logoutAllText = computed(() => {
+    const text = t('Every browser session and mobile app login of yours ends now. You can sign in again any time.');
+
+    return signInNumbers.value.length ? `${text} ${t('SMS sign-in codes can go to: {numbers}. If one of them is not yours, remove it or tell the helpdesk.', { numbers: signInNumbers.value.join(', ') })}` : text;
+});
 const premiumLabel = computed(() => store.premiumBadgeLabel || t('Premium client'));
 
 // The identification profile: the questions (counted proportionally) and
@@ -117,6 +124,6 @@ const circumference = 2 * Math.PI * 34;
         <p class="text-center text-xs text-ink-muted">
             <button type="button" class="underline-offset-2 hover:text-brand-deep hover:underline focus-visible:ring-2 focus-visible:ring-brand focus-visible:outline-none" @click="logoutAllConfirm = true">{{ t('Sign out on every device') }}</button>
         </p>
-        <ConfirmModal :open="logoutAllConfirm" :title="t('Sign out on every device?')" :text="t('Every browser session and mobile app login of yours ends now. You can sign in again any time.')" :confirm-label="t('Sign out everywhere')" danger @confirm="logoutEverywhere" @cancel="logoutAllConfirm = false" />
+        <ConfirmModal :open="logoutAllConfirm" :title="t('Sign out on every device?')" :text="logoutAllText" :confirm-label="t('Sign out everywhere')" danger @confirm="logoutEverywhere" @cancel="logoutAllConfirm = false" />
     </div>
 </template>

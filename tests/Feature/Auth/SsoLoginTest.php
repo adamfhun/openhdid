@@ -104,6 +104,16 @@ it('rejects a token issued for another audience', function (): void {
     $this->assertGuest('client');
 });
 
+it('rejects a token whose nonce is not the one of this sign-in, or has none', function (mixed $nonce): void {
+    Client::factory()->synced()->create(['email' => 'c@x.hu']);
+
+    completeSso('client', 'adfs', ['aud' => 'client-app', 'email' => 'c@x.hu', 'nonce' => $nonce])->assertRedirect('/login?error=invalid_credentials');
+
+    $this->assertGuest('client');
+    expect(AuditLog::query()->where('event', 'login.rejected')->sole()->context)
+        ->toMatchArray(['detail' => 'invalid_token', 'error' => 'ID token nonce mismatch.']);
+})->with(['another sign-in' => 'nonce-of-another-sign-in', 'none' => null]);
+
 it('refuses a callback with a forged state', function (): void {
     FakeOidc::fake([]);
     $this->get('/auth/client/adfs/redirect');

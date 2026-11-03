@@ -7,10 +7,13 @@ use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuthenticateApiKey;
 use App\Http\Requests\Api\V1\CallCenter\CallEventRequest;
 use App\Identification\PinService;
+use Closure;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 /**
  * IVR identification requests. Each call returns an immediate verdict.
@@ -21,6 +24,9 @@ class IvrController extends Controller
 {
     /** Checks per call and minute, counted after the key (and its signature) passed. */
     public const CHECKS_PER_CALL_PER_MINUTE = 10;
+
+    /** Retry-After of the answer while the call is busy with another action. */
+    public const BUSY_RETRY_AFTER_SECONDS = 2;
 
     public function __construct(private readonly CallCenterService $calls) {}
 
@@ -48,11 +54,29 @@ class IvrController extends Controller
     }
 
     /**
+     * A check that would wait for another action on the same call (an agent
+     * taking it over, a call event) answers 503 with Retry-After: ask again
+     * a moment later.
+     *
+     * @param  Closure(): JsonResponse  $answer
+     */
+    private function unlessBusy(Closure $answer): JsonResponse
+    {
+        try {
+            return $answer();
+        } catch (LockTimeoutException) {
+            throw new HttpException(503, 'The call is busy; try again in a moment.', null, ['Retry-After' => self::BUSY_RETRY_AFTER_SECONDS]);
+        }
+    }
+
+    /**
      * Verify the PIN the caller typed into the IVR.
      *
      * The client is the one matched to the call by phone number (see the call
      * event or `GET calls/{call_id}`); with an unknown caller the result is
-     * `unknown_caller` and the PIN is not checked.
+     * `unknown_caller` and the PIN is not checked. While another action holds
+     * the call (an agent taking it over, a call event) the answer is 503 with
+     * a `Retry-After` header: ask again a moment later.
      *
      * @response array{identified: bool, result: string, session_id: ?string, client_id: ?string, client_name: ?string}
      */
@@ -64,14 +88,22 @@ class IvrController extends Controller
         ]);
         $this->takeCallBudget($request, $data['call_id']);
 
-        return response()->json($this->calls->ivrVerifyPin($data['call_id'], $data['pin'])->toArray());
+        return $this->unlessBusy(fn (): JsonResponse => response()->json($this->calls->ivrVerifyPin($data['call_id'], $data['pin'])->toArray()));
     }
 
     /**
      * Verify the one-time identification code the caller generated in the portal, or the IVR code the mobile app backend requested and the app sent into the phone menu.
      *
-     * The code alone identifies the client. Pass `call_id` to attach the
-     * identified client to the call.
+     * The code alone identifies the client. Pass `call_id` to match the call:
+     * a call with no client gets the code's client; an ongoing call nobody
+     * holds and nobody identified moves to it. Any other call (held by an
+     * agent, already identified, or ended) keeps its client.
+     *
+     * `result` values: `code_ok` (identified; the call, if named, is matched
+     * to this client), `code_ok_call_kept` (identified, but the call stays
+     * with its client), `unknown_code` (no such live code). While another
+     * action holds the call the answer is 503 with a `Retry-After` header:
+     * ask again a moment later.
      *
      * @response array{identified: bool, result: string, session_id: ?string, client_id: ?string, client_name: ?string}
      */
@@ -83,6 +115,6 @@ class IvrController extends Controller
         ]);
         $this->takeCallBudget($request, $data['call_id'] ?? null);
 
-        return response()->json($this->calls->ivrVerifyCode($data['call_id'] ?? null, $data['code'])->toArray());
+        return $this->unlessBusy(fn (): JsonResponse => response()->json($this->calls->ivrVerifyCode($data['call_id'] ?? null, $data['code'])->toArray()));
     }
 }

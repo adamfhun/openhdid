@@ -148,7 +148,10 @@ class Call extends Model
      */
     public function passedSession(): ?IdSession
     {
-        return $this->clientIdSessions()->where('status', IdSessionStatus::Passed)->sortByDesc('decided_at')->first();
+        return $this->clientIdSessions()
+            ->filter(fn (IdSession $session): bool => $session->status === IdSessionStatus::Passed && ! $session->isVoided())
+            ->sortByDesc(fn (IdSession $session): int => $session->decided_at?->getTimestamp() ?? 0)
+            ->first();
     }
 
     /**

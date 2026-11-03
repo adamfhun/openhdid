@@ -8,12 +8,14 @@ use App\Enums\OneTimeCodePurpose;
 use App\Filament\Admin\Pages\ManageSettings;
 use App\Filament\Admin\Pages\SearchClients;
 use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
+use App\Identification\AgentAttemptLimiter;
 use App\Identification\ClientAnswers;
 use App\Identification\IdentificationException;
 use App\Identification\MobileOtpService;
 use App\Identification\PinService;
 use App\Identification\QaSessionEngine;
 use App\Models\AuditLog;
+use App\Models\Call;
 use App\Models\Client;
 use App\Models\ClientAnswer;
 use App\Models\OneTimeCode;
@@ -23,6 +25,7 @@ use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Livewire\Livewire;
 
@@ -151,8 +154,9 @@ it('lets a client remove an answer and answer the same question again', function
     $answers = app(ClientAnswers::class);
 
     $answers->save($client, $question, 'first');
-    $answers->remove($client, $question);
-    expect(ClientAnswer::withTrashed()->count())->toBe(1)->and($answers->usableCount($client))->toBe(0);
+    expect($answers->remove($client, $question, actor: $client))->toBeTrue();
+    expect(ClientAnswer::withTrashed()->count())->toBe(0, 'removed for good')->and($answers->usableCount($client))->toBe(0)
+        ->and($answers->remove($client, $question, actor: $client))->toBeFalse('nothing left to remove');
 
     $answers->save($client, $question, 'second');
     expect(ClientAnswer::query()->count())->toBe(1)
@@ -215,4 +219,85 @@ describe('panel', function (): void {
         expect(AuditLog::query()->where('event', 'client.viewed')->where('subject_id', $client->id)->where('actor_id', $this->admin->id)->exists())->toBeTrue()
             ->and(AuditLog::query()->where('event', 'client.searched')->pluck('context')->map(fn (array $c) => $c['term'])->all())->toBe(['Kov']);
     });
+});
+
+it('takes the agent\'s attempt before the code lookup, so a check started meanwhile is refused at the limit', function (): void {
+    app(Settings::class)->set(SettingKey::AgentAttemptsPerHour, 2);
+    $agent = User::factory()->create();
+    RateLimiter::clear('agent-verifications:'.$agent->id);
+    RateLimiter::increment('agent-verifications:'.$agent->id, 3600);
+    $nested = null;
+    $race = function () use ($agent, &$nested): void {
+        if ($nested !== null) {
+            return;
+        }
+
+        $nested = 'running';
+
+        try {
+            app(MobileOtpService::class)->verifyCode('22222222', IdChannel::Manual, $agent);
+            $nested = 'passed';
+        } catch (IdentificationException) {
+            $nested = 'refused';
+        }
+    };
+    app()->bind(OneTimeCodes::class, fn () => new class($race) extends OneTimeCodes
+    {
+        public function __construct(private Closure $whileChecking) {}
+
+        public function consume(OneTimeCodePurpose $purpose, string $secret): ?OneTimeCode
+        {
+            ($this->whileChecking)();
+
+            return parent::consume($purpose, $secret);
+        }
+    });
+
+    expect(app(MobileOtpService::class)->verifyCode('11111111', IdChannel::Manual, $agent))->toBeNull()
+        ->and($nested)->toBe('refused')
+        ->and(RateLimiter::attempts('agent-verifications:'.$agent->id))->toBe(2);
+});
+
+it('takes the agent\'s attempt before the PIN compare', function (): void {
+    app(Settings::class)->set(SettingKey::AgentAttemptsPerHour, 2);
+    app(Settings::class)->set(SettingKey::PinAgentVerificationEnabled, true);
+    $agent = User::factory()->create();
+    RateLimiter::clear('agent-verifications:'.$agent->id);
+    RateLimiter::increment('agent-verifications:'.$agent->id, 3600);
+    $client = Client::factory()->withPin('123456')->create();
+    $other = Client::factory()->withPin('654321')->create();
+    $hasher = app('hash')->driver();
+    $nested = null;
+    Hash::partialMock()->shouldReceive('check')->andReturnUsing(function (string $value, string $hash) use ($hasher, $agent, $other, &$nested): bool {
+        if ($nested === null) {
+            $nested = 'running';
+            try {
+                app(PinService::class)->verify($other, '000000', IdChannel::Manual, $agent);
+                $nested = 'passed';
+            } catch (IdentificationException) {
+                $nested = 'refused';
+            }
+        }
+
+        return $hasher->check($value, $hash);
+    });
+
+    expect(app(PinService::class)->verify($client, '000000', IdChannel::Manual, $agent)->status)->toBe(IdSessionStatus::Failed)
+        ->and($nested)->toBe('refused')
+        ->and(RateLimiter::attempts('agent-verifications:'.$agent->id))->toBe(2);
+});
+
+it('gives the attempt back when the check passes or cannot run', function (): void {
+    app(Settings::class)->set(SettingKey::PinAgentVerificationEnabled, true);
+    $agent = User::factory()->create();
+    RateLimiter::clear('agent-verifications:'.$agent->id);
+    $limiter = app(AgentAttemptLimiter::class);
+    $before = $limiter->remaining($agent);
+    $client = Client::factory()->synced()->withPin('123456')->create();
+    $call = Call::factory()->create(['client_id' => $client->id, 'agent_user_id' => User::factory()->create()->id]);
+
+    app(PinService::class)->verify($client, '123456', IdChannel::Manual, $agent);
+    expect(fn () => app(PinService::class)->verify($client, '000000', IdChannel::Manual, $agent, $call))->toThrow(IdentificationException::class);
+
+    expect($limiter->remaining($agent))->toBe($before);
 });

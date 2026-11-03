@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Resources\ApiKeys\Pages;
 use App\Enums\ApiKeyScope;
 use App\Filament\Admin\Resources\ApiKeys\ApiKeyResource;
 use App\Filament\Concerns\LimitsSearchInput;
+use App\Filament\NotificationText;
 use App\Models\ApiKey;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
@@ -44,7 +45,7 @@ class ManageApiKeys extends ManageRecords
                     }
 
                     Notification::make()
-                        ->title($secret === null ? __('API key created') : __('API key and signing secret created'))
+                        ->title(NotificationText::of($secret === null ? __('API key created') : __('API key and signing secret created')))
                         ->body(new HtmlString($body))
                         ->success()
                         ->persistent()

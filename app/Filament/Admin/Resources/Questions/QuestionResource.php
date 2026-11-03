@@ -7,6 +7,7 @@ use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\Questions\Pages\ListQuestions;
 use App\Filament\Admin\Resources\Questions\Pages\ViewQuestion;
 use App\Filament\Admin\Resources\Questions\RelationManagers\VersionsRelationManager;
+use App\Filament\NotificationText;
 use App\Identification\QuestionCatalog;
 use App\Models\Question;
 use BackedEnum;
@@ -116,7 +117,7 @@ class QuestionResource extends BaseResource
             ])
             ->action(function (Question $record, array $data): void {
                 $version = app(QuestionCatalog::class)->publishVersion($record, $data['text'], $data['hint'] ?? null, (bool) $data['keeps_answers'], auth()->user());
-                Notification::make()->title(__('Version :v published', ['v' => $version->version]))->success()->send();
+                Notification::make()->title(NotificationText::of(__('Version :v published', ['v' => $version->version])))->success()->send();
             });
     }
 

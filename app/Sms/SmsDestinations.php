@@ -3,10 +3,12 @@
 namespace App\Sms;
 
 use App\Models\Client;
+use App\Models\ClientPhoneNumber;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Support\PhoneNormalizer;
 use Collator;
+use Illuminate\Support\Collection;
 use libphonenumber\PhoneNumberType;
 use libphonenumber\PhoneNumberUtil;
 use Locale;
@@ -82,10 +84,29 @@ class SmsDestinations
      */
     public function targetFor(Client $client): ?string
     {
-        $numbers = $client->relationLoaded('phoneNumbers') ? $client->phoneNumbers : $client->phoneNumbers()->get();
-        $ordered = $numbers->sortByDesc(fn ($phone): bool => (bool) $phone->is_primary)->pluck('number_e164');
+        return $this->orderedNumbers($client)->first(fn (ClientPhoneNumber $phone): bool => $this->allows($phone->number_e164))?->number_e164;
+    }
 
-        return $ordered->first(fn (string $number): bool => $this->allows($number));
+    /**
+     * The number the SMS sign-in code goes to: as targetFor(), but only a
+     * number vouched for the sign-in (from the directory, added by the
+     * helpdesk, or confirmed). The PIN by SMS keeps targetFor(): the rule
+     * is the sign-in's, a PIN goes to the number the client calls from.
+     */
+    public function signInTargetFor(Client $client): ?string
+    {
+        return $this->orderedNumbers($client)
+            ->first(fn (ClientPhoneNumber $phone): bool => $phone->vouchedForSignIn() && $this->allows($phone->number_e164))?->number_e164;
+    }
+
+    /**
+     * @return Collection<int, ClientPhoneNumber> the primary number first
+     */
+    private function orderedNumbers(Client $client): Collection
+    {
+        $numbers = $client->relationLoaded('phoneNumbers') ? $client->phoneNumbers : $client->phoneNumbers()->get();
+
+        return $numbers->sortByDesc(fn (ClientPhoneNumber $phone): bool => (bool) $phone->is_primary)->values();
     }
 
     /**

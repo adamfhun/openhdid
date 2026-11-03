@@ -274,8 +274,8 @@
     "Identified: :name": "Identified: :name",
     "Identify": "Identify",
     "Identify :name": "Identify :name",
-    "If the account exists and has a phone number, a code has been sent.": "If the account exists and has a phone number, a code has been sent.",
-    "If the account exists, a login link has been sent.": "If the account exists, a login link has been sent.",
+    "If the account exists and has a number that can receive sign-in codes, a code has been sent to it. Only the newest code works: a new request replaces the earlier one.": "If the account exists and has a number that can receive sign-in codes, a code has been sent to it. Only the newest code works: a new request replaces the earlier one.",
+    "If the account exists, a login link has been sent. Only the newest link works: a new request replaces the earlier one.": "If the account exists, a login link has been sent. Only the newest link works: a new request replaces the earlier one.",
     "If you did not create an account, no further action is required.": "If you did not create an account, no further action is required.",
     "If you did not request a password reset, no further action is required.": "If you did not request a password reset, no further action is required.",
     "If you did not request this, you can ignore this e-mail.": "If you did not request this, you can ignore this e-mail.",
@@ -725,7 +725,7 @@
     "The last EMD sync run in which this record was present": "The last EMD sync run in which this record was present",
     "The level a call gets when its queue is not listed below and the caller is unknown. While only the premium call center is connected, leave it on premium.": "The level a call gets when its queue is not listed below and the caller is unknown. While only the premium call center is connected, leave it on premium.",
     "The link ends now and stays in the list with its end date. The linked account is not closed by this.": "The link ends now and stays in the list with its end date. The linked account is not closed by this.",
-    "The link signs the client in once and expires after the configured minutes.": "The link signs the client in once and expires after the configured minutes.",
+    "The link signs the client in once and expires after the configured minutes. Any login link sent to the client earlier stops working.": "The link signs the client in once and expires after the configured minutes. Any login link sent to the client earlier stops working.",
     "The login code": "The login code",
     "The new PIN": "The new PIN",
     "The one-time login link": "The one-time login link",
@@ -737,7 +737,7 @@
     "This action is unauthorized.": "This action is unauthorized.",
     "This client has an implicit premium package of its own and does not need a link.": "This client has an implicit premium package of its own and does not need a link.",
     "This client is already linked to another client.": "This client is already linked to another client.",
-    "This client sponsors :n linked client(s). Closing it also closes their accounts: :names:more. Reopening this client reopens them.": "This client sponsors :n linked client(s). Closing it also closes their accounts: :names:more. Reopening this client reopens them.",
+    "This client sponsors :n linked client(s). Closing it also closes their accounts: :names. Reopening this client reopens them.": "This client sponsors :n linked client(s). Closing it also closes their accounts: :names. Reopening this client reopens them.",
     "This is not a valid phone number.": "This is not a valid phone number.",
     "This login method is not available.": "This login method is not available.",
     "This password reset link will expire in :count minutes.": "This password reset link will expire in :count minutes.",
@@ -886,5 +886,7 @@
     "setting-unit.years": "years",
     "setting-unit.seconds": "s",
     "setting-unit.digits": "digits",
-    "setting-unit.characters": "characters"
+    "setting-unit.characters": "characters",
+    "link-end.linked_own_premium": "ended: the linked client got an implicit premium of its own",
+    "link-end.sponsor_ineligible": "ended: the sponsor no longer has an implicit premium"
 }

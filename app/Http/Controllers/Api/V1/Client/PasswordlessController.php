@@ -28,7 +28,7 @@ class PasswordlessController extends Controller
 
         $this->passwordless->requestMagicLink($data['email']);
 
-        return response()->json(['message' => __('If the account exists, a login link has been sent.')]);
+        return response()->json(['message' => __('If the account exists, a login link has been sent. Only the newest link works: a new request replaces the earlier one.')]);
     }
 
     /**
@@ -59,7 +59,7 @@ class PasswordlessController extends Controller
 
         $this->passwordless->requestOtp($data['email']);
 
-        return response()->json(['message' => __('If the account exists and has a phone number, a code has been sent.')]);
+        return response()->json(['message' => __('If the account exists and has a number that can receive sign-in codes, a code has been sent to it. Only the newest code works: a new request replaces the earlier one.')]);
     }
 
     /**

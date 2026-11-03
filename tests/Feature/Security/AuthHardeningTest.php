@@ -166,7 +166,7 @@ it('skips csrf for bearer requests unless the session itself signs a client in',
         ->and($exempt($signedIn('web')))->toBeFalse();
 });
 
-it('decides the csrf exemption from the session alone, without signing anyone in from a remember cookie', function (): void {
+it('decides the csrf exemption from the session and the cookie names alone, without signing anyone in from a remember cookie', function (): void {
     $middleware = app(ValidateCsrfTokenUnlessBearer::class);
     $client = Client::factory()->synced()->create();
     $client->forceFill(['remember_token' => $token = Str::random(60)])->saveQuietly();
@@ -178,6 +178,31 @@ it('decides the csrf exemption from the session alone, without signing anyone in
     (fn () => $this->inExceptArray($request))->call($middleware);
 
     expect(Auth::guard('client')->hasUser())->toBeFalse('the remember-me switch is applied later, by the session check');
+});
+
+it('keeps the csrf check on a bearer request that carries a remember-me cookie of either guard', function (string $guard): void {
+    $middleware = app(ValidateCsrfTokenUnlessBearer::class);
+    $exempt = fn (Request $request): bool => (fn () => $this->inExceptArray($request))->call($middleware);
+
+    // A browser that holds only a remember-me cookie (the session is new) would
+    // be signed in by the cookie on the route, so a bearer header must not lift
+    // the check: a credentialed cross-site request could otherwise act as it.
+    $request = Request::create('/api/v1/client/logout-all', 'POST', cookies: [Auth::guard($guard)->getRecallerName() => 'x'], server: ['HTTP_AUTHORIZATION' => 'Bearer t']);
+
+    expect($exempt($request))->toBeFalse()
+        ->and(Auth::guard('client')->hasUser())->toBeFalse()
+        ->and(Auth::guard('web')->hasUser())->toBeFalse();
+})->with(['client', 'web']);
+
+it('keeps the csrf exemption of a bare bearer request whose remember-me cookie could not be decrypted', function (): void {
+    $middleware = app(ValidateCsrfTokenUnlessBearer::class);
+    $exempt = fn (Request $request): bool => (fn () => $this->inExceptArray($request))->call($middleware);
+
+    // EncryptCookies keeps the name of a cookie it cannot decrypt, with no value; the guard ignores it too.
+    $request = Request::create('/api/v1/client/logout-all', 'POST', server: ['HTTP_AUTHORIZATION' => 'Bearer t']);
+    $request->cookies->set(Auth::guard('client')->getRecallerName(), null);
+
+    expect($exempt($request))->toBeTrue();
 });
 
 it('forgets the stored remember tokens of an account type when its remember-me is switched off', function (): void {

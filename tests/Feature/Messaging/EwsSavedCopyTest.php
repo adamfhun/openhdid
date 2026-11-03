@@ -5,13 +5,16 @@ use App\Mail\Transport\EwsTransport;
 use App\Messaging\Channel;
 use App\Messaging\Messenger;
 use App\Models\Client;
+use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Http\Client\Request;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
+use Symfony\Component\Mailer\Exception\TransportException;
 
 /**
  * Exchange keeps a copy of every SendAndSaveCopy message in the sending
@@ -152,4 +155,84 @@ it('treats a templated mail as secret unless it is told otherwise', function ():
     [$soap] = sentEwsRequest();
 
     expect($soap)->toContain('MessageDisposition="SendOnly"');
+});
+
+/**
+ * EWS through an Entra app registration, with fresh fakes: the fake of the
+ * login endpoint and of the EWS answers given here, nothing else.
+ *
+ * @param  array<string, mixed>  $fakes
+ * @return array<string, string>
+ */
+function ewsOauth(array $fakes): array
+{
+    $oauth = ['tenant' => 'tenant-a', 'client_id' => 'app-a', 'client_secret' => 's', 'scope' => 'https://outlook.office365.com/.default'];
+    config()->set('hdid.ews', ['url' => 'https://mail.example.test/EWS/Exchange.asmx', 'auth' => 'oauth', 'username' => null, 'password' => null, 'oauth' => $oauth, 'verify_tls' => true]);
+    Http::swap(new HttpFactory);
+    Http::fake($fakes + ['https://mail.example.test/*' => Http::response('<m:CreateItemResponseMessage ResponseClass="Success"/>', 200)]);
+
+    return $oauth;
+}
+
+function sendEwsNotice(): void
+{
+    Mail::mailer('ews')->to('ops@example.test')->send(new TemplatedMail('A notice', '<p>Nothing secret.</p>', carriesSecret: false));
+}
+
+function entraLogins(): int
+{
+    return Http::recorded(fn (Request $request): bool => str_starts_with($request->url(), 'https://login.microsoftonline.com/'))->count();
+}
+
+it('keeps the Exchange access token encrypted in the cache', function (): void {
+    $oauth = ewsOauth(['https://login.microsoftonline.com/*' => Http::response(['access_token' => 'token-a', 'expires_in' => 3599], 200)]);
+
+    sendEwsNotice();
+
+    $stored = Cache::get(EwsTransport::oauthCacheKey($oauth));
+    expect($stored)->toBeString()->not->toBe('token-a')
+        ->and(Crypt::decryptString($stored))->toBe('token-a');
+});
+
+it('asks Entra for a new Exchange token once the cached one nears its expires_in', function (): void {
+    ewsOauth(['https://login.microsoftonline.com/*' => Http::response(['access_token' => 'token-a', 'expires_in' => 600], 200)]);
+
+    sendEwsNotice();
+    $this->travel(301)->seconds();
+    sendEwsNotice();
+
+    expect(entraLogins())->toBe(2);
+});
+
+it('drops the cached Exchange token after EWS refuses it with 401', function (): void {
+    ewsOauth([
+        'https://login.microsoftonline.com/*' => Http::response(['access_token' => 'token-a', 'expires_in' => 3599], 200),
+        'https://mail.example.test/*' => Http::sequence()->push('', 401)->push('<m:CreateItemResponseMessage ResponseClass="Success"/>', 200),
+    ]);
+
+    expect(fn () => sendEwsNotice())->toThrow(TransportException::class);
+    sendEwsNotice();
+
+    expect(entraLogins())->toBe(2);
+});
+
+it('fetches a new Exchange token when the cached value cannot be decrypted', function (): void {
+    $oauth = ewsOauth(['https://login.microsoftonline.com/*' => Http::response(['access_token' => 'token-b', 'expires_in' => 3599], 200)]);
+    // What an older release left: the token in plain text.
+    Cache::put(EwsTransport::oauthCacheKey($oauth), 'token-plain', 3000);
+
+    sendEwsNotice();
+
+    $ews = Http::recorded(fn (Request $request): bool => str_starts_with($request->url(), 'https://mail.example.test/'))->first()[0];
+    expect($ews->header('Authorization')[0] ?? null)->toBe('Bearer token-b');
+});
+
+it('does not cache an empty Exchange access token', function (): void {
+    $oauth = ewsOauth(['https://login.microsoftonline.com/*' => Http::response(['expires_in' => 3599], 200)]);
+
+    expect(fn () => sendEwsNotice())->toThrow(TransportException::class, 'no access token');
+    expect(fn () => sendEwsNotice())->toThrow(TransportException::class);
+
+    expect(Cache::get(EwsTransport::oauthCacheKey($oauth)))->toBeNull()
+        ->and(entraLogins())->toBe(2);
 });

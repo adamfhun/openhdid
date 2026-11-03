@@ -6,6 +6,7 @@ use App\Auth\AuthSessions;
 use App\Auth\Mfa\StaffMfa;
 use App\Auth\Oidc\OidcProviderConfig;
 use App\Auth\Permission;
+use App\Clients\LinkEndReport;
 use App\Enums\ApiKeyScope;
 use App\Http\Controllers\HealthController;
 use App\Http\Middleware\AuthenticateApiKey;
@@ -26,6 +27,7 @@ use App\Support\OutboundProxy;
 use App\Support\PhoneNormalizer;
 use App\System\InstallationCommandMutex;
 use App\System\InstallationEventMutex;
+use App\System\InstallationRateLimiter;
 use App\System\InstallationSchedulingMutex;
 use Dedoc\Scramble\Scramble;
 use Dedoc\Scramble\Support\Generator\OpenApi;
@@ -34,14 +36,18 @@ use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Schemas\Schema;
 use Filament\Tables\Table;
+use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\Events\Authenticated;
 use Illuminate\Auth\Events\Login;
+use Illuminate\Auth\SessionGuard;
+use Illuminate\Cache\RateLimiter as CacheRateLimiter;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Console\CommandMutex;
 use Illuminate\Console\Scheduling\EventMutex;
 use Illuminate\Console\Scheduling\SchedulingMutex;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Cache\Repository as Cache;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Http\Request;
 use Illuminate\Mail\Markdown;
@@ -67,11 +73,27 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->singleton(Settings::class);
 
+        // The automatic link endings a sync run reports, collected from the model hooks.
+        $this->app->scoped(LinkEndReport::class);
+
         // The scheduler's and the isolated commands' mutexes carry this installation's
         // id, so two installations sharing a Valkey/Redis both run their tasks (G31c).
         $this->app->bind(EventMutex::class, InstallationEventMutex::class);
         $this->app->bind(SchedulingMutex::class, InstallationSchedulingMutex::class);
         $this->app->bind(CommandMutex::class, InstallationCommandMutex::class);
+
+        // Every rate limit counter carries it as well (OPS-7): the route throttles, the panel's
+        // sign-in limit, the agents' hourly limit and the system-wide sign-in ceilings of a
+        // staging installation never count against production on the same store.
+        $this->app->extend(CacheRateLimiter::class, fn (CacheRateLimiter $limiter): CacheRateLimiter => InstallationRateLimiter::from($limiter));
+
+        // And so does the password part of every remember-me cookie (G31d): a clone of the
+        // database with the same APP_KEY and remember tokens signs nobody in here. Set up
+        // when the auth manager is first resolved, before any guard is built.
+        $this->app->extend('auth', fn (AuthManager $auth): AuthManager => $auth->extend(
+            'session',
+            static fn (Application $app, string $name, array $config): SessionGuard => AuthSessions::sessionGuard($auth, $app, $name, $config),
+        ));
 
         // Every route throttle ("throttle:n,m,bucket", Livewire's upload limit too) leaves
         // the addresses of HDID_RATE_LIMIT_EXEMPT_NETWORKS alone; bound in the framework
@@ -167,7 +189,9 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(RoleModel::class, RolePolicy::class);
 
         // The interface documents need the second factor too, like the panel they are linked from.
-        Gate::define('viewApiDocs', fn (?User $user): bool => ($user?->can(Permission::AdminAccess->value) ?? false)
+        // A closed account is refused here as well; its session already ends in AuthSessions.
+        Gate::define('viewApiDocs', fn (?User $user): bool => $user instanceof User && ! $user->isClosed()
+            && $user->can(Permission::AdminAccess->value)
             && $this->app->make(StaffMfa::class)->isSatisfied($user));
 
         $this->registerApiDocs();

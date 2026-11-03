@@ -4,17 +4,25 @@ namespace App\Clients;
 
 use App\Audit\Auditor;
 use App\Enums\IdSessionStatus;
+use App\Enums\PhoneNumberSource;
 use App\Enums\PhoneVerificationSource;
 use App\Identification\PinService;
+use App\Messaging\MessageKey;
+use App\Messaging\Messenger;
 use App\Models\Client;
 use App\Models\ClientPhoneNumber;
 use App\Models\IdSession;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\Sms\SmsDestinations;
+use App\System\Installation;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /**
  * The rules around a client's phone numbers: the phone menu recognises a
@@ -26,6 +34,9 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
 class ClientPhones
 {
     public const PIN_CLEARED_REASON = 'last_phone_removed';
+
+    /** Lock around one client's portal number additions. */
+    private const PHONES_LOCK_PREFIX = 'hdid:phones:';
 
     public function __construct(
         private readonly Settings $settings,
@@ -127,6 +138,8 @@ class ClientPhones
      */
     public function verify(ClientPhoneNumber $phone, PhoneVerificationSource $via, ?User $by = null, array $context = []): void
     {
+        $wasVouched = $phone->vouchedForSignIn();
+
         $phone->forceFill([
             'verified_at' => $phone->verified_at ?? now(),
             'verified_via' => $via,
@@ -134,6 +147,28 @@ class ClientPhones
         ])->save();
 
         $this->auditor->record('client_phone.verified', $phone, $context + ['number' => $phone->number_e164, 'via' => $via->value], $by);
+
+        if (! $wasVouched) {
+            $this->tellNewSignInNumber($phone);
+        }
+    }
+
+    /**
+     * A number the client added became usable for the SMS sign-in: the
+     * client hears of it by e-mail, in their own language, so a number
+     * slipped in by somebody else does not go unnoticed.
+     */
+    private function tellNewSignInNumber(ClientPhoneNumber $phone): void
+    {
+        $client = Client::query()->find($phone->client_id);
+
+        if ($client === null || blank($client->email)
+            || ! $this->settings->bool(SettingKey::ClientLoginOtpSmsEnabled)
+            || ! app(SmsDestinations::class)->allows($phone->number_e164)) {
+            return;
+        }
+
+        app(Messenger::class)->sendTemplate(MessageKey::SignInNumberAdded, $client, ['number' => $phone->number_e164], $client->email);
     }
 
     public function verifiesOnIdentifiedCall(): bool
@@ -175,13 +210,69 @@ class ClientPhones
      */
     public function afterRemoval(ClientPhoneNumber $phone): void
     {
-        $client = Client::query()->find($phone->client_id);
+        // On the client row's lock, as setting a PIN re-checks the numbers
+        // on it: a PIN set while the last number goes is either refused or
+        // cleared here, never left without a number.
+        DB::transaction(function () use ($phone): void {
+            $client = Client::query()->whereKey($phone->client_id)->lockForUpdate()->first();
 
-        if ($client === null || ! $client->hasPin() || $client->phoneNumbers()->exists()) {
-            return;
-        }
+            if ($client === null || ! $client->hasPin() || $client->phoneNumbers()->exists()) {
+                return;
+            }
 
-        app(PinService::class)->clearPin($client, self::PIN_CLEARED_REASON);
+            app(PinService::class)->clearPin($client, self::PIN_CLEARED_REASON);
+        });
+    }
+
+    /**
+     * A number the client adds on the portal: unconfirmed until the client
+     * confirms a code sent to it. A number removed earlier comes back (the
+     * unique index keeps one row per number), its ownership to be proven
+     * again. The limit check and the write run under the client's lock, so
+     * simultaneous additions cannot pass the limit or collide; adding a
+     * number the client already has changes nothing.
+     *
+     * @throws ValidationException
+     */
+    public function addOwnNumber(Client $client, string $e164, ?string $label): void
+    {
+        Cache::lock(Installation::lockName(self::PHONES_LOCK_PREFIX.$client->id), 10)->block(5, function () use ($client, $e164, $label): void {
+            /** @var ClientPhoneNumber|null $existing */
+            $existing = $client->phoneNumbers()->withTrashed()->where('number_e164', $e164)->first();
+
+            if ($existing !== null && ! $existing->trashed()) {
+                return;
+            }
+
+            $max = $this->settings->int(SettingKey::PortalMaxPhoneNumbersPerClient);
+
+            if ($max > 0 && $client->phoneNumbers()->count() >= $max) {
+                throw ValidationException::withMessages(['number' => __('You can keep at most :n phone numbers. Remove one first.', ['n' => $max])]);
+            }
+
+            $isFirst = ! $client->phoneNumbers()->exists();
+
+            if ($existing !== null) {
+                $existing->restore();
+                $existing->forceFill([
+                    'label' => $label,
+                    'source' => PhoneNumberSource::ClientSelf,
+                    'is_primary' => $isFirst,
+                    'verified_at' => null,
+                    'verified_via' => null,
+                    'verified_by_user_id' => null,
+                ])->save();
+
+                return;
+            }
+
+            $client->phoneNumbers()->create([
+                'number_e164' => $e164,
+                'label' => $label,
+                'source' => PhoneNumberSource::ClientSelf,
+                'is_primary' => $isFirst,
+            ]);
+        });
     }
 
     /**

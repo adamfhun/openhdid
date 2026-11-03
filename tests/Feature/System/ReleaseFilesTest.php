@@ -121,6 +121,29 @@ it('runs the installer in the smoke test from an answers file, without a termina
     expect($smoke)->toContain('if ($finding["severity"] !== "info")');
 });
 
+it('keeps the Valkey policy, the TLS-off, the restore sign-out and the prefix sweep rounds in the smoke test the preflight runs', function (): void {
+    $smoke = releaseFilesMainRepo('deploy/openhdid/smoke-test.sh');
+    $preflight = releaseFilesMainRepo('deploy/openhdid/preflight.sh');
+
+    expect($smoke)->toContain('maxmemory-policy noeviction', 'allkeys-lru', 's/^OPENHDID_TLS=.*/OPENHDID_TLS=off/', 'retry-after: 5', 'access.revoked_all')
+        // The sign-out deletes by key prefix: a waiting job, both replay guards and another prefix's keys survive,
+        // the command statistics show no FLUSHDB, and so it stays with the sessions in the main Valkey.
+        ->and($smoke)->toContain(
+            'Queue::connection("redis")->pushRaw("{}", "backup-probe")',
+            'Cache::add("oidc.mobile.used.backup-probe", 1, 3600)',
+            'Cache::add("api-sig:backup-probe", 1, 3600)',
+            'SET other-install:probe 1',
+            'CONFIG RESETSTAT',
+            '^cmdstat_(flushdb|flushall):',
+            'REDIS_SESSION_HOST=valkey',
+            'Queue::connection("redis")->clear("backup-probe")',
+        )
+        // LOAD DATA LOCAL: refused by the bundled server, and by the client switch on its own.
+        ->and($smoke)->toContain('SELECT @@GLOBAL.local_infile', 'SET GLOBAL local_infile = 1', "LOAD DATA LOCAL INFILE '/etc/hostname' INTO TABLE infile_probe", 'mariadb --sandbox --local-infile=0')
+        // The preflight runs the full mode, with no switch that would skip these rounds.
+        ->and($preflight)->toContain('"$HERE/smoke-test.sh" "$TAG" "$OUT"'."\n");
+});
+
 it('ships no valkey-cli command that reads the password from a host variable or puts it on a command line', function (string $path): void {
     $text = str_ends_with($path, '.html') ? releaseFilesMainRepo($path) : releaseFilesRead($path);
 
@@ -194,7 +217,8 @@ it('documents the installer in the published guides and the upgrade steps', func
     $changelog = releaseFilesRead('CHANGELOG.md');
 
     expect($upgrade)->toContain('-O "$base/install.sh"')
-        ->and(substr_count($upgrade, "./install.sh check\n"))->toBe(2)
+        // The single-host steps and the infra host step of the two-host section, in both languages.
+        ->and(substr_count($upgrade, "./install.sh check\n"))->toBe(4)
         ->and($upgrade)->toContain('./install.sh fix --only ENV-07')
         ->and(preg_match_all('/^v=/m', $upgrade))->toBe(2);
 
@@ -202,10 +226,46 @@ it('documents the installer in the published guides and the upgrade steps', func
         expect(releaseFilesRead($readme))->toContain('-O "$base/install.sh" -O "$base/SHA256SUMS"');
     }
 
-    // The installer's block: [Unreleased] while it is being prepared, then the release that brought it.
-    preg_match('/^## \[(?:Unreleased|1\.15\.0)\][^\n]*\n(.*?)^## \[/ms', $changelog, $installerBlock);
+    // The installer's block: the release that brought it (an [Unreleased] block of the next release may stand above it).
+    preg_match('/^## \[1\.15\.0\][^\n]*\n(.*?)^## \[/ms', $changelog, $installerBlock);
     expect($installerBlock[1] ?? '')->toContain('### Magyar', '### English', '**Frissítés előtt:**', '**Before upgrading:**', 'ÜZ-03.3 (új)', 'ÜZ-03.3 (new)', 'ENV-07', 'SCHED-01');
 
     $guide = releaseFilesMainRepo('docs/2026-09-13/openhdid-telepitesi-utmutato.html');
     expect($guide)->toContain('<h2 id="s16"><span class="num">16</span>A telepítő (install.sh)</h2>', '<h3>15.7 10k profil egy gépen</h3>', '<h3>15.8 Infra gép a kétgépes 10k-hoz</h3>', 'http-check send meth GET uri /up');
+});
+
+it('describes the shared services of the classic 10k from scratch, with the Valkeys on the private address and TLS to the remote database', function (): void {
+    $html = releaseFilesMainRepo('docs/2026-09-13/hdid-telepitesi-utmutato.html');
+    $start = (int) strpos($html, 'id="s10"');
+    $chapter = substr($html, $start, (int) strpos($html, 'id="s11"', $start) - $start);
+
+    expect($chapter)->toContain('exportfs -ra')
+        ->and($chapter)->toContain('CHANGE MASTER TO')
+        ->and($chapter)->toContain('http-check send meth GET uri /up')
+        ->and($chapter)->toContain('maxmemory-policy noeviction')
+        ->and($chapter)->toContain('allkeys-lru')
+        ->and($chapter)->toContain('require_secure_transport')
+        ->and($chapter)->not->toContain('chown 82:82')
+        ->and($chapter)->not->toContain('bind 127.0.0.1');
+
+    // The infra host of the container profile talks plaintext: never named without saying so.
+    if (str_contains($chapter, 'profiles/10k/infra.yaml')) {
+        expect($chapter)->toContain('titkosítatlan');
+    }
+});
+
+it('downloads install.sh, upgrades the infra host first and keeps both hosts in one window in the two-host upgrade steps', function (): void {
+    $upgrade = releaseFilesRead('UPGRADE.md');
+
+    foreach (['### Két alkalmazásgép (10k profil)', '### Two application hosts (10k profile)'] as $heading) {
+        $start = strpos($upgrade, $heading);
+        expect($start)->not->toBeFalse($heading);
+        $section = substr($upgrade, (int) $start, (int) strpos($upgrade, "\n### ", (int) $start + 4) - (int) $start);
+
+        expect($section)->toContain('-O "$base/install.sh"', 'chmod 755 backup.sh install.sh', 'profile-10k-infra.yaml', '--force-recreate', '1.15.1');
+        $infra = strpos($section, 'profile-10k-infra.yaml');
+        $hostB = preg_match('/\*\*(B gép|Host B)/', $section, $match, PREG_OFFSET_CAPTURE) === 1 ? $match[0][1] : null;
+        expect($hostB)->not->toBeNull('the host B step')
+            ->and($infra)->toBeLessThan($hostB, 'the infra host comes before host B');
+    }
 });

@@ -6,6 +6,7 @@ use App\Auth\Permission;
 use App\CallCenter\CallCenterService;
 use App\Filament\Admin\NavigationGroup;
 use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\NotificationText;
 use App\Identification\IdentificationException;
 use App\Identification\MobileOtpService;
 use App\Models\Call;
@@ -15,6 +16,7 @@ use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Str;
 use Livewire\Attributes\Url;
 use UnitEnum;
@@ -100,10 +102,16 @@ class VerifyCode extends Page
 
         try {
             $session = app(CallCenterService::class)->verifyCodeForAgent($code, auth()->user(), $this->call);
+        } catch (AuthorizationException) {
+            // A colleague took the call (or it was handed back) after this page
+            // was opened: checked before the code, so the code stays usable.
+            Notification::make()->title(__('This call is no longer yours: it was handed back to the queue or a colleague has taken it over.'))->body(__('The code was not checked; it can still be used.'))->danger()->persistent()->send();
+
+            return;
         } catch (IdentificationException $e) {
             $this->form->fill(['code' => '']);
             $this->dispatch('hdid-code-reset');
-            Notification::make()->title($e->getMessage())->danger()->persistent()->send();
+            Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->persistent()->send();
 
             return;
         }
@@ -119,7 +127,7 @@ class VerifyCode extends Page
 
         $this->failed = false;
         $this->form->fill(['code' => '']);
-        Notification::make()->title(__('Identified: :name', ['name' => $session->client->name]))->success()->send();
+        Notification::make()->title(NotificationText::of(__('Identified: :name', ['name' => $session->client->name])))->success()->send();
 
         // The pass is recorded; the client's record shows it with every detail.
         $this->redirect(ClientResource::getUrl('view', ['record' => $session->client]));

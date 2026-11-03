@@ -2,32 +2,46 @@
 
 namespace App\Http\Middleware;
 
+use App\Audit\Auditor;
+use App\Auth\AccountLogin;
 use App\Auth\LoginRejection;
-use App\Clients\ClientTiers;
 use App\Models\Client;
-use App\System\DemoData;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * A client keeps portal access only while one of its packages is listed in
- * settings. The sync may change packages at any time, so this is checked on
- * every request; a client that lost access, or whose account was closed in
- * the meantime, is signed out on the spot.
+ * A client keeps portal access only while the login rule would still let it
+ * in: open, not a demo account in production, with a matching EMD record
+ * (unless CLIENT_LOGIN_REQUIRE_EMD is off), and with a package listed in the
+ * settings. The sync or the switch may change any of these at any time, so
+ * this is checked on every request; a client that lost access is signed out
+ * on the spot.
  */
 class EnsureClientEntitled
 {
-    public function __construct(private readonly ClientTiers $tiers) {}
+    /** The reasons that come from the EMD part of the rule. */
+    private const DIRECTORY_REASONS = [LoginRejection::NoExternalRecord, LoginRejection::ExternalRecordMissing, LoginRejection::ExternalRecordMismatch];
+
+    public function __construct(
+        private readonly AccountLogin $login,
+        private readonly Auditor $auditor,
+    ) {}
 
     public function handle(Request $request, Closure $next): Response
     {
         $client = $request->user();
 
-        if ($client instanceof Client && ($rejection = $this->rejectionFor($client)) !== null) {
+        if ($client instanceof Client && ($rejection = $this->login->ongoingRejectionFor($client->loadMissing('externalRecord'))) !== null) {
             $client->currentAccessToken()?->delete();
-            $client->revokeAccess();
+            $revoked = $client->revokeAccess();
+
+            // Closure, a lost package and the demo rule are audited where they
+            // happen; an EMD record that stopped matching is noticed here.
+            if (in_array($rejection, self::DIRECTORY_REASONS, true)) {
+                $this->auditor->record('account.access_revoked', $client, ['reason' => $rejection->value, 'emd_required' => true] + $revoked);
+            }
 
             if ($request->hasSession()) {
                 Auth::guard('client')->logout();
@@ -39,20 +53,5 @@ class EnsureClientEntitled
         }
 
         return $next($request);
-    }
-
-    /**
-     * Why the signed-in client may not go on, if at all. A demo account
-     * (DemoData) is refused in production on every request, so a session
-     * or token from before the switch to production stops working too.
-     */
-    private function rejectionFor(Client $client): ?LoginRejection
-    {
-        return match (true) {
-            $client->isClosed() => LoginRejection::AccountClosed,
-            DemoData::refusedHere() && DemoData::isDemoAccount($client) => LoginRejection::DemoAccount,
-            ! $this->tiers->isEntitled($client) => LoginRejection::NotEntitled,
-            default => null,
-        };
     }
 }

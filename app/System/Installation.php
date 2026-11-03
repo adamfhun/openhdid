@@ -2,6 +2,7 @@
 
 namespace App\System;
 
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 
@@ -14,11 +15,22 @@ use Illuminate\Support\Facades\Cache;
  * nothing of the key.
  *
  * The settings cache carries the id in its keys, so the two never mix, and
- * so do the global locks and the scheduler's mutexes (lockName()). The
- * scheduler heartbeat carries it in its value and every worker heartbeat
- * job carries the id of the installation that sent it: when a heartbeat of
- * another installation turns up, the sighting is kept in the shared store,
- * where both installations see it, and their status pages turn red.
+ * so do the locks and the scheduler's mutexes (lockName()), every rate
+ * limit counter (InstallationRateLimiter) and the cached values that act as
+ * security or transparency state (key()): the sign-in ceilings' notices,
+ * the second-factor codes, the unlock mark of the question-and-answer
+ * limit, a shown login link, the ID list status. The sessions carry it in
+ * their stamp, the second-factor mark in its value and the remember-me
+ * cookies in their password part (AuthSessions), so a session, a passed
+ * second factor or a remember-me cookie of one installation is worth
+ * nothing at the other, even on a shared session store or a cloned
+ * database. Shared on purpose stay the queued jobs, the heartbeats and
+ * short-lived display counts. The scheduler heartbeat carries the id in its
+ * value and every worker heartbeat job carries the id of the installation
+ * that sent it: when a heartbeat of another installation turns up, the
+ * sighting is kept in the shared store, where both installations see it,
+ * and their status pages turn red. The scheduler beats in the session store
+ * too (SessionStore), which tells a shared session store apart.
  */
 final class Installation
 {
@@ -52,15 +64,34 @@ final class Installation
     /**
      * A lock or mutex name of this installation: the global locks (the EMD
      * sync, its dispatch and ID list, the PIN assignment, the settings save,
-     * the call events) and the scheduler's and isolated commands' mutexes
-     * carry the id, so two installations sharing a Valkey/Redis under one
-     * key prefix each run their own work instead of waiting for, or
-     * skipping because of, the other's. Only the lock names change: no
-     * session, no cached value and no sign-in is touched.
+     * the call events), the per-account and per-number locks (the sign-in
+     * lockout, the SMS budget, the SMS code check, the second factor, the
+     * question-and-answer start, the PIN check) and the scheduler's and
+     * isolated commands' mutexes carry the id, so two installations sharing
+     * a Valkey/Redis under one key prefix, or a database cloned with the
+     * same account ids, each run their own work instead of waiting for, or
+     * skipping because of, the other's.
      */
     public static function lockName(string $name): string
     {
-        return 'hdid-'.self::id().':'.$name;
+        return self::key($name);
+    }
+
+    /**
+     * A cache key of this installation, for a value that acts as security or
+     * transparency state: two installations on one store never read each
+     * other's. Every new lock, rate limit or security cache key goes through
+     * here (or lockName(), or the rate limiter, which adds it by itself).
+     */
+    public static function key(string $name): string
+    {
+        return self::prefix().$name;
+    }
+
+    /** What key() puts in front of a name: "hdid-<id>:". */
+    public static function prefix(): string
+    {
+        return 'hdid-'.self::id().':';
     }
 
     private static function normalizedUrl(string $url): string
@@ -80,17 +111,20 @@ final class Installation
 
     /**
      * Write a heartbeat key with the time and this installation. A fresh
-     * heartbeat of another installation found under the key is a sighting.
+     * heartbeat of another installation found under the key is a sighting,
+     * kept in the same store under $conflictKey. The store is the default
+     * cache unless given (the session store, for its own heartbeat).
      */
-    public static function beat(string $key, string $source): void
+    public static function beat(string $key, string $source, ?Repository $store = null, string $conflictKey = self::CONFLICT_KEY): void
     {
-        $previous = self::readBeat(Cache::get($key));
+        $store ??= Cache::store();
+        $previous = self::readBeat($store->get($key));
 
         if ($previous !== null && $previous['installation'] !== null && $previous['installation'] !== self::id() && $previous['at']->gte(now()->subMinutes(self::FRESH_MINUTES))) {
-            self::sighted($previous['installation'], $source);
+            self::sighted($previous['installation'], $source, $store, $conflictKey);
         }
 
-        Cache::put($key, ['at' => now()->toIso8601String(), 'installation' => self::id()], now()->addHours(6));
+        $store->put($key, ['at' => now()->toIso8601String(), 'installation' => self::id()], now()->addHours(6));
     }
 
     /**
@@ -115,18 +149,20 @@ final class Installation
 
     /**
      * Record that a heartbeat or a heartbeat job of another installation
-     * turned up here ($source: "scheduler" or "queue:<name>").
+     * turned up here ($source: "scheduler", "queue:<name>" or
+     * "session_store"), in the default cache unless another store is given.
      */
-    public static function sighted(string $other, string $source): void
+    public static function sighted(string $other, string $source, ?Repository $store = null, string $conflictKey = self::CONFLICT_KEY): void
     {
+        $store ??= Cache::store();
         $pair = [self::id(), $other];
         sort($pair);
 
-        $current = Cache::get(self::CONFLICT_KEY);
+        $current = $store->get($conflictKey);
         $sightings = is_array($current) && ($current['installations'] ?? null) === $pair ? (array) ($current['sightings'] ?? []) : [];
         $sightings[$source] = (int) ($sightings[$source] ?? 0) + 1;
 
-        Cache::put(self::CONFLICT_KEY, [
+        $store->put($conflictKey, [
             'installations' => $pair,
             'sightings' => $sightings,
             'source' => $source,
@@ -135,13 +171,14 @@ final class Installation
     }
 
     /**
-     * The other installation seen in the shared store lately, or null.
+     * The other installation seen in the shared store lately, or null; in
+     * the default cache unless another store is given.
      *
      * @return array{installation: string, source: string, at: Carbon}|null
      */
-    public static function conflict(): ?array
+    public static function conflict(?Repository $store = null, string $conflictKey = self::CONFLICT_KEY): ?array
     {
-        $marker = Cache::get(self::CONFLICT_KEY);
+        $marker = ($store ?? Cache::store())->get($conflictKey);
 
         $sightings = is_array($marker) ? array_map('intval', array_values((array) ($marker['sightings'] ?? []))) : [];
 

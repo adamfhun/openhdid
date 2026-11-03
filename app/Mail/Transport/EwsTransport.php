@@ -3,10 +3,12 @@
 namespace App\Mail\Transport;
 
 use Illuminate\Contracts\Cache\Repository as Cache;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Crypt;
 use Symfony\Component\Mailer\Envelope;
 use Symfony\Component\Mailer\Exception\TransportException;
 use Symfony\Component\Mailer\SentMessage;
@@ -61,6 +63,8 @@ class EwsTransport extends AbstractTransport
 
         return $viaEws ? [self::KEEP_SAVED_COPY_HEADER => '1'] : [];
     }
+
+    private const OAUTH_SCOPE = 'https://outlook.office365.com/.default';
 
     /**
      * @param  array{url: string, auth: string, username: ?string, password: ?string, oauth: array{tenant: ?string, client_id: ?string, client_secret: ?string, scope?: string}, verify_tls: bool}  $config
@@ -157,6 +161,11 @@ XML;
         }
 
         if ($response->failed() || ! str_contains($response->body(), 'ResponseClass="Success"')) {
+            // A refused token (revoked, its permission withdrawn) is not tried again.
+            if ($response->status() === 401 && $this->config['auth'] === 'oauth') {
+                $this->cache->forget(self::oauthCacheKey($this->config['oauth']));
+            }
+
             throw new TransportException('EWS CreateItem failed: '.self::describe($response));
         }
     }
@@ -212,26 +221,63 @@ XML;
         };
     }
 
+    /**
+     * Where the access token of an app registration is cached: keyed by the
+     * registration (a cache shared with another installation must never hand
+     * this one the other's token) and by its secret, so a new secret fetches
+     * a new token.
+     *
+     * @param  array<string, mixed>  $oauth
+     */
+    public static function oauthCacheKey(array $oauth): string
+    {
+        return 'ews.oauth.token.'.hash('sha256', implode('|', [
+            (string) ($oauth['tenant'] ?? ''),
+            (string) ($oauth['client_id'] ?? ''),
+            (string) ($oauth['scope'] ?? self::OAUTH_SCOPE),
+            hash_hmac('sha256', (string) ($oauth['client_secret'] ?? ''), (string) config('app.key')),
+        ]));
+    }
+
+    /**
+     * The access token, cached encrypted (bound to APP_KEY) until five
+     * minutes before the lifetime Entra gave it. A value that cannot be
+     * decrypted (an older release's plain token, a new APP_KEY) is dropped
+     * and a new token fetched; an empty one is never cached.
+     */
     private function oauthToken(): string
     {
         $oauth = $this->config['oauth'];
+        $key = self::oauthCacheKey($oauth);
+        $stored = $this->cache->get($key);
 
-        // Keyed by the app registration: a cache shared with another installation
-        // must never hand this one the other's token.
-        $key = 'ews.oauth.token.'.hash('sha256', ($oauth['tenant'] ?? '').'|'.($oauth['client_id'] ?? '').'|'.($oauth['scope'] ?? 'https://outlook.office365.com/.default'));
+        if (is_string($stored)) {
+            try {
+                return Crypt::decryptString($stored);
+            } catch (DecryptException) {
+                $this->cache->forget($key);
+            }
+        }
 
-        return $this->cache->remember($key, 3000, function () use ($oauth): string {
-            $response = $this->http->asForm()->post(
-                "https://login.microsoftonline.com/{$oauth['tenant']}/oauth2/v2.0/token",
-                [
-                    'grant_type' => 'client_credentials',
-                    'client_id' => $oauth['client_id'],
-                    'client_secret' => $oauth['client_secret'],
-                    'scope' => $oauth['scope'] ?? 'https://outlook.office365.com/.default',
-                ],
-            )->throw();
+        $response = $this->http->asForm()->post(
+            "https://login.microsoftonline.com/{$oauth['tenant']}/oauth2/v2.0/token",
+            [
+                'grant_type' => 'client_credentials',
+                'client_id' => $oauth['client_id'],
+                'client_secret' => $oauth['client_secret'],
+                'scope' => $oauth['scope'] ?? self::OAUTH_SCOPE,
+            ],
+        )->throw();
 
-            return (string) $response->json('access_token');
-        });
+        $token = (string) $response->json('access_token', '');
+
+        if ($token === '') {
+            throw new TransportException('EWS sign-in failed: Entra returned no access token for the app registration (check EWS_OAUTH_TENANT, EWS_OAUTH_CLIENT_ID, EWS_OAUTH_CLIENT_SECRET and the API permission).');
+        }
+
+        $lifetime = (int) $response->json('expires_in', 0);
+        $this->cache->put($key, Crypt::encryptString($token), $lifetime > 0 ? max(min(60, $lifetime), $lifetime - 300) : 300);
+
+        return $token;
     }
 }

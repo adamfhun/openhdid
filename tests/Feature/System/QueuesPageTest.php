@@ -1,6 +1,7 @@
 <?php
 
 use App\Auth\Role;
+use App\Enums\SyncRunStatus;
 use App\Filament\Admin\Pages\Queues;
 use App\Filament\Admin\Widgets\FailedJobsWidget;
 use App\Filament\Admin\Widgets\PendingJobsWidget;
@@ -10,7 +11,9 @@ use App\Models\AuditLog;
 use App\Models\FailedJob;
 use App\Models\OutboundMessage;
 use App\Models\QueuedJob;
+use App\Models\SyncRun;
 use App\Models\User;
+use App\Sync\QueuedSyncs;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
 use App\System\Installation;
@@ -22,6 +25,7 @@ use Filament\Facades\Filament;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 
 beforeEach(function (): void {
@@ -261,4 +265,56 @@ it('warns on the queues page, too, while another installation shares the store, 
         ->assertSee(Installation::id())
         ->assertSee(__('Seen (shared store)'))
         ->assertDontSee('>'.__('Alive').'<', false);
+});
+
+/**
+ * An EMD file import waiting on the database queue, with its upload on the
+ * local disk.
+ *
+ * @return array{0: SyncRun, 1: string}
+ */
+function waitingImport(): array
+{
+    Storage::fake('local');
+    config()->set('queue.connections.database.retry_after', 1260);
+    $upload = Retention::UPLOAD_DIRECTORY.'/'.str_repeat('q', 40).'.csv';
+    Storage::disk('local')->put($upload, "external_user_id,name,email\n");
+
+    return [app(QueuedSyncs::class)->start(auth()->user(), false, $upload), $upload];
+}
+
+it('marks a waiting EMD file import failed and deletes its upload when its job goes', function (string $how): void {
+    [$run, $upload] = waitingImport();
+    $job = QueuedJob::query()->sole();
+
+    match ($how) {
+        'deleted' => Livewire::test(PendingJobsWidget::class)->callTableAction('delete', $job),
+        'deleted in bulk' => Livewire::test(PendingJobsWidget::class)->callTableBulkAction('delete', [$job]),
+        'cleared with its queue' => Livewire::test(Queues::class)->callAction('clearQueue', arguments: ['queue' => config('hdid.sync.queue')]),
+    };
+
+    expect($run->fresh()->status)->toBe(SyncRunStatus::Failed)
+        ->and($run->fresh()->error)->toContain(__('EMD sync'))
+        ->and(Storage::disk('local')->exists($upload))->toBeFalse()
+        ->and(AuditLog::query()->where('event', 'sync.failed')->where('subject_id', $run->id)->sole()->context)->toMatchArray(['abandoned' => true]);
+})->with(['deleted', 'deleted in bulk', 'cleared with its queue']);
+
+it('leaves an EMD run a worker already started alone when its queue is cleared', function (): void {
+    [$run, $upload] = waitingImport();
+    $run->forceFill(['status' => SyncRunStatus::Running])->save();
+    DB::table('jobs')->update(['reserved_at' => now()->getTimestamp()]);
+
+    app(QueueMaintenance::class)->clearQueue(config('hdid.sync.queue'));
+
+    expect($run->fresh()->status)->toBe(SyncRunStatus::Running)
+        ->and(Storage::disk('local')->exists($upload))->toBeTrue('the running worker reads it and removes it itself')
+        ->and(app(QueuedSyncs::class)->abandon($run->id, 'x'))->toBeFalse();
+});
+
+it('says on the delete and clear dialogs what happens to a waiting EMD sync', function (): void {
+    waitingImport();
+
+    Livewire::test(PendingJobsWidget::class)
+        ->mountTableAction('delete', QueuedJob::query()->sole())
+        ->assertMountedActionModalSee(__('The waiting job is deleted and never runs. A queued e-mail or SMS is not lost: the scheduler queues it again within minutes; a waiting EMD sync is marked failed, its uploaded file is deleted, and it has to be started again.'));
 });

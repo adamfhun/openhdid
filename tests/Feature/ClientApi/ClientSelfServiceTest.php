@@ -1,5 +1,6 @@
 <?php
 
+use App\Auth\Role;
 use App\Enums\IdChannel;
 use App\Enums\OneTimeCodePurpose;
 use App\Enums\PhoneNumberSource;
@@ -7,11 +8,13 @@ use App\Identification\MobileOtpService;
 use App\Identification\QuestionCatalog;
 use App\Models\AuditLog;
 use App\Models\Client;
+use App\Models\ClientAnswer;
 use App\Models\OneTimeCode;
 use App\Models\Question;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Hash;
 use Laravel\Sanctum\Sanctum;
@@ -219,4 +222,41 @@ it('rejects another clients pin through the client api when changes are enabled'
         ->assertUnprocessable()->assertJsonValidationErrors(['pin' => __('This PIN is already in use. Choose another PIN.')]);
 
     expect($this->client->fresh()->hasPin())->toBeFalse();
+});
+
+it('removes an answer for good from the portal and records who removed it', function (): void {
+    $question = $this->questions[0];
+    $this->putJson('/api/v1/client/answers/'.$question->id, ['answer' => 'Rex'])->assertOk();
+
+    $this->deleteJson('/api/v1/client/answers/'.$question->id)->assertOk()->assertJsonPath('message', __('Answer removed.'));
+    $this->deleteJson('/api/v1/client/answers/'.$question->id)->assertOk();
+
+    $entry = AuditLog::query()->where('event', 'client_answer.removed')->sole();
+    expect(ClientAnswer::withTrashed()->where('client_id', $this->client->id)->where('question_id', $question->id)->exists())->toBeFalse()
+        ->and($entry->actor_id)->toBe($this->client->id)
+        ->and($entry->subject_id)->toBe($this->client->id)
+        ->and($entry->context)->toMatchArray(['question_id' => $question->id, 'via' => 'portal']);
+});
+
+it('takes a new answer after a removal and keeps only that one', function (): void {
+    $question = $this->questions[0];
+    $this->putJson('/api/v1/client/answers/'.$question->id, ['answer' => 'Rex'])->assertOk();
+    $this->deleteJson('/api/v1/client/answers/'.$question->id)->assertOk();
+    $this->putJson('/api/v1/client/answers/'.$question->id, ['answer' => 'Bodri'])->assertOk();
+
+    $answers = ClientAnswer::withTrashed()->where('client_id', $this->client->id)->where('question_id', $question->id)->get();
+    expect($answers)->toHaveCount(1)
+        ->and($answers->first()->answer)->toBe('Bodri');
+});
+
+it('records the client as the one who removed an answer even when a staff session is open in the same browser', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create(), 'web');
+    Sanctum::actingAs($this->client, guard: 'client');
+    $question = $this->questions[0];
+    $this->putJson('/api/v1/client/answers/'.$question->id, ['answer' => 'Rex'])->assertOk();
+
+    $this->deleteJson('/api/v1/client/answers/'.$question->id)->assertOk();
+
+    expect(AuditLog::query()->where('event', 'client_answer.removed')->sole()->actor_id)->toBe($this->client->id);
 });

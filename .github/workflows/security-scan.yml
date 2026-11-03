@@ -1,6 +1,14 @@
-# Weekly vulnerability scan of the published image. It only reports: a failed
-# run notifies the maintainer, who then updates the platform and releases a
-# new patch version (platform.sh, release.sh). Published tags never change.
+# Weekly vulnerability scan of the published image and of the helper images the
+# latest release pins (MariaDB, Valkey: compose.yaml and the infra host's file).
+# Trivy sees the Alpine packages and the PHP packages of the image only: the
+# upstream job compares the source-built nginx, PHP, libcurl, phpredis and
+# headers-more of the latest image with their vendors' advisories
+# (.github/scripts/upstream-advisories.sh and its public exceptions file), and
+# audits the release tag's lock files, the bundled vue and vue-router included.
+# It only reports: a failed run notifies the maintainer, who then updates the
+# platform and releases a new patch version (platform.sh, release.sh). A helper
+# image is fixed only when its publisher rebuilds it (platform.sh check shows the
+# new digest). Published tags never change.
 name: Security scan
 
 on:
@@ -32,3 +40,99 @@ jobs:
             --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$IMAGE"
         env:
           PLATFORM: ${{ matrix.platform }}
+
+  helpers:
+    name: Trivy (MariaDB, Valkey)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - name: Scan the helper images of the latest release
+        run: |
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/latest/download"
+          curl -fsSL --retry 3 -o compose.yaml "$base/compose.yaml"
+          curl -fsSL --retry 3 -o infra.yaml "$base/profile-10k-infra.yaml"
+          refs=$(grep -hoE '^[[:space:]]*image:[[:space:]]*[^[:space:]$]+@sha256:[0-9a-f]{64}' compose.yaml infra.yaml \
+            | sed -E 's/^[[:space:]]*image:[[:space:]]*//' | sort -u)
+          if [ -z "$refs" ]; then
+            echo "No helper image pinned by digest in the release files." >&2
+            exit 1
+          fi
+          # One vulnerability database download for the whole job, not one per image:
+          # a failed download would fail the job and raise a false alert.
+          status=0
+          for ref in $refs; do
+            echo "::group::$ref"
+            docker run --rm -v trivy-cache:/root/.cache "$TRIVY_IMAGE" image --platform "$PLATFORM" --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$ref" || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
+        env:
+          PLATFORM: ${{ matrix.platform }}
+
+  upstream:
+    name: Upstream advisories, JavaScript and PHP packages
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Read the versions built into the latest image
+        id: image
+        run: |
+          docker pull --quiet "$IMAGE" > /dev/null
+          release=$(docker run --rm "$IMAGE" version)
+          php_versions=$(docker run --rm --entrypoint php "$IMAGE" -r 'echo PHP_VERSION, " ", curl_version()["version"], " ", phpversion("redis"), PHP_EOL;')
+          nginx_build=$(docker run --rm --entrypoint nginx "$IMAGE" -V 2>&1)
+          read -r php libcurl phpredis <<< "$php_versions"
+          nginx=$(sed -n 's|^nginx version: nginx/\([0-9.]*\).*|\1|p' <<< "$nginx_build")
+          headers_more=$(sed -n 's|.*headers-more-nginx-module-\([0-9.]*\).*|\1|p' <<< "$nginx_build")
+          if ! [[ $release =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "The image names no release version: '$release'" >&2
+            exit 1
+          fi
+          for value in "$nginx" "$headers_more" "$php" "$libcurl" "$phpredis"; do
+            if ! [[ $value =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+              echo "Unreadable component version in the image: '$value'" >&2
+              exit 1
+            fi
+          done
+          echo "OpenHDID $release: nginx $nginx (headers-more $headers_more), PHP $php, libcurl $libcurl, phpredis $phpredis"
+          {
+            echo "release=$release"
+            echo "nginx=$nginx"
+            echo "headers_more=$headers_more"
+            echo "php=$php"
+            echo "libcurl=$libcurl"
+            echo "phpredis=$phpredis"
+          } >> "$GITHUB_OUTPUT"
+      # The script, its exceptions and the lock files come from the release tag of that image.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Check out the release of the image
+        id: checkout
+        with:
+          ref: v${{ steps.image.outputs.release }}
+          persist-credentials: false
+      - name: Compare the versions with the vendors' advisories
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        run: bash .github/scripts/upstream-advisories.sh "nginx=$NGINX" "libcurl=$LIBCURL" "php=$PHP" "phpredis=$PHPREDIS" "headers-more=$HEADERS_MORE"
+        env:
+          NGINX: ${{ steps.image.outputs.nginx }}
+          LIBCURL: ${{ steps.image.outputs.libcurl }}
+          PHP: ${{ steps.image.outputs.php }}
+          PHPREDIS: ${{ steps.image.outputs.phpredis }}
+          HEADERS_MORE: ${{ steps.image.outputs.headers_more }}
+          GH_TOKEN: ${{ github.token }}
+      # Every npm package of the release is a build dependency; vue and vue-router are bundled into the
+      # browser code, so the whole lock file is audited (without the dev dependencies nothing would be).
+      - name: Audit the JavaScript packages of the release
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        run: npm audit --package-lock-only --audit-level=high
+      - name: Audit the PHP packages of the release
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        run: |
+          composer_image=$(sed -n 's/^ARG COMPOSER_IMAGE=//p' Dockerfile)
+          docker run --rm -v "$PWD":/app:ro -w /app "$composer_image" composer audit --locked --no-dev --format=plain

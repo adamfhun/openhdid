@@ -5,6 +5,7 @@ namespace App\Filament\Admin\Resources\SyncRuns\Pages;
 use App\Auth\Permission;
 use App\Filament\Admin\Resources\SyncRuns\SyncRunResource;
 use App\Filament\Concerns\LimitsSearchInput;
+use App\Filament\NotificationText;
 use App\Sync\ApiTokens;
 use App\Sync\QueuedSyncs;
 use App\System\Retention;
@@ -97,14 +98,14 @@ class ManageSyncRuns extends ManageRecords
         try {
             app(QueuedSyncs::class)->start(auth()->user(), $dryRun, $upload);
             Notification::make()->success()->persistent()
-                ->title($dryRun ? __('Trial run queued') : __('EMD sync queued'))
-                ->body($upload === null
+                ->title(NotificationText::of($dryRun ? __('Trial run queued') : __('EMD sync queued')))
+                ->body(NotificationText::of($upload === null
                     ? __('The file is downloaded and processed in the background. Open the run details when it finishes to see the counts and preview.')
-                    : __('The file is processed in the background. Open the run details when it finishes to see the counts and preview.'))
+                    : __('The file is processed in the background. Open the run details when it finishes to see the counts and preview.')))
                 ->send();
         } catch (Throwable $exception) {
             app(QueuedSyncs::class)->discardUpload($upload);
-            Notification::make()->danger()->title(__('EMD sync failed'))->body($exception->getMessage())->send();
+            Notification::make()->danger()->title(__('EMD sync failed'))->body(NotificationText::of($exception->getMessage()))->send();
         }
     }
 }

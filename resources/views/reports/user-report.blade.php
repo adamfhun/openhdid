@@ -15,6 +15,7 @@
         h2 { font-size: 16px; margin: 28px 0 8px; }
         h2:first-child { margin-top: 0; }
         p.note { margin: 0 0 8px; color: {{ $palette['muted'] }}; }
+        p.warning { margin: 0 0 8px; padding: 6px 10px; border-left: 4px solid {{ $palette['accent'] }}; background: color-mix(in srgb, {{ $palette['accent'] }} 10%, {{ $palette['surface'] }}); color: {{ $palette['text'] }}; }
         .scroll { overflow-x: auto; }
         table { border-collapse: collapse; width: 100%; }
         th, td { border: 1px solid color-mix(in srgb, {{ $palette['muted'] }} 25%, {{ $palette['surface'] }}); padding: 5px 8px; text-align: left; white-space: nowrap; }
@@ -35,6 +36,9 @@
     <div class="body">
         @forelse ($report->tables as $table)
             <h2>{{ $table->title }}</h2>
+            @if ($table->warning)
+                <p class="warning">{{ $table->warning }}</p>
+            @endif
             @if ($table->note)
                 <p class="note">{{ $table->note }}</p>
             @endif

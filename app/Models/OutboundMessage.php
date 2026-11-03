@@ -6,10 +6,12 @@ use App\Enums\OutboundMessageStatus;
 use App\Enums\SmsDeliveryStatus;
 use App\Messaging\Channel;
 use App\Messaging\MessageKey;
+use App\Models\Concerns\HasInstantTwins;
 use App\Models\Concerns\HasTimeOrderedUuidKey;
 use Database\Factories\OutboundMessageFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -24,6 +26,7 @@ class OutboundMessage extends Model
     /** @use HasFactory<OutboundMessageFactory> */
     use HasFactory;
 
+    use HasInstantTwins;
     use HasTimeOrderedUuidKey;
 
     public const MAX_ATTEMPTS = 3;
@@ -50,6 +53,16 @@ class OutboundMessage extends Model
             'next_delivery_check_at' => 'datetime',
             'delivery_updated_at' => 'datetime',
         ];
+    }
+
+    /**
+     * The creation time also as an epoch twin, for the SMS budgets that count
+     * the messages sent in a window (they must measure real elapsed time).
+     * It reads as before.
+     */
+    protected function createdAt(): Attribute
+    {
+        return Attribute::make(...$this->instantTwin('created_at', readBack: false));
     }
 
     /** @return BelongsTo<Client, $this> */

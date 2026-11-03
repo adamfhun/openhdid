@@ -23,6 +23,13 @@ class MobileTokenExchange
 {
     public const METHOD = 'sso.entra.mobile';
 
+    /**
+     * The cache key prefix of the one-exchange-per-token guard. A sign-out of
+     * everyone (SignOutEveryone) keeps these keys, so a token exchanged before
+     * a restore cannot be exchanged again after it.
+     */
+    public const REPLAY_KEY_PREFIX = 'oidc.mobile.used.';
+
     public function __construct(
         private readonly OidcClient $oidc,
         private readonly AccountLogin $login,
@@ -64,7 +71,7 @@ class MobileTokenExchange
         // (padding, stray characters) and still verify, so it must not make
         // the same token look new.
         $signedPart = implode('.', array_slice(explode('.', $idToken), 0, 2));
-        if (! Cache::add('oidc.mobile.used.'.hash('sha256', $signedPart), true, $maxAgeSeconds + OidcClient::CLOCK_SKEW_SECONDS)) {
+        if (! Cache::add(self::REPLAY_KEY_PREFIX.hash('sha256', $signedPart), true, $maxAgeSeconds + OidcClient::CLOCK_SKEW_SECONDS)) {
             $this->reject('token_replayed', ['email' => $this->oidc->email($claims, $config)]);
         }
 

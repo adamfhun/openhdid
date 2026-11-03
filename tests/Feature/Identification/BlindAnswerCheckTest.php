@@ -125,7 +125,8 @@ it('never stores or logs the typed answer', function (): void {
     expect($logged)->not->toContain('Titkos')
         ->and(json_encode(IdSessionStep::query()->get()->toArray()))->not->toContain('Titkos')
         ->and($checked)->toMatchArray(['result' => 'mismatch', 'attempt' => 1])
-        ->and($checked)->toHaveKeys(['step_id', 'distance']);
+        ->and($checked)->toHaveKey('step_id')
+        ->and($checked)->not->toHaveKey('distance');
 });
 
 it('keeps the mode of the session when the setting changes, and refuses checks in a session with the buttons', function (): void {
@@ -151,7 +152,7 @@ it('refuses a check by another agent and once the hourly limit is used up', func
     expect(fn () => $this->engine->check($step, 'Árvíztűrő Tükörfúrógép', $colleague))->toThrow(IdentificationException::class);
 
     app(Settings::class)->set(SettingKey::AgentAttemptsPerHour, 1);
-    app(AgentAttemptLimiter::class)->hit($this->agent);
+    app(AgentAttemptLimiter::class)->reserve($this->agent);
 
     expect(fn () => $this->engine->check($step, 'Árvíztűrő Tükörfúrógép', $this->agent))->toThrow(IdentificationException::class)
         ->and($step->fresh()->isPending())->toBeTrue();
@@ -185,4 +186,18 @@ it('runs the blind check on the identification page without ever rendering the h
 
     $page->set('givenAnswer', 'árvíztűrő tükörfúrógép')->call('checkAnswer')
         ->assertSee(trans_choice('{0} The previous answer matched: :answer|{1} The previous answer matched with 1 typo: :answer|[2,*] The previous answer matched with :n typos: :answer', 0, ['n' => 0, 'answer' => 'Árvíztűrő Tükörfúrógép']));
+});
+
+it('keeps the distance of a missed answer out of the step and the audit log, and the typo count of a match', function (): void {
+    $session = $this->engine->start($this->client, $this->agent);
+    $missed = $this->engine->check($this->engine->next($session, $this->agent), 'q', $this->agent);
+
+    expect($missed->check_distance)->toBeNull()
+        ->and(AuditLog::query()->where('event', 'id_session.answer_checked')->sole()->context)->not->toHaveKey('distance');
+
+    $matched = $this->engine->check($this->engine->next($session->fresh(), $this->agent), 'Árvíztűrő Tükörfúrógép', $this->agent);
+    $entry = AuditLog::query()->where('event', 'id_session.answer_checked')->orderByDesc('id')->first();
+    expect($matched->check_result?->value)->toBe('matched')
+        ->and($matched->check_distance)->not->toBeNull()
+        ->and($entry->context)->toHaveKey('distance');
 });

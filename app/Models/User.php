@@ -77,6 +77,19 @@ class User extends Authenticatable implements FilamentUser, HasAppAuthentication
     }
 
     /**
+     * Whatever path deletes a staff row (the list, the edit page, code), the
+     * account is closed by an administrator and signed out first.
+     */
+    protected static function booted(): void
+    {
+        static::deleting(function (User $user): void {
+            if (! $user->isForceDeleting()) {
+                $user->closeForRemoval();
+            }
+        });
+    }
+
+    /**
      * Filament's authenticator-app helpers (secret, QR code, code check) read
      * the secret through this contract; StaffMfa decides when it is used.
      */

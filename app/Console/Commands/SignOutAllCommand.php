@@ -12,7 +12,9 @@ use Illuminate\Console\Command;
  * and on "signout"; on a classic installation the operator runs it by hand
  * after the database was restored. Its last line is machine-readable for
  * the script: "signed-out <staff> <clients> <tokens> <codes> <session store>
- * <cache store> <shared|separate>".
+ * <cache store> <shared|separate>"; the last word says whether the sessions
+ * had a Valkey of their own. Either way the queued jobs stay: on Valkey only
+ * this installation's keys go, by key prefix.
  */
 class SignOutAllCommand extends Command
 {
@@ -20,14 +22,14 @@ class SignOutAllCommand extends Command
         {--force : Do not ask for confirmation}
         {--reason=manual : Why, for the audit entry (for example backup_restore)}';
 
-    protected $description = 'Sign every staff member and client out everywhere (after a restored backup): session epochs, remember-me and mobile tokens, live one-time codes, the session store and the cache';
+    protected $description = 'Sign every staff member and client out everywhere (after a restored backup): session epochs, remember-me and mobile tokens, unused one-time codes, and this installation\'s sessions, cache entries and locks (on Valkey by key prefix: the queue and the replay guards stay)';
 
     public function handle(SignOutEveryone $signOut): int
     {
         $reason = trim((string) $this->option('reason')) ?: 'manual';
 
         if (! $this->option('force')) {
-            $this->components->warn('Every staff member and client is signed out everywhere, in the mobile app too: the session epochs move on, the remember-me and mobile tokens are deleted, the live login links and codes (SMS, mobile, IVR) are used up, and the session store and the cache are emptied (a Valkey database entirely, waiting queue jobs with it when the queue shares it). Stop the queue workers and the scheduler first: emptying the cache drops the locks of running work.');
+            $this->components->warn('Every staff member and client is signed out everywhere, in the mobile app too: the session epochs move on, the remember-me and mobile tokens are deleted, the unused login links and codes (SMS, mobile, IVR) are used up, and the sessions, the cache entries and the locks are deleted. On Valkey only the keys under this installation\'s prefix go (key by key, no FLUSHDB): the queued jobs, the replay guards and the keys of other prefixes stay; a database cache keeps its replay guards, a file or memcached store is emptied whole. Stop the queue workers and the scheduler first: deleting the locks frees running work.');
 
             if (! $this->confirm('Sign everybody out now?')) {
                 $this->line('Nothing changed.');
@@ -45,12 +47,23 @@ class SignOutAllCommand extends Command
             $result['tokens'],
             $result['codes'],
         ));
-        $this->line(sprintf('The session store (%s) and the cache (%s) are empty; audit entry: access.revoked_all (reason %s).', $result['session_store'], $result['cache_store'], $reason));
+        $this->line(sprintf(
+            'Deleted from the session store (%s): %s; from the cache (%s): %s, and %s; audit entry: access.revoked_all (reason %s).',
+            $result['session_store'],
+            self::described($result['session_keys'], 'session key(s)'),
+            $result['cache_store'],
+            self::described($result['cache_keys'], 'cache key(s)'),
+            self::described($result['lock_keys'], 'lock(s)'),
+            $reason,
+        ));
 
-        if ($result['session_store'] === 'redis') {
-            $this->line($result['sessions_separate']
-                ? 'The sessions had a Valkey of their own, which is now empty; the queue in the main Valkey is intact.'
-                : 'The sessions shared the main Valkey: its session and cache databases are empty, waiting queue jobs with them (QUEUE_CONNECTION=redis); the scheduler requeues unsent messages within five minutes.');
+        if ($result['session_store'] === 'redis' || $result['cache_store'] === 'redis') {
+            $sessions = match (true) {
+                $result['session_store'] !== 'redis' => '',
+                $result['sessions_separate'] => ' (the sessions in a Valkey of their own)',
+                default => ' (the sessions in the main Valkey)',
+            };
+            $this->line('On Valkey only the keys under this installation\'s prefix were deleted, key by key'.$sessions.': the queued jobs, the replay guards and the keys of other prefixes are kept.');
         }
 
         $this->line(sprintf(
@@ -65,5 +78,13 @@ class SignOutAllCommand extends Command
         ));
 
         return self::SUCCESS;
+    }
+
+    /**
+     * A count with its noun, or the whole store where nothing was counted.
+     */
+    private static function described(?int $count, string $noun): string
+    {
+        return $count === null ? 'the whole store' : $count.' '.$noun;
     }
 }

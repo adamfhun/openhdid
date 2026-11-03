@@ -22,7 +22,11 @@ use Throwable;
  * the API or a file uploaded on the panel: a web request has a time limit
  * that a large import would hit, leaving the run "running" and the sync
  * lock held. The upload stays on the local disk until the worker has read
- * it (the storage volume is shared), then it is removed.
+ * it (the storage volume is shared), then it is removed, whatever happened:
+ * also when the run is no longer waiting, and when its job is deleted from
+ * the queue (abandon()). The worker claims the run with a conditional
+ * update (queued → running), so a run is either taken by the worker or
+ * abandoned, never both.
  */
 class QueuedSyncs
 {
@@ -93,26 +97,63 @@ class QueuedSyncs
 
     public function execute(string $runId, ?string $upload = null): void
     {
-        $run = SyncRun::query()->findOrFail($runId);
-        if ($run->status !== SyncRunStatus::Queued) {
-            return;
-        }
-
         try {
-            $user = User::query()->find($run->triggered_by_user_id);
-            abort_unless($user !== null, 403);
-            $this->authorize($user);
-            $this->assertUpload($upload);
-            $readers = app(ReaderFactory::class);
-            $reader = $upload === null ? $readers->forApi() : $readers->forFile(Storage::disk('local')->path($upload), basename($upload));
-            app(SyncExternalRecords::class)->run($reader, $user, $run->dry_run, $run);
-        } catch (Throwable $exception) {
-            $this->fail($run->fresh(), $exception->getMessage());
-            throw $exception;
+            // Failed, completed, abandoned or gone meanwhile: nothing to run.
+            if (! $this->claim($runId)) {
+                return;
+            }
+
+            $run = SyncRun::query()->findOrFail($runId);
+
+            try {
+                $user = User::query()->find($run->triggered_by_user_id);
+                abort_unless($user !== null, 403);
+                $this->authorize($user);
+                $this->assertUpload($upload);
+                $readers = app(ReaderFactory::class);
+                $reader = $upload === null ? $readers->forApi() : $readers->forFile(Storage::disk('local')->path($upload), basename($upload));
+                app(SyncExternalRecords::class)->run($reader, $user, $run->dry_run, $run);
+            } catch (Throwable $exception) {
+                $this->fail($run->fresh() ?? $run, $exception->getMessage());
+                throw $exception;
+            }
         } finally {
             // The upload has served its purpose; it must not linger on disk.
             $this->discardUpload($upload);
         }
+    }
+
+    /**
+     * The worker takes a waiting run: only one of the worker and abandon()
+     * can move it out of the queued state.
+     */
+    private function claim(string $runId): bool
+    {
+        return SyncRun::query()->whereKey($runId)->where('status', SyncRunStatus::Queued)
+            ->update(['status' => SyncRunStatus::Running, 'updated_at' => now()]) === 1;
+    }
+
+    /**
+     * A waiting run whose job left the queue without a worker (deleted or
+     * cleared on the Queues page, or never picked up): failed with the
+     * reason, audited, and its upload deleted. A run the worker already
+     * claimed is left to the worker. Returns whether this call abandoned it.
+     */
+    public function abandon(string $runId, string $reason): bool
+    {
+        $message = __('EMD sync abandoned before a worker started it (:reason); the uploaded file was deleted. Start the sync again.', ['reason' => $reason]);
+        $abandoned = SyncRun::query()->whereKey($runId)->where('status', SyncRunStatus::Queued)
+            ->update(['status' => SyncRunStatus::Failed, 'finished_at' => now(), 'error' => $message, 'updated_at' => now()]) === 1;
+
+        if (! $abandoned) {
+            return false;
+        }
+
+        $run = SyncRun::query()->findOrFail($runId);
+        app(Auditor::class)->record('sync.failed', $run, ['error' => $message, 'dry_run' => $run->dry_run, 'abandoned' => true, 'reason' => $reason]);
+        $this->discardUpload($run->file_name === null ? null : Retention::UPLOAD_DIRECTORY.'/'.$run->file_name);
+
+        return true;
     }
 
     public function fail(SyncRun $run, string $message): void

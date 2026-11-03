@@ -24,6 +24,15 @@ final readonly class IvrResult
         return new self(false, 'unknown_code');
     }
 
+    /**
+     * The code identified the caller, but the call stays with the client it
+     * is matched to (someone holds it, it is identified, or it has ended).
+     */
+    public static function codeOkCallKept(IdSession $session): self
+    {
+        return new self(true, 'code_ok_call_kept', $session->id, $session->client_id, $session->client?->name);
+    }
+
     public static function fromSession(IdSession $session): self
     {
         return new self($session->status->isSuccessful(), (string) $session->outcome_reason, $session->id, $session->client_id, $session->client?->name);

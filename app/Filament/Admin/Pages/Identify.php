@@ -2,21 +2,21 @@
 
 namespace App\Filament\Admin\Pages;
 
-use App\Audit\Auditor;
 use App\Auth\Permission;
 use App\CallCenter\CallCenterService;
 use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
 use App\Enums\ClientTier;
 use App\Enums\IdChannel;
-use App\Enums\IdMethod;
 use App\Enums\IdSessionStatus;
 use App\Enums\StepVerdict;
 use App\Filament\Actions\WrapUpNoteAction;
 use App\Filament\Admin\Resources\Clients\ClientResource;
+use App\Filament\NotificationText;
 use App\Identification\ClientAnswers;
 use App\Identification\CurrentIdentification;
 use App\Identification\IdentificationException;
+use App\Identification\ManualIdentification;
 use App\Identification\PinService;
 use App\Identification\QaRetryLimit;
 use App\Identification\QaSessionEngine;
@@ -25,6 +25,7 @@ use App\Models\Client;
 use App\Models\IdSession;
 use App\Models\IdSessionStep;
 use App\Models\User;
+use App\Support\HuDate;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
@@ -77,6 +78,14 @@ class Identify extends Page
     #[Locked]
     public ?string $checkedStepId = null;
 
+    /**
+     * The pass the call of the address carries for another client, as the
+     * page showed it: the call does not move here until the agent confirms,
+     * and the confirmation holds only for this very pass.
+     */
+    #[Locked]
+    public ?string $identifiedPassId = null;
+
     public static function canAccess(): bool
     {
         return auth()->user()?->can(Permission::IdentificationRun->value) ?? false;
@@ -100,7 +109,13 @@ class Identify extends Page
             } elseif (! $this->isHandledCall($call)) {
                 throw new HttpException(403, __('This call belongs to a service level you do not handle.'));
             } elseif ($call->client_id !== $this->clientId) {
-                $this->reassignCall($call);
+                // An identified call moves only after a confirmation: the
+                // move ends that identification.
+                if (($pass = $call->passedSession()) !== null && $call->isAttachableBy($this->agent())) {
+                    $this->identifiedPassId = $pass->id;
+                } else {
+                    $this->reassignCall($call);
+                }
             }
         }
 
@@ -138,6 +153,86 @@ class Identify extends Page
     }
 
     /**
+     * The call of the address, identified for another client and not moved
+     * here yet (identifiedPassId), with that pass as it stands now.
+     *
+     * @return array{call: Call, pass: ?IdSession}|null
+     */
+    public function getIdentifiedCallElsewhere(): ?array
+    {
+        if ($this->identifiedPassId === null || ! $this->call || ! Str::isUuid($this->call)) {
+            return null;
+        }
+
+        $call = $this->handledCalls()->whereKey($this->call)->first();
+
+        if ($call === null || $call->client_id === $this->clientId || ! $call->isAttachableBy($this->agent())) {
+            return null;
+        }
+
+        return ['call' => $call, 'pass' => $call->passedSession()];
+    }
+
+    /**
+     * Why no identification of this client may start: the call is identified
+     * as someone else until it is moved here.
+     */
+    public function blockedByIdentifiedCall(): ?string
+    {
+        $pending = $this->getIdentifiedCallElsewhere();
+
+        return $pending === null || $pending['pass'] === null ? null : __('Move the call to this client first; it is identified as :client.', ['client' => $pending['call']->client?->name ?? '?']);
+    }
+
+    /**
+     * Move the identified call here, after the agent confirmed it against the
+     * pass the page showed; the move ends that identification. A pass that
+     * changed meanwhile stops the move, and the page shows the new one.
+     */
+    public function moveIdentifiedCallAction(): Action
+    {
+        return Action::make('moveIdentifiedCall')
+            ->label(__('Move the call here'))
+            ->icon('heroicon-o-arrow-right-circle')
+            ->color('warning')
+            ->visible(fn (): bool => ($this->getIdentifiedCallElsewhere()['pass'] ?? null) !== null)
+            ->requiresConfirmation()
+            ->modalHeading(__('Move the identified call to this client?'))
+            ->modalDescription(function (): string {
+                $pending = $this->getIdentifiedCallElsewhere();
+                $pass = $pending['pass'] ?? null;
+
+                return __('The call is identified as :client (:method, :time). Moving it to :target ends that identification: the caller has to be identified again as :target.', [
+                    'client' => $pending['call']->client?->name ?? '?',
+                    'method' => $pass?->method->label() ?? '?',
+                    'time' => $pass?->decided_at?->format(HuDate::DATETIME) ?? '?',
+                    'target' => $this->getClient()->name,
+                ]);
+            })
+            ->modalSubmitActionLabel(__('Move the call'))
+            ->action(function (): void {
+                $pending = $this->getIdentifiedCallElsewhere();
+
+                if ($pending === null) {
+                    return;
+                }
+
+                try {
+                    app(CallCenterService::class)->reassignToClient($pending['call'], $this->getClient(), $this->agent(), $this->identifiedPassId);
+                } catch (IdentificationException|AuthorizationException $e) {
+                    // Shown again against the pass the call carries now.
+                    $this->identifiedPassId = $pending['call']->fresh()->passedSession()?->id;
+                    Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
+
+                    return;
+                }
+
+                $this->identifiedPassId = null;
+                Notification::make()->title(__('The call has been moved here; its previous identification has ended.'))->success()->send();
+            });
+    }
+
+    /**
      * Methods the agent can use right now, with the reason when one is not usable.
      *
      * @return array<string, array{label: string, enabled: bool, note: ?string}>
@@ -145,6 +240,13 @@ class Identify extends Page
     public function availableMethods(): array
     {
         $client = $this->getClient();
+
+        if (($blocked = $this->blockedByIdentifiedCall()) !== null) {
+            return [
+                'qa' => ['label' => __('Question & answer'), 'enabled' => false, 'note' => $blocked],
+                'pin' => ['label' => __('PIN'), 'enabled' => false, 'note' => $blocked],
+            ];
+        }
 
         return [
             'qa' => [
@@ -323,6 +425,22 @@ class Identify extends Page
             && (auth()->user()?->can(Permission::IdentificationPinVerify->value) ?? false);
     }
 
+    /**
+     * The server-side side of the disabled buttons: nothing identifies this
+     * client while the call is identified as another one (the buttons can
+     * be called directly).
+     */
+    private function refusedWhileCallElsewhere(): bool
+    {
+        if (($blocked = $this->blockedByIdentifiedCall()) === null) {
+            return false;
+        }
+
+        Notification::make()->title(NotificationText::of($blocked))->danger()->send();
+
+        return true;
+    }
+
     public function canIdentifyManually(): bool
     {
         return auth()->user()?->can(Permission::IdentificationManual->value) ?? false;
@@ -458,15 +576,7 @@ class Identify extends Page
      */
     public function getLatestOutcome(): ?IdSession
     {
-        $call = $this->getCall();
-
-        return IdSession::query()
-            ->where('client_id', $this->clientId)
-            ->where('agent_user_id', auth()->id())
-            ->whereNot('status', IdSessionStatus::Open)
-            ->when($call !== null, fn ($q) => $q->where('call_id', $call->id), fn ($q) => $q->where('decided_at', '>=', now()->subMinutes(CurrentIdentification::RECENT_MINUTES)))
-            ->latest('decided_at')
-            ->first();
+        return app(CurrentIdentification::class)->latestOutcome($this->agent(), $this->getClient(), $this->getCall());
     }
 
     public function dashboardUrl(): string
@@ -476,12 +586,16 @@ class Identify extends Page
 
     public function startQa(): void
     {
+        if ($this->refusedWhileCallElsewhere()) {
+            return;
+        }
+
         try {
             $session = app(QaSessionEngine::class)->start($this->getClient(), $this->agent(), $this->getHeldCall());
             $this->sessionId = $session->id;
             $this->checkedStepId = null;
         } catch (IdentificationException $e) {
-            Notification::make()->title($e->getMessage())->danger()->send();
+            Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
         }
     }
 
@@ -496,7 +610,7 @@ class Identify extends Page
         try {
             $session = app(QaSessionEngine::class)->decide($step, StepVerdict::from($verdict), $this->agent());
         } catch (IdentificationException $e) {
-            Notification::make()->title($e->getMessage())->danger()->send();
+            Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
 
             return;
         }
@@ -521,7 +635,7 @@ class Identify extends Page
         try {
             $checked = app(QaSessionEngine::class)->check($step, $given, $this->agent());
         } catch (IdentificationException $e) {
-            Notification::make()->title($e->getMessage())->danger()->send();
+            Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
 
             return;
         }
@@ -554,7 +668,7 @@ class Identify extends Page
 
     public function verifyPin(): void
     {
-        if (! $this->agentPinEnabled()) {
+        if (! $this->agentPinEnabled() || $this->refusedWhileCallElsewhere()) {
             return;
         }
 
@@ -564,7 +678,7 @@ class Identify extends Page
         // the agent or the client.
         if (! ctype_digit($this->pin) || strlen($this->pin) < PinService::MIN_ALLOWED_LENGTH || strlen($this->pin) > PinService::MAX_ALLOWED_LENGTH) {
             $this->pin = '';
-            Notification::make()->title(__('A PIN is made of digits only, at least :min and at most :max of them.', ['min' => PinService::MIN_ALLOWED_LENGTH, 'max' => PinService::MAX_ALLOWED_LENGTH]))->danger()->send();
+            Notification::make()->title(NotificationText::of(__('A PIN is made of digits only, at least :min and at most :max of them.', ['min' => PinService::MIN_ALLOWED_LENGTH, 'max' => PinService::MAX_ALLOWED_LENGTH])))->danger()->send();
 
             return;
         }
@@ -572,7 +686,7 @@ class Identify extends Page
         try {
             $session = app(PinService::class)->verify($this->getClient(), $this->pin, IdChannel::Manual, $this->agent(), $this->getHeldCall());
         } catch (IdentificationException $e) {
-            Notification::make()->title($e->getMessage())->danger()->send();
+            Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
 
             return;
         }
@@ -596,52 +710,30 @@ class Identify extends Page
             ->visible(fn () => $this->canIdentifyManually() && ! $this->getClient()->isClosed())
             // Like every other method: a client whose package no longer counts
             // cannot be identified, and the button says so instead of hiding.
-            ->disabled(fn () => ! app(ClientTiers::class)->isEntitled($this->getClient()))
-            ->tooltip(fn () => app(ClientTiers::class)->isEntitled($this->getClient()) ? null : __('The client\'s account is closed or no longer entitled; it cannot be identified.'))
+            ->disabled(fn () => ! app(ClientTiers::class)->isEntitled($this->getClient()) || $this->blockedByIdentifiedCall() !== null)
+            ->tooltip(fn () => $this->blockedByIdentifiedCall() ?? (app(ClientTiers::class)->isEntitled($this->getClient()) ? null : __('The client\'s account is closed or no longer entitled; it cannot be identified.')))
             ->modalHeading(fn () => __('Identify :name manually', ['name' => $this->getClient()->name]))
             ->modalDescription(__('Use this only when the caller could be identified another way (for example a callback to a registered number or a supervisor\'s approval). The reason is recorded in the audit log with your name.'))
             ->schema([
-                Textarea::make('reason')->label(__('Reason'))->required()->minLength(10)->maxLength(500)->rows(3)
+                Textarea::make('reason')->label(__('Reason'))->required()->trim()->minLength(ManualIdentification::MIN_REASON_LENGTH)->maxLength(ManualIdentification::MAX_REASON_LENGTH)->rows(3)
                     ->placeholder(__('How was the caller identified, and who approved it?')),
             ])
             ->modalSubmitActionLabel(__('Record as identified'))
             ->action(function (array $data): void {
+                if ($this->refusedWhileCallElsewhere()) {
+                    return;
+                }
+
                 try {
-                    $session = $this->recordManualIdentification(trim($data['reason']));
+                    $session = app(ManualIdentification::class)->record($this->getClient(), $this->agent(), $this->getHeldCall(), (string) $data['reason']);
                 } catch (IdentificationException $e) {
-                    Notification::make()->title($e->getMessage())->danger()->send();
+                    Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
 
                     return;
                 }
 
                 $this->notifyOutcome($session);
             });
-    }
-
-    private function recordManualIdentification(string $reason): IdSession
-    {
-        $client = $this->getClient();
-        $call = $this->getHeldCall();
-
-        if ($client->isClosed() || ! app(ClientTiers::class)->isEntitled($client)) {
-            throw new IdentificationException(__('The client\'s account is closed or no longer entitled; it cannot be identified.'));
-        }
-
-        $session = IdSession::query()->create([
-            'client_id' => $client->id,
-            'agent_user_id' => auth()->id(),
-            'call_id' => $call?->id,
-            'channel' => IdChannel::Manual,
-            'method' => IdMethod::Manual,
-            'status' => IdSessionStatus::Open,
-            'started_at' => now(),
-        ]);
-        $session->forceFill(['status' => IdSessionStatus::Passed, 'outcome_reason' => 'manual:'.$reason, 'decided_at' => now()])->save();
-
-        app(Auditor::class)->record('id_session.manual', $session, ['client_id' => $client->id, 'call_id' => $call?->id, 'reason' => $reason], auth()->user());
-        app(ClientPhones::class)->verifyFromIdentifiedCall($session);
-
-        return $session;
     }
 
     public function wrapUpNoteAction(): Action
@@ -675,7 +767,7 @@ class Identify extends Page
                 try {
                     app(CallCenterService::class)->release($call, $this->agent());
                 } catch (ValidationException $e) {
-                    Notification::make()->title($e->validator->errors()->first())->warning()->send();
+                    Notification::make()->title(NotificationText::of($e->validator->errors()->first()))->warning()->send();
 
                     return;
                 }
@@ -692,7 +784,7 @@ class Identify extends Page
             return;
         }
 
-        $notification = Notification::make()->title(__('Identification: :status', ['status' => __($session->status->value)]));
+        $notification = Notification::make()->title(NotificationText::of(__('Identification: :status', ['status' => __($session->status->value)])));
 
         match ($session->status) {
             IdSessionStatus::Passed => $notification->success(),

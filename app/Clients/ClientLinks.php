@@ -26,9 +26,13 @@ class ClientLinks
     /** Why a link ended on its own: the sponsor no longer has an implicit premium package. */
     public const END_REASON_SPONSOR_INELIGIBLE = 'sponsor_ineligible';
 
+    /** Why a link ended on its own: the linked client got an implicit premium package of its own. */
+    public const END_REASON_LINKED_OWN_PREMIUM = 'linked_own_premium';
+
     public function __construct(
         private readonly ClientTiers $tiers,
         private readonly Auditor $auditor,
+        private readonly LinkEndReport $report,
     ) {}
 
     /**
@@ -221,21 +225,80 @@ class ClientLinks
      */
     public function sweepIneligibleSponsors(): array
     {
-        $premium = $this->tiers->packages(ClientTier::Premium);
+        $premium = $this->tiers->rawNames($this->tiers->packages(ClientTier::Premium));
         $total = ['links' => 0, 'reopened' => 0, 'kept_closed' => 0];
+        $add = function (array $done) use (&$total): void {
+            foreach ($done as $what => $count) {
+                $total[$what] += $count;
+            }
+        };
 
         Client::query()
-            ->whereHas('sponsoredLinks', fn (Builder $q) => $q->whereNull('ended_at'))
-            ->where(fn (Builder $q) => $q->whereNull('implicit_package')->orWhereNotIn('implicit_package', $this->tiers->rawNames($premium)))
-            ->chunkById(100, function ($sponsors) use (&$total): void {
+            ->whereHas('sponsoredLinks', fn (Builder $query) => $query->whereNull('ended_at'))
+            ->where(fn (Builder $query) => $query->whereNull('implicit_package')->orWhereNotIn('implicit_package', $premium))
+            ->chunkById(100, function ($sponsors) use ($add): void {
                 foreach ($sponsors as $sponsor) {
-                    foreach ($this->endSponsorLinks($sponsor) as $what => $count) {
-                        $total[$what] += $count;
-                    }
+                    $add($this->endSponsorLinks($sponsor));
+                }
+            });
+
+        // The other side: a linked client whose own implicit package is now premium.
+        Client::query()
+            ->whereHas('activeSponsorLink')
+            ->whereIn('implicit_package', $premium)
+            ->chunkById(100, function ($linkedClients) use ($add): void {
+                foreach ($linkedClients as $linked) {
+                    $add($this->endLinkOfSelfSponsored($linked));
                 }
             });
 
         return $total;
+    }
+
+    /**
+     * A linked client that gets an implicit premium package of its own (the
+     * directory or an admin changed it, or its package joined the premium
+     * list) no longer needs a sponsor: the link has no job left, and keeping
+     * it would close the client with a sponsor it does not depend on. The
+     * link ends with END_REASON_LINKED_OWN_PREMIUM, audited; a client closed
+     * only with its sponsor reopens, unless the directory dropped or
+     * reclassified it meanwhile (keepClosedReason()).
+     *
+     * @return array{links: int, reopened: int, kept_closed: int}
+     */
+    public function endLinkOfSelfSponsored(Client $linked): array
+    {
+        $done = ['links' => 0, 'reopened' => 0, 'kept_closed' => 0];
+
+        if (! $this->tiers->hasImplicitPremium($linked)) {
+            return $done;
+        }
+
+        $linked->loadMissing('externalRecord');
+
+        $linked->activeSponsorLink()->with('sponsor.externalRecord')->get()->each(function (ClientLink $link) use ($linked, &$done): void {
+            $link->setRelation('linked', $linked);
+            $this->unlink($link, null, self::END_REASON_LINKED_OWN_PREMIUM);
+            $this->report->linkEnded(self::END_REASON_LINKED_OWN_PREMIUM);
+            $done['links']++;
+
+            if (! $linked->isClosed() || $linked->closed_reason !== self::CLOSE_REASON_SPONSOR) {
+                return;
+            }
+
+            if ($this->keepClosed($linked, $link->sponsor_client_id)) {
+                $done['kept_closed']++;
+
+                return;
+            }
+
+            $linked->reopen();
+            $this->auditor->record('account.reopened', $linked, ['reason' => self::END_REASON_LINKED_OWN_PREMIUM, 'sponsor_id' => $link->sponsor_client_id]);
+            $this->report->reopened($linked, $link->sponsor);
+            $done['reopened']++;
+        });
+
+        return $done;
     }
 
     /**
@@ -251,6 +314,7 @@ class ClientLinks
 
         $sponsor->activeLinks()->with('linked.externalRecord')->get()->each(function (ClientLink $link) use ($sponsor, &$done): void {
             $this->unlink($link, null, self::END_REASON_SPONSOR_INELIGIBLE);
+            $this->report->linkEnded(self::END_REASON_SPONSOR_INELIGIBLE);
             $done['links']++;
 
             $linked = $link->linked;
@@ -266,6 +330,7 @@ class ClientLinks
 
             $linked->reopen();
             $this->auditor->record('account.reopened', $linked, ['reason' => self::END_REASON_SPONSOR_INELIGIBLE, 'sponsor_id' => $sponsor->id]);
+            $this->report->reopened($linked, $sponsor);
             $done['reopened']++;
         });
 
@@ -344,12 +409,21 @@ class ClientLinks
 
     /**
      * Sponsor closed: close every actively linked client that is still open.
+     * A linked client with an implicit premium package of its own does not
+     * depend on the sponsor: its link ends instead (endLinkOfSelfSponsored()),
+     * in case the change of its package has not been swept yet.
      */
     public function closeLinkedClients(Client $sponsor): int
     {
         $count = 0;
 
         $sponsor->activeLinks()->with('linked')->get()->each(function (ClientLink $link) use (&$count): void {
+            if ($link->linked !== null && $this->tiers->hasImplicitPremium($link->linked)) {
+                $this->endLinkOfSelfSponsored($link->linked);
+
+                return;
+            }
+
             if ($link->linked !== null && ! $link->linked->isClosed()) {
                 $link->linked->close(self::CLOSE_REASON_SPONSOR);
                 $this->auditor->record('account.closed', $link->linked, ['reason' => self::CLOSE_REASON_SPONSOR, 'sponsor_id' => $link->sponsor_client_id]);

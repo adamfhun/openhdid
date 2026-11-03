@@ -14,11 +14,13 @@ use App\Enums\PrincipalType;
 use App\Messaging\MessageKey;
 use App\Messaging\Messenger;
 use App\Models\Client;
+use App\Models\OneTimeCode;
 use App\Models\OutboundMessage;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Sms\SmsDestinations;
 use App\Sync\AccountProvisioner;
+use App\System\Installation;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\RateLimiter;
@@ -119,10 +121,14 @@ class ClientPasswordlessLogin
         }
 
         if (! $this->sendMagicLinkIfEligible($email)) {
-            $this->codes->matchIssueCost();
+            $this->codes->matchHashCost();
         }
     }
 
+    /**
+     * Whether a secret was hashed (a link issued, or one that lost the race
+     * with a simultaneous request of the same client).
+     */
     private function sendMagicLinkIfEligible(string $email): bool
     {
         if ($this->tooManyRequestsFor($email, self::METHOD_MAGIC_LINK)) {
@@ -135,7 +141,13 @@ class ClientPasswordlessLogin
             return false;
         }
 
-        $this->issueMagicLink($client);
+        try {
+            $this->issueMagicLink($client);
+        } catch (LockTimeoutException) {
+            // Another request of the client is issuing a link this moment:
+            // this one issues nothing (the hashing was spent all the same).
+            $this->auditor->record('login.request_throttled', $client, ['method' => self::METHOD_MAGIC_LINK, 'address' => $client->email, 'reason' => 'concurrent_issue']);
+        }
 
         return true;
     }
@@ -153,7 +165,7 @@ class ClientPasswordlessLogin
         ['token' => $token, 'record' => $record] = $this->codes->issueToken($client, OneTimeCodePurpose::MagicLink, $ttl, $client->email);
 
         if ($revealed) {
-            Cache::put(self::REVEALED_LINK_PREFIX.$record->id, $sentBy ?? '?', now()->addMinutes($ttl));
+            Cache::put(Installation::key(self::REVEALED_LINK_PREFIX.$record->id), $sentBy ?? '?', now()->addMinutes($ttl));
         }
 
         $url = $this->landingUrl($client, $token);
@@ -197,7 +209,7 @@ class ClientPasswordlessLogin
         }
 
         $client = $this->login->assertEligible($client, PrincipalType::Client, self::METHOD_MAGIC_LINK);
-        $revealedTo = Cache::pull(self::REVEALED_LINK_PREFIX.$record->id);
+        $revealedTo = Cache::pull(Installation::key(self::REVEALED_LINK_PREFIX.$record->id));
         $this->login->loginToSession($client, self::METHOD_MAGIC_LINK, context: $revealedTo === null ? [] : ['link_revealed_to' => $revealedTo]);
 
         return $client;
@@ -240,10 +252,14 @@ class ClientPasswordlessLogin
         }
 
         if (! $this->sendOtpIfEligible($email)) {
-            $this->codes->matchIssueCost();
+            $this->codes->matchHashCost();
         }
     }
 
+    /**
+     * Whether a secret was hashed (a code issued, or one that lost the race
+     * with a simultaneous request of the same client).
+     */
     private function sendOtpIfEligible(string $email): bool
     {
         if ($this->tooManyRequestsFor($email, self::METHOD_OTP_SMS)) {
@@ -257,15 +273,22 @@ class ClientPasswordlessLogin
         }
 
         // The primary number, or the first other one an SMS may go to (a landline
-        // cannot receive the code); no code is issued while none may.
+        // cannot receive the code), among the numbers vouched for the sign-in:
+        // from the directory, added by the helpdesk, or confirmed. No code is
+        // issued while none may get it.
         $client->load('phoneNumbers');
-        $phone = app(SmsDestinations::class)->targetFor($client);
+        $destinations = app(SmsDestinations::class);
+        $phone = $destinations->signInTargetFor($client);
 
         if ($phone === null) {
             $primary = $client->primaryPhoneNumber();
             $this->auditor->record('login.otp_refused', $client, [
-                'reason' => $primary === null ? 'no_phone_number' : 'no_sms_number',
-                'sms_refusal' => $primary === null ? null : app(SmsDestinations::class)->refusal($primary)?->value,
+                'reason' => match (true) {
+                    $primary === null => 'no_phone_number',
+                    $destinations->targetFor($client) !== null => 'no_sign_in_number',
+                    default => 'no_sms_number',
+                },
+                'sms_refusal' => $primary === null ? null : $destinations->refusal($primary)?->value,
             ]);
 
             return false;
@@ -282,71 +305,96 @@ class ClientPasswordlessLogin
         }
 
         $sent = false;
+        $hashed = false;
 
-        // Count and send under one lock per number, so that two overlapping
-        // requests cannot both pass the budget.
-        Cache::lock('sms-budget:'.$phone, 10)->block(5, function () use ($client, $phone, &$sent): void {
-            if (($window = $this->smsBudgetExhausted($phone)) !== null) {
-                $this->auditor->record('message.refused', $client, [
-                    'channel' => 'sms',
-                    'template_key' => MessageKey::LoginOtpSms->value,
-                    'recipient' => $phone,
-                    'reason' => 'sms_limit_per_'.$window,
-                    'limit' => $this->settings->int(self::NUMBER_BUDGETS[$window][0]),
-                ]);
+        // Count and send under the client's lock and the number's lock, always
+        // in this order, so that two overlapping requests cannot both pass
+        // the budget, neither for one number nor for one client.
+        try {
+            Cache::lock(Installation::lockName('sms-budget:client:'.$client->id), 10)->block(5, fn () => Cache::lock(Installation::lockName('sms-budget:'.$phone), 10)->block(5, function () use ($client, $phone, &$sent, &$hashed): void {
+                if (($exhausted = $this->smsBudgetExhausted($phone, $client)) !== null) {
+                    $this->auditor->record('message.refused', $client, [
+                        'channel' => 'sms',
+                        'template_key' => MessageKey::LoginOtpSms->value,
+                        'recipient' => $phone,
+                        'reason' => 'sms_limit_per_'.$exhausted['window'],
+                        'scope' => $exhausted['scope'],
+                        'limit' => $this->settings->int(self::NUMBER_BUDGETS[$exhausted['window']][0]),
+                    ]);
 
-                return;
-            }
+                    return;
+                }
 
-            if (! $this->caps->admit(LoginMessageCaps::CHANNEL_SMS, self::METHOD_OTP_SMS)) {
-                return;
-            }
+                if (! $this->caps->admit(LoginMessageCaps::CHANNEL_SMS, self::METHOD_OTP_SMS)) {
+                    return;
+                }
 
-            ['code' => $code] = $this->codes->issueNumeric(
-                $client,
-                OneTimeCodePurpose::LoginOtp,
-                $this->settings->int(SettingKey::ClientLoginOtpSmsLength),
-                $this->settings->int(SettingKey::ClientLoginOtpSmsTtlMinutes),
-                $this->settings->int(SettingKey::ClientLoginOtpMaxAttempts),
-                $phone,
-            );
+                try {
+                    ['code' => $code] = $this->codes->issueNumeric(
+                        $client,
+                        OneTimeCodePurpose::LoginOtp,
+                        $this->settings->int(SettingKey::ClientLoginOtpSmsLength),
+                        $this->settings->int(SettingKey::ClientLoginOtpSmsTtlMinutes),
+                        $this->settings->int(SettingKey::ClientLoginOtpMaxAttempts),
+                        $phone,
+                    );
+                } catch (LockTimeoutException) {
+                    // Another request of the client is issuing a code this
+                    // moment: this one sends nothing (the hashing was spent).
+                    $hashed = true;
+                    $this->auditor->record('login.request_throttled', $client, ['method' => self::METHOD_OTP_SMS, 'address' => $phone, 'reason' => 'concurrent_issue']);
 
-            $this->messenger->sendTemplate(MessageKey::LoginOtpSms, $client, [
-                'code' => $code,
-                'minutes' => (string) $this->settings->int(SettingKey::ClientLoginOtpSmsTtlMinutes),
-            ], $phone);
-            $this->auditor->record('login.otp_sent', $client, ['phone' => $phone]);
-            $sent = true;
-        });
+                    return;
+                }
 
-        return $sent;
+                $this->messenger->sendTemplate(MessageKey::LoginOtpSms, $client, [
+                    'code' => $code,
+                    'minutes' => (string) $this->settings->int(SettingKey::ClientLoginOtpSmsTtlMinutes),
+                ], $phone);
+                $this->auditor->record('login.otp_sent', $client, ['phone' => $phone]);
+                $sent = true;
+            }));
+        } catch (LockTimeoutException) {
+            // The budget is being counted by another request.
+            $this->auditor->record('login.request_throttled', $client, ['method' => self::METHOD_OTP_SMS, 'address' => $phone, 'reason' => 'number_busy']);
+        }
+
+        return $sent || $hashed;
     }
 
     /**
-     * The window ('minute', 'hour' or 'day') whose login-code budget this
-     * number has used up, or null while another code may be sent.
+     * The window ('minute', 'hour' or 'day') whose login-code budget is used
+     * up, and by what ('number': codes to this number, whoever asked;
+     * 'client': codes to this client, whichever number), or null while
+     * another code may be sent. One budget for both, so changing the
+     * primary number sends no more codes.
+     *
+     * @return array{window: string, scope: string}|null
      */
-    private function smsBudgetExhausted(string $phone): ?string
+    private function smsBudgetExhausted(string $phone, Client $client): ?array
     {
         foreach (self::NUMBER_BUDGETS as $window => [$setting, $seconds]) {
-            $sent = OutboundMessage::query()
+            $limit = $this->settings->int($setting);
+            $since = now()->subSeconds($seconds);
+            // Two queries rather than an OR, so each uses its index.
+            $sent = fn (string $column, string $value): int => OutboundMessage::query()
                 ->where('template_key', MessageKey::LoginOtpSms)
-                ->where('recipient', $phone)
-                ->where('created_at', '>=', now()->subSeconds($seconds))
+                ->where($column, $value)
+                ->whereInstant('created_at', '>=', $since)
                 ->count();
 
-            if ($sent >= $this->settings->int($setting)) {
-                return $window;
+            if ($sent('recipient', $phone) >= $limit) {
+                return ['window' => $window, 'scope' => 'number'];
+            }
+
+            if ($sent('client_id', $client->id) >= $limit) {
+                return ['window' => $window, 'scope' => 'client'];
             }
         }
 
         return null;
     }
 
-    /**
-     * Seconds the portal waits before offering the code again (one per
-     * minute by default).
-     */
     /**
      * How many digits the SMS login code has now: the portal field asks for
      * exactly these, and the check refuses any other length before the code
@@ -357,6 +405,10 @@ class ClientPasswordlessLogin
         return max(self::OTP_MIN_LENGTH, min(self::OTP_MAX_LENGTH, $this->settings->int(SettingKey::ClientLoginOtpSmsLength)));
     }
 
+    /**
+     * Seconds the portal waits before offering the code again (one per
+     * minute by default).
+     */
     public function otpRetryAfterSeconds(): int
     {
         return (int) ceil(60 / max(1, $this->settings->int(SettingKey::ClientLoginOtpSmsMaxPerNumberPerMinute)));
@@ -385,8 +437,12 @@ class ClientPasswordlessLogin
 
         // Only a guess against a live code counts towards the lockout: a
         // stranger posting codes for an address that never asked for one
-        // can neither lock the account nor learn that it exists.
+        // can neither lock the account nor learn that it exists. Every
+        // refusal spends two hashes' work, as a wrong guess at a live code
+        // does (its compare and the replaced-code compare), so the answer
+        // time does not tell these cases apart either.
         if ($client === null || ! $this->codes->hasUsable($client, OneTimeCodePurpose::LoginOtp)) {
+            $this->spendRefusalHashCost();
             $this->login->recordRejection(PrincipalType::Client, self::METHOD_OTP_SMS, LoginRejection::InvalidCredentials, ['email' => $email, 'detail' => $client === null ? 'unknown_email' : 'no_live_code'], $client);
 
             throw new LoginRejectedException(LoginRejection::InvalidCredentials);
@@ -397,31 +453,75 @@ class ClientPasswordlessLogin
         // so overlapping requests cannot all pass a lockout check made
         // before any of them was counted.
         try {
-            $verified = Cache::lock(self::OTP_LOCK_PREFIX.$client->id, 10)->block(5, function () use ($client, $code): bool {
+            $record = Cache::lock(Installation::lockName(self::OTP_LOCK_PREFIX.$client->id), 10)->block(5, function () use ($client, $code): ?OneTimeCode {
                 $client->refresh();
-                $this->lockout->assertNotLocked($client, self::METHOD_OTP_SMS, answer: LoginRejection::InvalidCredentials);
 
-                if ($this->codes->verify($client, OneTimeCodePurpose::LoginOtp, $code)) {
-                    return true;
+                try {
+                    $this->lockout->assertNotLocked($client, self::METHOD_OTP_SMS, answer: LoginRejection::InvalidCredentials);
+                } catch (LoginRejectedException $e) {
+                    $this->spendRefusalHashCost();
+
+                    throw $e;
+                }
+
+                if (($record = $this->codes->verifyRecord($client, OneTimeCodePurpose::LoginOtp, $code)) !== null) {
+                    return $record;
+                }
+
+                // The client's own previous code, replaced by a newer request
+                // (anyone may ask for one with the address): the owner, not a
+                // guesser, so it does not count towards the lockout.
+                if ($this->codes->matchesReplaced($client, OneTimeCodePurpose::LoginOtp, $code)) {
+                    $this->login->recordRejection(PrincipalType::Client, self::METHOD_OTP_SMS, LoginRejection::InvalidCredentials, ['email' => $client->email, 'detail' => 'replaced_code'], $client);
+
+                    return null;
                 }
 
                 $this->lockout->recordFailure($client, self::METHOD_OTP_SMS);
 
-                return false;
+                return null;
             });
         } catch (LockTimeoutException) {
-            $verified = false;
+            $this->spendRefusalHashCost();
+            $record = null;
         }
 
-        if (! $verified) {
+        if ($record === null) {
             throw new LoginRejectedException(LoginRejection::InvalidCredentials);
         }
 
         $client = $this->login->assertEligible($client, PrincipalType::Client, self::METHOD_OTP_SMS);
         $this->lockout->recordSuccess($client);
-        $this->login->loginToSession($client, self::METHOD_OTP_SMS);
+        $this->login->loginToSession($client, self::METHOD_OTP_SMS, context: $this->numberContext($client, $record->destination));
 
         return $client;
+    }
+
+    /**
+     * The work of two hash compares, for the refusals that compare nothing.
+     */
+    private function spendRefusalHashCost(): void
+    {
+        $this->codes->matchHashCost();
+        $this->codes->matchHashCost();
+    }
+
+    /**
+     * Where the number that got the code came from, for the sign-in's audit
+     * entry: a code sent to a number vouches for the account only as far as
+     * the number does.
+     *
+     * @return array{number_source: ?string, number_verified_via: ?string, number_vouched_by: ?string}
+     */
+    private function numberContext(Client $client, ?string $destination): array
+    {
+        $number = $destination === null ? null : $client->phoneNumbers()->where('number_e164', $destination)->first();
+
+        return [
+            'number_source' => $number?->source?->value,
+            'number_verified_via' => $number?->verified_via?->value,
+            'number_vouched_by' => $number?->verified_by_user_id,
+        ];
     }
 
     /**

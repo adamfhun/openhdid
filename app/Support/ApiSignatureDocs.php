@@ -72,6 +72,7 @@ The payload is four lines joined with a single line feed (`\n`, byte 0x0A), with
 ```
 
 - Sign the bytes you send. Serialise the JSON body once, sign that string and send the same string: a library that re-serialises it (other key order, spaces, escaping) breaks the signature.
+- Send the body as JSON or form-urlencoded. multipart/form-data is refused for signed requests (`unsigned_body`): its fields are not part of the raw body, so the signature would not cover them.
 - The URI starts with `/api/v1/...` (no scheme or host) and keeps the query string's parameter order and percent-encoding as sent. Because the URI is signed, a captured signature is useless for any other call.
 - The secret is used as UTF-8 bytes, as given.
 - Keep the server clock synchronised (NTP): a timestamp more than {ttl} seconds off is refused.
@@ -103,6 +104,7 @@ Every rejection returns `401` with a JSON `message`; the reason is recorded in t
 | `stale_timestamp` | Stale or missing timestamp. | `X-Timestamp` missing or more than {ttl} s off |
 | `bad_signature` | Invalid signature. | the signature does not match the payload |
 | `replayed` | Replayed request. | the same signature was already used |
+| `unsigned_body` | Signed requests need a raw body: send JSON or form-urlencoded, not multipart/form-data. | a signed request with a multipart body, or with fields but no raw body |
 
 ### Changing the secret
 

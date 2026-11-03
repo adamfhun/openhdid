@@ -311,3 +311,88 @@ it('names the linked clients a closed sponsor\'s package change reopens, and say
     $mailbox->flush();
     expect(collect($mailbox->pull())->pluck('body')->filter()->implode(' '))->toContain(__(':n linked client(s) closed with this sponsor reopened, because their link ended.', ['n' => 1]));
 });
+
+it('ends the link of a linked client that gets an implicit premium package of its own, audited with the reason', function (): void {
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $dependent = Client::factory()->create(['implicit_package' => 'Basic', 'explicit_package' => 'Premium']);
+    $link = $links->link($sponsor, $dependent);
+
+    $dependent->update(['implicit_package' => 'Premium']);
+
+    expect($link->fresh()->isActive())->toBeFalse()
+        ->and($link->fresh()->ended_reason)->toBe(ClientLinks::END_REASON_LINKED_OWN_PREMIUM)
+        ->and(AuditLog::query()->where('event', 'client.unlinked')->where('subject_id', $dependent->id)->where('context->reason', ClientLinks::END_REASON_LINKED_OWN_PREMIUM)->exists())->toBeTrue()
+        ->and(__('link-end.'.ClientLinks::END_REASON_LINKED_OWN_PREMIUM))->not->toBe('link-end.'.ClientLinks::END_REASON_LINKED_OWN_PREMIUM);
+});
+
+it('leaves a linked client with its own implicit premium open when its sponsor is closed before the sweep ended the link', function (): void {
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $dependent = Client::factory()->synced()->create(['implicit_package' => 'Basic', 'explicit_package' => 'Premium']);
+    $link = $links->link($sponsor, $dependent);
+    // Written past the model hook, as rows from before this release are.
+    Client::query()->whereKey($dependent->id)->update(['implicit_package' => 'Premium']);
+
+    expect(ClientResource::closeWarning($sponsor->fresh()))->toContain('stay open, and their link ends');
+
+    $sponsor->fresh()->close('admin');
+
+    expect($dependent->fresh()->isClosed())->toBeFalse()
+        ->and($link->fresh()->ended_reason)->toBe(ClientLinks::END_REASON_LINKED_OWN_PREMIUM);
+});
+
+it('reopens a linked client closed only with its sponsor once it gets an implicit premium package of its own', function (): void {
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $dependent = Client::factory()->create(['implicit_package' => 'Basic', 'explicit_package' => 'Premium']);
+    $links->link($sponsor, $dependent);
+    $sponsor->close('admin');
+    expect($dependent->fresh()->closed_reason)->toBe(ClientLinks::CLOSE_REASON_SPONSOR);
+
+    $dependent->fresh()->update(['implicit_package' => 'Premium']);
+
+    expect($dependent->fresh()->isClosed())->toBeFalse()
+        ->and($sponsor->fresh()->isClosed())->toBeTrue()
+        ->and(AuditLog::query()->where('event', 'account.reopened')->where('subject_id', $dependent->id)->where('context->reason', ClientLinks::END_REASON_LINKED_OWN_PREMIUM)->exists())->toBeTrue();
+});
+
+it('ends by the hourly sweep the links of linked clients whose own implicit package is on the premium list', function (): void {
+    $links = app(ClientLinks::class);
+    app(Settings::class)->set(SettingKey::PackagesPremium, ['Premium']);
+    $sponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null]);
+    $dependent = Client::factory()->synced()->create(['implicit_package' => 'Gold', 'explicit_package' => 'Premium']);
+    $link = $links->link($sponsor, $dependent);
+
+    app(Settings::class)->set(SettingKey::PackagesPremium, ['Premium', 'Gold']);
+
+    expect($links->sweepIneligibleSponsors())->toBe(['links' => 1, 'reopened' => 0, 'kept_closed' => 0])
+        ->and($link->fresh()->ended_reason)->toBe(ClientLinks::END_REASON_LINKED_OWN_PREMIUM)
+        ->and($link->fresh()->sponsor->activeLinks()->count())->toBe(0);
+});
+
+it('names the sponsor in the save confirmation when a linked client gets an implicit premium package of its own', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    Filament::setCurrentPanel('admin');
+    $links = app(ClientLinks::class);
+    $sponsor = Client::factory()->synced()->create(['implicit_package' => 'Premium', 'explicit_package' => null, 'name' => 'Fő Ferenc']);
+    $dependent = Client::factory()->create(['implicit_package' => 'Basic', 'explicit_package' => 'Premium']);
+    $link = $links->link($sponsor, $dependent);
+
+    // A plain submit is refused like a sponsor's link-ending change.
+    Livewire::test(EditClient::class, ['record' => $dependent->id])
+        ->fillForm(['implicit_package' => 'Premium'])
+        ->call('save')
+        ->assertNotified(__('Confirm the change with the Save button'));
+    expect($link->fresh()->isActive())->toBeTrue();
+
+    Livewire::test(EditClient::class, ['record' => $dependent->id])
+        ->fillForm(['implicit_package' => 'Premium'])
+        ->mountAction('save')
+        ->assertMountedActionModalSee('Fő Ferenc')
+        ->callMountedAction()
+        ->assertHasNoFormErrors();
+
+    expect($link->fresh()->ended_reason)->toBe(ClientLinks::END_REASON_LINKED_OWN_PREMIUM);
+});

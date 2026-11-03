@@ -396,6 +396,38 @@ it('checks the infra host of the two-host profile', function (): void {
         ->and(implode("\n", $sandbox->callLines()))->toContain('MYSQL_PWD="$MARIADB_ROOT_PASSWORD"');
 });
 
+it('names a database server that still allows LOAD DATA LOCAL', function (): void {
+    // An application host: the bundled MariaDB of an older compose.yaml, or one whose override dropped the switch.
+    $allowed = (new InstallerSandbox)->installed();
+    $allowed->rule('docker compose exec -T web php artisan tinker*local_infile*', 0, "INFILE\x1f1\n");
+    $check = checkReport($allowed);
+
+    expect(checkFinding($check, 'DB-04')['severity'])->toBe('warning')
+        ->and(checkFinding($check, 'DB-04')['title'])->toContain('LOAD DATA LOCAL')
+        ->and(checkFinding($check, 'DB-04')['commands'])->toContain('docker compose up -d --force-recreate mariadb');
+
+    $refused = (new InstallerSandbox)->installed();
+    $refused->rule('docker compose exec -T web php artisan tinker*local_infile*', 0, "INFILE\x1f0\n");
+    expect(checkReport($refused)['findings'])->not->toHaveKey('DB-04');
+
+    // The infra host asks its own MariaDB, with the root password from the container's environment.
+    $infra = new InstallerSandbox;
+    mkdir($infra->dir.'/profiles/10k', 0755, true);
+    copy($infra->release.'/profiles/10k/infra.yaml', $infra->dir.'/profiles/10k/infra.yaml');
+    $infra->writeEnv('.env', "COMPOSE_PROJECT_NAME=openhdid-infra\nCOMPOSE_FILE=profiles/10k/infra.yaml\n", [
+        'OPENHDID_INFRA_BIND_IP' => '0.0.0.0', 'DB_DATABASE' => 'openhdid', 'DB_USERNAME' => 'openhdid', 'DB_PASSWORD' => InstallerSandbox::DB_PASSWORD,
+        'REDIS_PASSWORD' => InstallerSandbox::REDIS_PASSWORD, 'REDIS_SESSION_PASSWORD' => InstallerSandbox::REDIS_PASSWORD.'s',
+    ]);
+    $infra->writeEnv('db.env', '', ['MARIADB_ROOT_PASSWORD' => InstallerSandbox::ROOT_PASSWORD, 'DB_USERNAME' => 'openhdid_migrate', 'DB_PASSWORD' => InstallerSandbox::MIGRATE_PASSWORD]);
+    $infra->rule('docker compose config --services*', 0, "mariadb\nvalkey\nvalkey-sessions\n")
+        ->rule('docker compose ps -a --format*', 0, "mariadb|running|healthy|0|mariadb\n")
+        ->rule('docker compose exec * mariadb sh -c*local_infile*', 0, "1\n");
+
+    $check = checkReport($infra);
+    expect(checkFinding($check, 'DB-04')['severity'])->toBe('warning')
+        ->and(implode("\n", $infra->callLines()))->not->toContain(InstallerSandbox::ROOT_PASSWORD);
+});
+
 it('checks the Kubernetes files without touching the cluster', function (): void {
     $sandbox = new InstallerSandbox;
     mkdir($sandbox->dir.'/k8s', 0700);
@@ -485,3 +517,16 @@ it('compares the configuration of the running containers with the current files 
     touch($old->dir.'/.env');
     expect(checkFinding(checkReport($old), 'SVC-03')['detail'])->toContain('.env');
 });
+
+it('reports the EWS certificate check switched off in production as an ENV-06 error', function (string $mailer): void {
+    $sandbox = (new InstallerSandbox)->installed(['MAIL_MAILER' => $mailer, 'EWS_VERIFY_TLS' => 'false']);
+
+    $check = checkReport($sandbox);
+    $finding = collect($check['findings']['ENV-06'] ?? [])->first(fn (array $finding): bool => str_contains($finding['detail'], 'EWS_VERIFY_TLS'));
+
+    expect($finding)->not->toBeNull($check['output'])
+        ->and($finding['severity'])->toBe('error')
+        ->and($finding['doc'])->toContain('TROUBLESHOOTING.md 10.');
+
+    expect(checkReport((new InstallerSandbox)->installed(['MAIL_MAILER' => $mailer, 'EWS_VERIFY_TLS' => '']))['findings'])->not->toHaveKey('ENV-06');
+})->with(['ews', 'failover']);

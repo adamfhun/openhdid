@@ -7,29 +7,34 @@ use App\Filament\Admin\Resources\Users\Pages\EditUser;
 use App\Filament\Pages\Auth\Login;
 use App\Models\AuditLog;
 use App\Models\Client;
+use App\Models\ExternalRecord;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Sms\FakeSmsSender;
 use App\Sms\SmsSender;
+use App\System\Installation;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
+use Illuminate\Auth\Events\Attempting;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Livewire\Livewire;
 
 beforeEach(function (): void {
     $this->seed(RolesAndPermissionsSeeder::class);
     Filament::setCurrentPanel('admin');
-    RateLimiter::clear('livewire-rate-limiter:'.sha1(Login::class.'|authenticate|127.0.0.1'));
+    RateLimiter::clear('livewire-rate-limiter:'.hash('sha256', Login::class.'|authenticate|127.0.0.1'));
 });
 
 function passwordAttempt(string $email, string $password)
 {
     // Filament limits attempts per network address; this test is about the account.
-    RateLimiter::clear('livewire-rate-limiter:'.sha1(Login::class.'|authenticate|127.0.0.1'));
+    RateLimiter::clear('livewire-rate-limiter:'.hash('sha256', Login::class.'|authenticate|127.0.0.1'));
     Auth::guard('web')->logout();
 
     return Livewire::test(Login::class)->fillForm(['email' => $email, 'password' => $password])->call('authenticate');
@@ -186,4 +191,80 @@ it('audits a correct password on a closed staff account as closed, without count
     expect($user->fresh()->isLoginLocked())->toBeFalse()
         ->and($user->fresh()->failed_login_attempts)->toBe(0)
         ->and(AuditLog::query()->where('event', 'login.rejected')->where('subject_id', $user->id)->get()->pluck('context.reason')->unique()->all())->toBe(['account_closed']);
+});
+
+it('refuses the right password of a staff account that a parallel wrong guess locked while the password was being checked', function (): void {
+    $user = User::factory()->synced()->withRole(Role::Agent)->create(['password' => 'right-password-1']);
+    $locked = false;
+    Event::listen(Attempting::class, function () use ($user, &$locked): void {
+        if (! $locked) {
+            $locked = true;
+            User::query()->whereKey($user->id)->update(['locked_until' => now()->addHour()]);
+        }
+    });
+
+    passwordAttempt($user->email, 'right-password-1')->assertHasFormErrors(['email']);
+
+    $this->assertGuest('web');
+    expect(AuditLog::query()->where('event', 'login.rejected')->where('context->reason', 'account_locked')->where('context->detail', 'locked_during_check')->count())->toBe(1)
+        ->and(AuditLog::query()->where('event', 'login.succeeded')->exists())->toBeFalse();
+});
+
+it('judges one staff account\'s password attempts one at a time, under the account lock', function (): void {
+    $user = User::factory()->synced()->withRole(Role::Agent)->create(['password' => 'right-password-1']);
+    $lockWasFree = null;
+    Event::listen(Attempting::class, function () use ($user, &$lockWasFree): void {
+        if ($lockWasFree !== null) {
+            return;
+        }
+
+        $lock = Cache::lock(Installation::lockName('hdid:login-password:'.$user->id), 1);
+        $lockWasFree = $lock->get();
+
+        if ($lockWasFree) {
+            $lock->release();
+        }
+    });
+
+    passwordAttempt($user->email, 'wrong-password')->assertHasFormErrors(['email']);
+
+    expect($lockWasFree)->toBeFalse();
+});
+
+it('treats a look-alike address of a staff account as unknown, so its right password neither signs in a locked account nor dodges the lockout', function (): void {
+    $user = User::factory()->synced()->withRole(Role::Agent)->create(['email' => 'victim@x.hu', 'password' => 'right-password-1', 'locked_until' => now()->addHour()]);
+    // MariaDB's collation finds the account for a look-alike address; the
+    // loaded record carrying another spelling stands in for it on SQLite.
+    User::retrieved(fn (User $loaded) => $loaded->setRawAttributes(['email' => 'víctim@x.hu'] + $loaded->getAttributes(), true));
+    ExternalRecord::retrieved(fn (ExternalRecord $loaded) => $loaded->setRawAttributes(['email' => 'víctim@x.hu'] + $loaded->getAttributes(), true));
+
+    try {
+        passwordAttempt('victim@x.hu', 'right-password-1')->assertHasFormErrors(['email']);
+    } finally {
+        User::flushEventListeners();
+        ExternalRecord::flushEventListeners();
+    }
+
+    $this->assertGuest('web');
+    expect(AuditLog::query()->where('event', 'login.succeeded')->exists())->toBeFalse()
+        ->and($user->fresh()->isLoginLocked())->toBeTrue();
+});
+
+it('counts the early refusals and the password checks of the panel login in one per-address limit', function (): void {
+    $locked = User::factory()->synced()->withRole(Role::Agent)->create(['password' => 'right-password-1', 'locked_until' => now()->addHour()]);
+    $other = User::factory()->synced()->withRole(Role::Agent)->create(['password' => 'right-password-1']);
+    $attempt = fn (string $email, string $password) => Livewire::test(Login::class)->fillForm(['email' => $email, 'password' => $password])->call('authenticate');
+
+    foreach (range(1, 3) as $i) {
+        $attempt($locked->email, 'right-password-1')->assertHasFormErrors(['email']);
+    }
+    foreach (range(1, 2) as $i) {
+        $attempt($other->email, 'wrong-password')->assertHasFormErrors(['email']);
+    }
+    $rejections = AuditLog::query()->where('event', 'login.rejected')->count();
+
+    $attempt($other->email, 'wrong-password')->assertNotified();
+
+    expect(AuditLog::query()->where('event', 'login.rejected')->count())->toBe($rejections)
+        ->and($other->fresh()->failed_login_attempts)->toBe(2);
 });

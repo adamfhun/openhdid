@@ -55,7 +55,7 @@ class IdList
         try {
             [$status, $httpStatus, $items] = $this->query($token);
         } catch (IdListException $exception) {
-            Cache::forever(self::STATUS_CACHE_KEY, [
+            Cache::forever(Installation::key(self::STATUS_CACHE_KEY), [
                 'status' => $exception->status, 'http_status' => $exception->httpStatus,
                 'at' => now()->toIso8601String(), 'error' => $exception->getMessage(),
             ]);
@@ -64,7 +64,7 @@ class IdList
         }
 
         $result = ['status' => $status, 'http_status' => $httpStatus, 'received' => count($items)] + $this->store($items);
-        Cache::forever(self::STATUS_CACHE_KEY, $result + ['at' => now()->toIso8601String(), 'error' => null]);
+        Cache::forever(Installation::key(self::STATUS_CACHE_KEY), $result + ['at' => now()->toIso8601String(), 'error' => null]);
 
         return $result;
     }
@@ -101,7 +101,7 @@ class IdList
      */
     public function status(): array
     {
-        return Cache::get(self::STATUS_CACHE_KEY, []);
+        return Cache::get(Installation::key(self::STATUS_CACHE_KEY), []);
     }
 
     /**

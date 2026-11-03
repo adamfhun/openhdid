@@ -1,6 +1,5 @@
 <?php
 
-use App\Models\User;
 use App\System\DemoData;
 use Database\Seeders\DemoSeeder;
 use Illuminate\Contracts\Console\Kernel;
@@ -34,6 +33,12 @@ const CGROUP_MEMORY_FILES = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory
 const FPM_PROCESS_OVERHEAD_MB = 22;
 const OPCACHE_MB = 208;
 const NGINX_WORKER_MB = 80;
+// Kept free beyond PHP-FPM, nginx and /tmp (the same spare as the Capacity card).
+const WEB_SPARE_MB = 64;
+// Where the kernel lists the mounts: /tmp is a memory-backed tmpfs in the web container.
+const MOUNTS_FILE = '/proc/self/mounts';
+// The largest request body: an upload (client_max_body_size of the upload location).
+const UPLOAD_BODY_MB = 11;
 
 function env_value(string $name, ?string $default = null): ?string
 {
@@ -52,6 +57,15 @@ function env_bool(string $name, bool $default): bool
 function say(string $message): void
 {
     fwrite(STDERR, gmdate('Y-m-d\TH:i:s\Z').' openhdid: '.$message.PHP_EOL);
+}
+
+/**
+ * The command's result on standard output (the rendered nginx.conf, the TLS
+ * check); messages go to standard error through say().
+ */
+function out(string $text): void
+{
+    fwrite(STDOUT, $text);
 }
 
 /**
@@ -253,6 +267,16 @@ function check_env(string $role): void
     if (env_value('MAIL_MAILER', 'log') === 'ews' && env_value('EWS_AUTH', 'basic') === 'ntlm' && ! (curl_version()['features'] & CURL_VERSION_NTLM)) {
         $errors[] = 'EWS_AUTH=ntlm cannot work: the libcurl this PHP loaded has no NTLM support (libcurl '.curl_version()['version'].'). Report it with the image version; meanwhile enable basic authentication on the Exchange EWS virtual directory (EWS_AUTH=basic), use oauth (Exchange Online), or an SMTP connector (MAIL_MAILER=smtp).';
     }
+    // EWS without the certificate check: the Exchange password and every e-mail are readable
+    // in between. The failover and round-robin chains of config/mail.php start with EWS.
+    if (in_array(env_value('MAIL_MAILER', 'log'), ['ews', 'failover', 'roundrobin'], true) && ! env_bool('EWS_VERIFY_TLS', true)) {
+        $message = 'EWS_VERIFY_TLS=false turns the certificate check of the Exchange server off; put the CA of an internal certificate in the ca folder (then docker compose restart) and remove the line.';
+        if ($production) {
+            $errors[] = $message;
+        } else {
+            $warnings[] = $message;
+        }
+    }
     if ($production && in_array(env_value('MAIL_MAILER', 'log'), ['log', 'array'], true)) {
         $warnings[] = 'MAIL_MAILER writes e-mails to the log only; no e-mail leaves the server.';
     }
@@ -305,6 +329,31 @@ function size_mb(string $value): ?int
 }
 
 /**
+ * The size of a memory-backed (tmpfs) mount in MB, or null when the mount is
+ * not a tmpfs or has no size of its own.
+ */
+function tmpfs_mb(string $mountPoint): ?int
+{
+    $mounts = is_readable(MOUNTS_FILE) ? (string) file_get_contents(MOUNTS_FILE) : '';
+
+    foreach (preg_split('/\R/', $mounts) ?: [] as $line) {
+        $fields = preg_split('/\s+/', trim($line));
+        if (($fields[1] ?? null) === $mountPoint && ($fields[2] ?? null) === 'tmpfs' && preg_match('/(?:^|,)size=(\d+)([kmg]?)(?:,|$)/i', $fields[3] ?? '', $size)) {
+            $bytes = (int) $size[1] * match (strtolower($size[2])) {
+                'k' => 1024,
+                'm' => 1_048_576,
+                'g' => 1_073_741_824,
+                default => 1,
+            };
+
+            return intdiv($bytes, 1_048_576);
+        }
+    }
+
+    return null;
+}
+
+/**
  * The memory limit of this container in MB, or null when it has none.
  */
 function container_memory_mb(): ?int
@@ -352,9 +401,12 @@ function fpm_limits(): array
     if ($errors === [] && $container !== null) {
         $workers = (string) env_value('OPENHDID_NGINX_WORKERS', 'auto');
         $nginx = ($workers === 'auto' ? (int) (shell_cpu_count() ?: 1) : max(1, (int) $workers)) * NGINX_WORKER_MB;
-        $need = (int) $children * ($limitMb + FPM_PROCESS_OVERHEAD_MB) + OPCACHE_MB + $nginx;
+        // The memory-backed /tmp holds the request bodies and uploads nginx and PHP buffer
+        // (before sign-in too), and its pages count against the container's limit.
+        $tmp = tmpfs_mb('/tmp') ?? 0;
+        $need = (int) $children * ($limitMb + FPM_PROCESS_OVERHEAD_MB) + OPCACHE_MB + $nginx + $tmp + WEB_SPARE_MB;
         if ($need > $container) {
-            $warnings[] = "PHP-FPM and nginx may take {$need} MB ({$children} processes with memory_limit {$limit}, the opcache and the nginx workers), more than the web container's memory limit of {$container} MB: under load the kernel stops the whole web server. Lower OPENHDID_FPM_MAX_CHILDREN, OPENHDID_FPM_MEMORY_LIMIT or OPENHDID_NGINX_WORKERS (leave it empty for the usage profile's value instead of auto), or raise OPENHDID_WEB_MEM_LIMIT (Kubernetes: the web pod's memory limit).";
+            $warnings[] = "PHP-FPM and nginx may take {$need} MB ({$children} processes with memory_limit {$limit}, the opcache, the nginx workers, the memory-backed /tmp of {$tmp} MB for request bodies and uploads, and a spare of ".WEB_SPARE_MB." MB), more than the web container's memory limit of {$container} MB: under load the kernel stops the whole web server. Lower OPENHDID_FPM_MAX_CHILDREN, OPENHDID_FPM_MEMORY_LIMIT or OPENHDID_NGINX_WORKERS (leave it empty for the usage profile's value instead of auto), or raise OPENHDID_WEB_MEM_LIMIT (Kubernetes: the web pod's memory limit).";
         }
     }
 
@@ -565,9 +617,14 @@ function nginx_config(): string
     }
     $exemptGeo = implode('', array_map(fn (string $cidr): string => "        {$cidr} 1;\n", $exempt));
 
-    $rateZone = $rateApp = '';
+    // Every upload body (up to 11 MB) is buffered in the memory-backed /tmp: at most this many
+    // at once from all clients together, about 60 % of it, so a flood of slow uploads cannot fill
+    // it for every other request. Above that an upload is answered with 429.
+    $uploads = max(1, intdiv((int) ((tmpfs_mb('/tmp') ?? 256) * 0.6), UPLOAD_BODY_MB));
+    $rateZone = "    limit_conn_zone \$server_name zone=openhdid_upload:1m;\n";
+    $rateApp = '';
     if ($rate > 0) {
-        $rateZone = "    limit_req_zone \$openhdid_limit_key zone=openhdid:10m rate={$rate}r/s;\n    limit_req_status 429;\n    limit_req_log_level warn;\n";
+        $rateZone .= "    limit_req_zone \$openhdid_limit_key zone=openhdid:10m rate={$rate}r/s;\n    limit_req_status 429;\n    limit_req_log_level warn;\n";
         // nginx refuses burst=0: no burst means no burst parameter (and nodelay has nothing to do).
         $rateApp = $burst > 0
             ? "            limit_req zone=openhdid burst={$burst} nodelay;\n"
@@ -683,6 +740,8 @@ NGINX;
         # larger) are the only requests with a body above 4 MB.
         location ~ ^/livewire-[a-f0-9]+/upload-file\$ {
             client_max_body_size 11m;
+            limit_conn openhdid_upload {$uploads};
+            limit_conn_status 429;
 {$fastcgi}        }
 
         # Livewire serves its scripts through Laravel under a hashed prefix.
@@ -900,12 +959,17 @@ function demo_data(): void
 
         return;
     }
-    if (User::query()->where('email', 'agent@example.test')->exists()) {
+    if ($app->make(DemoData::class)->present()) {
         say('demo data already loaded');
 
         return;
     }
-    Artisan::call('db:seed', ['--class' => DemoSeeder::class, '--force' => true]);
+    // The seeder refuses a database that holds real data, and loads all or nothing.
+    try {
+        Artisan::call('db:seed', ['--class' => DemoSeeder::class, '--force' => true]);
+    } catch (Throwable $e) {
+        stop_on([get_class($e).': '.$e->getMessage()]);
+    }
     say('demo data loaded (see the installation guide for the demo accounts)');
 }
 
@@ -939,20 +1003,20 @@ switch ($command) {
         check_env($argv[2] ?? 'web');
         break;
     case 'nginx-config':
-        echo nginx_config();
+        out(nginx_config());
         break;
     case 'tls-check':
         $result = inspect_tls((string) env_value('OPENHDID_TLS_CERT', DEFAULT_CERT), (string) env_value('OPENHDID_TLS_KEY', DEFAULT_KEY), server_names());
         foreach ($result['summary'] as $line) {
-            echo $line, PHP_EOL;
+            out($line.PHP_EOL);
         }
         foreach ($result['warnings'] as $line) {
-            echo 'warning: ', $line, PHP_EOL;
+            out('warning: '.$line.PHP_EOL);
         }
         foreach ($result['errors'] as $line) {
-            echo 'ERROR: ', $line, PHP_EOL;
+            out('ERROR: '.$line.PHP_EOL);
         }
-        echo $result['errors'] === [] ? 'TLS files are usable.' : 'TLS files are NOT usable.', PHP_EOL;
+        out(($result['errors'] === [] ? 'TLS files are usable.' : 'TLS files are NOT usable.').PHP_EOL);
         exit($result['errors'] === [] ? 0 : 1);
     case 'wait-db':
         wait_db();

@@ -15,8 +15,16 @@ class RuntimeLimits
     /** Memory of an FPM process outside its memory_limit (code, libraries, buffers), in bytes. */
     public const FPM_PROCESS_OVERHEAD = 22 * 1_048_576;
 
+    /** Memory of one nginx worker in the web container, in bytes (runtime.php NGINX_WORKER_MB). */
+    public const NGINX_WORKER = 80 * 1_048_576;
+
+    /** Memory the web container keeps free beyond PHP-FPM, nginx and /tmp, in bytes (runtime.php WEB_SPARE_MB). */
+    public const WEB_SPARE = 64 * 1_048_576;
+
     /** @var list<string> */
     protected const CGROUP_MEMORY_FILES = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'];
+
+    protected const MOUNTS_FILE = '/proc/self/mounts';
 
     public function inFpm(): bool
     {
@@ -93,6 +101,81 @@ class RuntimeLimits
         }
 
         return null;
+    }
+
+    /**
+     * Whether this is the OpenHDID web container, where nginx and the
+     * memory-backed /tmp share the memory limit with PHP-FPM. On a classic
+     * installation the PHP-FPM cgroup holds neither, so they are not counted.
+     */
+    public function inWebContainer(): bool
+    {
+        return $this->inFpm() && filled(config('hdid.capacity.nginx_workers'));
+    }
+
+    /**
+     * The nginx workers of the web container ("auto" is one per CPU), or null elsewhere.
+     */
+    public function nginxWorkers(): ?int
+    {
+        if (! $this->inWebContainer()) {
+            return null;
+        }
+
+        $workers = (string) config('hdid.capacity.nginx_workers');
+
+        if ($workers !== 'auto') {
+            return max(1, (int) $workers);
+        }
+
+        $info = is_readable('/proc/cpuinfo') ? (string) @file_get_contents('/proc/cpuinfo') : '';
+
+        return max(1, (int) preg_match_all('/^processor\s*:/m', $info));
+    }
+
+    /**
+     * The size of the memory-backed /tmp of the web container in bytes, or
+     * null when /tmp is no tmpfs with a size of its own, or elsewhere.
+     */
+    public function tmpfsBytes(): ?int
+    {
+        if (! $this->inWebContainer()) {
+            return null;
+        }
+
+        $mounts = is_readable(static::MOUNTS_FILE) ? (string) @file_get_contents(static::MOUNTS_FILE) : '';
+
+        foreach (preg_split('/\R/', $mounts) ?: [] as $line) {
+            $fields = preg_split('/\s+/', trim($line)) ?: [];
+
+            if (($fields[1] ?? null) === '/tmp' && ($fields[2] ?? null) === 'tmpfs' && preg_match('/(?:^|,)size=(\d+)([kmg]?)(?:,|$)/i', $fields[3] ?? '', $size)) {
+                return (int) $size[1] * match (strtolower($size[2])) {
+                    'k' => 1024,
+                    'm' => 1_048_576,
+                    'g' => 1_073_741_824,
+                    default => 1,
+                };
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * How full the memory-backed /tmp is, or null when it is not one.
+     *
+     * @return array{used: int, total: int}|null
+     */
+    public function tmpUsage(): ?array
+    {
+        if ($this->tmpfsBytes() === null) {
+            return null;
+        }
+
+        $total = @disk_total_space('/tmp');
+        $free = @disk_free_space('/tmp');
+
+        return $total === false || $free === false ? null : ['used' => (int) ($total - $free), 'total' => (int) $total];
     }
 
     /**

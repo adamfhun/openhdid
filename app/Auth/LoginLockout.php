@@ -7,6 +7,7 @@ use App\Auth\Contracts\Principal;
 use App\Enums\PrincipalType;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\Installation;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
 
@@ -51,7 +52,7 @@ class LoginLockout
      */
     public function recordFailure(Principal&Model $account, string $method): void
     {
-        Cache::lock('login-lockout:'.$account->getMorphClass().':'.$account->getKey(), 10)->block(5, function () use ($account, $method): void {
+        Cache::lock(Installation::lockName('login-lockout:'.$account->getMorphClass().':'.$account->getKey()), 10)->block(5, function () use ($account, $method): void {
             $account->refresh();
             $type = $account->principalType();
             $attempts = (int) $account->failed_login_attempts + 1;

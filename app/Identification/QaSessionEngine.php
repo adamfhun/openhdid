@@ -3,6 +3,7 @@
 namespace App\Identification;
 
 use App\Audit\Auditor;
+use App\CallCenter\CallLock;
 use App\Clients\ClientPhones;
 use App\Clients\ClientTiers;
 use App\Enums\AnswerCheckResult;
@@ -17,9 +18,11 @@ use App\Models\IdSessionStep;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\Installation;
 use Closure;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Throwable;
 
 /**
  * State machine for a question-and-answer identification session.
@@ -60,9 +63,21 @@ class QaSessionEngine
             throw new IdentificationException(__('The client has not answered enough questions (:n required).', ['n' => $this->answers->requiredCount()]));
         }
 
+        // On a call the start runs under the call's lock (on the call as it
+        // stands then, still the agent's), so a take-over cannot leave the
+        // previous agent's session open on it.
+        if ($call !== null) {
+            return CallLock::runForAgent($call, $agent, fn (Call $call): IdSession => $this->openSession($client, $agent, $call, $channel));
+        }
+
+        return $this->openSession($client, $agent, null, $channel);
+    }
+
+    private function openSession(Client $client, User $agent, ?Call $call, IdChannel $channel): IdSession
+    {
         // The open-session check and the insert share the client's lock, so
         // two agents starting at the same moment cannot both open a session.
-        return Cache::lock('hdid:qa:'.$client->id, 10)->block(5, function () use ($client, $agent, $call, $channel): IdSession {
+        return Cache::lock(Installation::lockName('hdid:qa:'.$client->id), 10)->block(5, function () use ($client, $agent, $call, $channel): IdSession {
             // Only another question-and-answer session blocks a new one: a PIN or
             // a manual session is decided in the same request, and a row left
             // open by a failure must not lock the client out for good.
@@ -192,50 +207,60 @@ class QaSessionEngine
             throw new IdentificationException(__('Type the answer the caller gave (at most 255 characters).'));
         }
 
-        $this->limiter->assertAllowed($agent);
+        // The agent's attempt is taken before the compare; it comes back on a
+        // match, and when the compare does not run.
+        $this->limiter->reserve($agent);
 
-        $checked = $this->underSessionLock($step, $agent, function (IdSession $session) use ($step, $given): IdSessionStep|IdentificationException {
-            if (! $session->blind_check) {
-                return new IdentificationException(__('This session does not use the blind check; judge the answer with the buttons.'));
-            }
+        try {
+            $checked = $this->underSessionLock($step, $agent, function (IdSession $session) use ($step, $given): IdSessionStep|IdentificationException {
+                if (! $session->blind_check) {
+                    return new IdentificationException(__('This session does not use the blind check; judge the answer with the buttons.'));
+                }
 
-            $locked = IdSessionStep::query()->lockForUpdate()->whereKey($step->id)->where('id_session_id', $session->id)->first();
-            if ($locked === null || ! $locked->isPending()) {
-                return new IdentificationException(__('This question has already been decided.'));
-            }
+                $locked = IdSessionStep::query()->lockForUpdate()->whereKey($step->id)->where('id_session_id', $session->id)->first();
+                if ($locked === null || ! $locked->isPending()) {
+                    return new IdentificationException(__('This question has already been decided.'));
+                }
 
-            $locked->setRelation('session', $session);
-            $stored = $this->answers->usable($session->client)->firstWhere('question_id', $locked->question_id)?->answer;
+                $locked->setRelation('session', $session);
+                $stored = $this->answers->usable($session->client)->firstWhere('question_id', $locked->question_id)?->answer;
 
-            // The client changed or removed the answer meanwhile: nothing to compare with.
-            if ($stored === null) {
-                $this->applyVerdict($session, $locked, StepVerdict::Undecided);
+                // The client changed or removed the answer meanwhile: nothing to compare with.
+                if ($stored === null) {
+                    $this->applyVerdict($session, $locked, StepVerdict::Undecided);
+
+                    return $locked->refresh();
+                }
+
+                ['result' => $result, 'distance' => $distance] = $this->matcher->compare($stored, $given, (int) $session->typo_tolerance);
+                $attempt = $locked->check_attempts + 1;
+                $locked->forceFill(['check_attempts' => $attempt, 'check_result' => $result, 'check_distance' => $distance === null ? null : min($distance, 255)])->save();
+
+                $this->auditor->record('id_session.answer_checked', $session, ['step_id' => $locked->id, 'result' => $result->value, 'attempt' => $attempt] + ($distance === null ? [] : ['distance' => $distance]));
+
+                $verdict = match (true) {
+                    $result === AnswerCheckResult::Matched => StepVerdict::Accepted,
+                    $result === AnswerCheckResult::Mismatch => StepVerdict::Rejected,
+                    $attempt >= self::BLIND_ATTEMPTS => StepVerdict::Undecided,
+                    default => null,
+                };
+
+                if ($verdict !== null) {
+                    $this->applyVerdict($session, $locked, $verdict);
+                }
 
                 return $locked->refresh();
-            }
+            });
+        } catch (Throwable $e) {
+            $this->limiter->giveBack($agent);
 
-            ['result' => $result, 'distance' => $distance] = $this->matcher->compare($stored, $given, (int) $session->typo_tolerance);
-            $attempt = $locked->check_attempts + 1;
-            $locked->forceFill(['check_attempts' => $attempt, 'check_result' => $result, 'check_distance' => min($distance, 255)])->save();
+            throw $e;
+        }
 
-            $this->auditor->record('id_session.answer_checked', $session, ['step_id' => $locked->id, 'result' => $result->value, 'distance' => $distance, 'attempt' => $attempt]);
-
-            $verdict = match (true) {
-                $result === AnswerCheckResult::Matched => StepVerdict::Accepted,
-                $result === AnswerCheckResult::Mismatch => StepVerdict::Rejected,
-                $attempt >= self::BLIND_ATTEMPTS => StepVerdict::Undecided,
-                default => null,
-            };
-
-            if ($verdict !== null) {
-                $this->applyVerdict($session, $locked, $verdict);
-            }
-
-            return $locked->refresh();
-        });
-
-        if ($checked->check_result !== null && $checked->check_result !== AnswerCheckResult::Matched) {
-            $this->limiter->hit($agent);
+        // A close or a clear miss is a failed attempt; a match, or a stored
+        // answer gone meanwhile (nothing compared), gives it back.
+        if ($checked->check_result === null || $checked->check_result === AnswerCheckResult::Matched) {
+            $this->limiter->giveBack($agent);
         }
 
         return $checked;
@@ -252,6 +277,23 @@ class QaSessionEngine
      * @return T
      */
     private function underSessionLock(IdSessionStep $step, ?User $agent, Closure $work): mixed
+    {
+        // A session on a call is decided under the call's lock (taken first,
+        // then the client row and the session), so a take-over or a release
+        // cannot interleave with the decision; guardCall then reads the call
+        // as it stands.
+        $call = $step->session->call_id === null ? null : Call::withTrashed()->find($step->session->call_id);
+
+        return $call === null ? $this->decideLocked($step, $agent, $work) : CallLock::runOrRefuse($call, fn (): mixed => $this->decideLocked($step, $agent, $work));
+    }
+
+    /**
+     * @template T
+     *
+     * @param  Closure(IdSession): (T|IdentificationException)  $work
+     * @return T
+     */
+    private function decideLocked(IdSessionStep $step, ?User $agent, Closure $work): mixed
     {
         $result = DB::transaction(function () use ($step, $agent, $work): mixed {
             // Lock the client first, like account closure, then the session.
@@ -396,7 +438,7 @@ class QaSessionEngine
         // pages on the key without an extra orderBy, because the expired
         // rows leave the filter and an offset walk would skip the rest.
         IdSession::query()->open()
-            ->where(fn ($query) => $query->where('expires_at', '<', now())
+            ->where(fn ($query) => $query->whereInstant('expires_at', '<', now())
                 ->orWhere(fn ($stale) => $stale->whereNull('expires_at')->where('started_at', '<', now()->subMinutes($this->settings->int(SettingKey::QaSessionTtlMinutes)))))
             ->chunkById(200, function ($sessions) use (&$count): void {
                 foreach ($sessions as $session) {
@@ -429,7 +471,7 @@ class QaSessionEngine
     private function finish(IdSession $session, IdSessionStatus $status, string $reason, array $context = []): IdSession
     {
         $finished = IdSession::query()->whereKey($session->id)->open()
-            ->update(['status' => $status, 'outcome_reason' => $reason, 'decided_at' => now()]);
+            ->update(['status' => $status, 'outcome_reason' => $reason] + IdSession::instantColumns('decided_at', now()));
         $session->refresh();
 
         if ($finished === 1) {

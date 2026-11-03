@@ -106,14 +106,35 @@ it('includes the audit and capacity tiles with hints in the health report', func
  *
  * @param  array<string, mixed>|null  $status
  */
-function fakeRuntimeLimits(?array $status, ?int $children, ?int $perRequest, ?int $container): void
+function fakeRuntimeLimits(?array $status, ?int $children, ?int $perRequest, ?int $container, ?int $nginxWorkers = null, ?int $tmpfs = null, ?array $tmpUsage = null): void
 {
-    app()->instance(RuntimeLimits::class, new class($status, $children, $perRequest, $container) extends RuntimeLimits
+    app()->instance(RuntimeLimits::class, new class($status, $children, $perRequest, $container, $nginxWorkers, $tmpfs, $tmpUsage) extends RuntimeLimits
     {
         /**
          * @param  array<string, mixed>|null  $status
+         * @param  array{used: int, total: int}|null  $tmpUsage
          */
-        public function __construct(private ?array $status, private ?int $children, private ?int $perRequest, private ?int $container) {}
+        public function __construct(private ?array $status, private ?int $children, private ?int $perRequest, private ?int $container, private ?int $nginx, private ?int $tmpfs, private ?array $tmpUsage) {}
+
+        public function inWebContainer(): bool
+        {
+            return $this->nginx !== null;
+        }
+
+        public function nginxWorkers(): ?int
+        {
+            return $this->nginx;
+        }
+
+        public function tmpfsBytes(): ?int
+        {
+            return $this->tmpfs;
+        }
+
+        public function tmpUsage(): ?array
+        {
+            return $this->tmpUsage;
+        }
 
         public function inFpm(): bool
         {
@@ -195,4 +216,38 @@ it('warns when max_connections is below what one web server opens with the worke
     expect($problems(15))->toHaveCount(1)
         ->and($problems(15)[0])->toContain('max_connections is 15', '20 connections', 'OPENHDID_DB_MAX_CONNECTIONS')
         ->and($problems(40))->toBe([]);
+});
+
+it('counts the nginx workers, the memory-backed /tmp and a spare in what the web container has to hold', function (): void {
+    config()->set('hdid.profile', null);
+    $mb = 1_048_576;
+
+    // 8 × (128 + 22) + 208 = 1408 MB fits 1600 MB for PHP-FPM alone, as on a classic php-fpm cgroup.
+    fakeRuntimeLimits(null, 8, 128 * $mb, 1600 * $mb);
+    expect(app(HealthChecks::class)->capacity()->status)->toBe(CheckStatus::Ok);
+
+    // In the web container nginx (2 × 80) and /tmp (256) live there too, with a 64 MB spare: 1888 MB.
+    fakeRuntimeLimits(null, 8, 128 * $mb, 1600 * $mb, 2, 256 * $mb);
+    $check = app(HealthChecks::class)->capacity();
+    expect($check->status)->toBe(CheckStatus::Warn)
+        ->and($check->detail)->toContain('/tmp', 'nginx');
+
+    // The shipped trial profile (1920 MB) still fits.
+    fakeRuntimeLimits(null, 8, 128 * $mb, 1920 * $mb, 2, 256 * $mb);
+    expect(app(HealthChecks::class)->capacity()->status)->toBe(CheckStatus::Ok);
+});
+
+it('warns when the memory-backed /tmp is nearly full, since request bodies and uploads are buffered there', function (): void {
+    config()->set('hdid.profile', null);
+    $mb = 1_048_576;
+
+    fakeRuntimeLimits(null, 8, 128 * $mb, 1920 * $mb, 2, 256 * $mb, ['used' => 100 * $mb, 'total' => 256 * $mb]);
+    $check = app(HealthChecks::class)->capacity();
+    expect($check->status)->toBe(CheckStatus::Ok)
+        ->and($check->detail)->toContain('/tmp 100 MB of 256 MB');
+
+    fakeRuntimeLimits(null, 8, 128 * $mb, 1920 * $mb, 2, 256 * $mb, ['used' => 220 * $mb, 'total' => 256 * $mb]);
+    $check = app(HealthChecks::class)->capacity();
+    expect($check->status)->toBe(CheckStatus::Warn)
+        ->and($check->detail)->toContain('/tmp');
 });

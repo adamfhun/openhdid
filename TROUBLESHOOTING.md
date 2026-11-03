@@ -29,6 +29,18 @@ docker compose logs --tail=50 web
 docker compose exec web php artisan hdid:health
 ```
 
+`HEALTH-environment` (Környezet csempe): a konténer élesben nem indul az éles védelmet kikapcsoló értékekkel
+(3. fejezet), ezért élesben a csempe zöld. Nem éles környezetben (`APP_ENV=staging`, `demo`, `local`) tájékoztatás:
+a demófiókokat, a `.test` címeket és a naplózó SMS-t nem utasítja el. `APP_DEBUG=true` mellett figyelmeztetés (a
+`HEALTH-login_link_preview` is): a panel minden elküldött belépési hivatkozást megmutat, és a HTML-hibaoldal belső
+részleteket mutat bárkinek (a JSON-válaszok ekkor is semlegesek). A hibakeresés után `APP_DEBUG=false` és
+`APP_ENV=production`, majd `docker compose up -d`. / `HEALTH-environment` (Environment tile): in production the
+container does not start with a value that switches a safeguard off (chapter 3), so there the tile is green. Outside
+production (`APP_ENV=staging`, `demo`, `local`) it is information: demo accounts, `.test` addresses and the log SMS
+driver are not refused. With `APP_DEBUG=true` it is a warning (and so is `HEALTH-login_link_preview`): the panel
+shows every login link it sends, and the HTML error page shows internals to anyone (the JSON answers stay neutral).
+After debugging set `APP_DEBUG=false` and `APP_ENV=production`, then `docker compose up -d`.
+
 ## 2. Naplók / Logs
 
 Az `install.sh check` lelete / Finding of `install.sh check`: `LOG-09`.
@@ -289,7 +301,7 @@ docker compose exec web php artisan hdid:emd-sync-token
 
 ## 10. Tanúsítvány-lánc és belső CA / Certificate chain and internal CA
 
-Az `install.sh check` lelete / Finding of `install.sh check`: `TLS-04`, `TLS-05`, `LOG-04`; javítás / fix: `./install.sh fix --only TLS-04`.
+Az `install.sh check` lelete / Finding of `install.sh check`: `TLS-04`, `TLS-05`, `LOG-04`, `ENV-06` (`EWS_VERIFY_TLS=false` élesben / in production); javítás / fix: `./install.sh fix --only TLS-04`.
 
 A `ca` mappába a konténer felhasználója (uid 82) „másként” lép be: a mappa 755, a CA-fájlok 644 legyenek, különben
 induláskor egy CA-t sem vesz fel (`TLS-05`: `chmod 755 ca && chmod 644 ca/*.pem`, utána újraindítás).
@@ -312,6 +324,16 @@ docker compose restart web worker sync-worker scheduler
 docker compose logs web | grep 'extra CA'
 ```
 
+Kikapcsolt tanúsítvány-ellenőrzés helyett a CA a `ca` mappába: élesben `EWS_VERIFY_TLS=false` mellett a konténer nem
+indul (ENV-06). Kubernetesen a ConfigMap-ből csatolt CA-fájlok szimbolikus hivatkozások; az 1.15.1-től ezeket is
+felveszi, a nem használható bejegyzéseket (más kiterjesztés, lógó hivatkozás) a napló `warning:` sora nevezi meg
+(`kubectl -n openhdid logs deploy/<web> | grep -E 'extra CA|warning'`).
+
+Instead of switching the certificate check off, put the CA in `ca`: in production the container does not start
+with `EWS_VERIFY_TLS=false` (ENV-06). On Kubernetes the CA files of a ConfigMap are symbolic links; from 1.15.1 they
+are taken too, and entries that cannot be used (another extension, a dangling link) are named in a `warning:` line
+of the log (`kubectl -n openhdid logs deploy/<web> | grep -E 'extra CA|warning'`).
+
 ## 11. Egyszeri bejelentkezés (ADFS, Entra) / Single sign-on (ADFS, Entra)
 
 Minden beállított szolgáltató felfedezési címe a konténerből: státusz, kibocsátó, kulcsok száma.
@@ -328,6 +350,19 @@ docker compose exec web php artisan tinker --execute 'foreach (App\Enums\Princip
 ```
 
 Ha a felfedezés DNS-hibát ad: lásd a névfeloldás pontját fent. / On a DNS error: see the name resolution section above.
+
+Ha a szolgáltató nem érhető el, a céges belépés a kulcskészlet és a felfedezési dokumentum utolsó jó példányával
+megy tovább, a letöltéstől számított legfeljebb egy napig (a szolgáltatónál közben visszavont kulcs addig
+elfogadott); az Egyszeri bejelentkezés csempe sárga, a szolgáltatót kiesés alatt 30 másodpercenként legfeljebb
+egyszer kérdezi. Egy nap után a céges belépés elutasul, amíg a szolgáltató nem válaszol. / When the provider cannot
+be reached, company sign-in goes on with the last good key set and discovery document for up to a day after they
+were fetched (a key the provider revoked meanwhile is still accepted that long); the Single sign-on tile is yellow,
+and the provider is asked at most once every 30 seconds during the outage. After that day company sign-ins are
+refused until the provider answers again.
+
+```sh
+docker compose logs --since 1d --no-log-prefix web | grep 'using the last good copy'
+```
 
 ADFS-belépésnél a `login.rejected` és a `login.succeeded` bejegyzés (parancs a következő pontban) megnevezi a
 fiókot kötő igényt (`email_claim`, `email_token`), a kihagyott igényeket az okkal (`claims_passed_over`) és az
@@ -425,10 +460,14 @@ error starts with the HTTP status and says what Exchange answered.
   service account needs a mailbox and the right to send.
 - `could not be reached` – hálózat, tűzfal, kimenő proxy (`HDID_HTTP_PROXY`), belső CA (`ca` mappa,
   utána `docker compose restart web worker`). / Network, firewall, outbound proxy, internal CA.
+- A tanúsítvány-ellenőrzést ne kapcsolja ki: csak a kifejezett `EWS_VERIFY_TLS=false` kapcsolja ki, élesben ezzel a
+  konténer nem indul, máshol a Levelezés csempe sárga (10. fejezet). / Do not switch the certificate check off: only
+  an explicit `EWS_VERIFY_TLS=false` does, in production the container does not start with it, elsewhere the Mail
+  tile is yellow (chapter 10).
 
 ## 14. Mentés és visszaállítás / Backup and restore
 
-Az `install.sh check` lelete / Finding of `install.sh check`: `FILES-09`.
+Az `install.sh check` lelete / Finding of `install.sh check`: `FILES-09`, `DB-04`.
 
 ```sh
 ./backup.sh
@@ -444,14 +483,26 @@ a szkript nem ír bele: ilyen mentést ne állítson vissza. / "A backup or rest
 `kill -9`) is lifted by the next run. A restore stopping on an "unexpected file" means the backup's
 configuration archive holds something the script never writes: do not restore that backup.
 
-Visszaállítás után mindenki kilép (a mobilalkalmazásban is), a munkamenet- és a gyorsítótár a Valkey-ben is
-üres; külső adatbázis külön visszaállítása után ugyanez: `./backup.sh signout` (mindkettő az alkalmazás
-`hdid:sign-out-all` parancsát futtatja; kézzel csak leállított `worker`, `sync-worker` és `scheduler` mellett:
-`docker compose run --rm --no-deps web artisan hdid:sign-out-all`). A kiléptetés nyoma az auditnaplóban: / After
-a restore everyone is signed out (in the mobile app too), the session store and the cache are empty, in Valkey
-too; after restoring an external database separately do the same with `./backup.sh signout` (both run the
-application's `hdid:sign-out-all` command; by hand only with `worker`, `sync-worker` and `scheduler` stopped:
-`docker compose run --rm --no-deps web artisan hdid:sign-out-all`). The sign-out in the audit log:
+Visszaállítás után mindenki kilép (a mobilalkalmazásban is), a munkamenetek, a gyorsítótár és a zárak törlődnek,
+a Valkey-ben kulcsonként, csak a telepítés kulcselőtagja alatt (FLUSHDB nélkül): a várakozó sorfeladatok, a
+visszajátszás-védelem és a más előtagú kulcsok megmaradnak; külső adatbázis külön visszaállítása után ugyanez:
+`./backup.sh signout` (mindkettő az alkalmazás `hdid:sign-out-all` parancsát futtatja; kézzel csak leállított
+`worker`, `sync-worker` és `scheduler` mellett: `docker compose run --rm --no-deps web artisan hdid:sign-out-all`).
+Külső Valkey-n az alkalmazás felhasználójának a SCAN és az UNLINK (vagy a DEL) parancs kell. A visszatöltés kliense
+`mariadb --sandbox --local-infile=0`, a beépített MariaDB `--local-infile=0` kapcsolóval fut: egy módosított mentés
+`LOAD DATA LOCAL` sora a konténer fájljait nem olvashatja be. A `DB-04` lelet szerint a kiszolgáló még engedi
+(régi konténer, vagy egy `compose.override.yaml` saját `command` sora a replikánál): `docker compose up -d
+--force-recreate mariadb`, külső adatbázisnál `local_infile = 0` a kiszolgálón. A kiléptetés nyoma az
+auditnaplóban: / After a restore everyone is signed out (in the mobile app too), the sessions, the cache and the
+locks are deleted, in Valkey key by key and only under the installation's key prefix (no FLUSHDB): the queued jobs,
+the replay guards and the keys of other prefixes stay; after restoring an external database separately do the
+same with `./backup.sh signout` (both run the application's `hdid:sign-out-all` command; by hand only with
+`worker`, `sync-worker` and `scheduler` stopped: `docker compose run --rm --no-deps web artisan hdid:sign-out-all`).
+On an external Valkey the application's user needs SCAN and UNLINK (or DEL). The restore loads the dump with
+`mariadb --sandbox --local-infile=0`, and the bundled MariaDB runs with `--local-infile=0`: a `LOAD DATA LOCAL` line
+of a tampered backup cannot read files of the container. Finding `DB-04` says the server still allows it (an old
+container, or a `command` line of its own in a `compose.override.yaml`, as for the replica): `docker compose up -d
+--force-recreate mariadb`, on an external database `local_infile = 0` on the server. The sign-out in the audit log:
 
 ```sh
 docker compose exec web php artisan tinker --execute 'App\Models\AuditLog::query()->where("event", "access.revoked_all")->latest()->take(3)->get()->each(fn ($e) => print($e->created_at." ".json_encode($e->context).PHP_EOL));'
@@ -536,6 +587,12 @@ Ha csak néhány valódi fióknak van `.test` címe (téves felismerés), nem ke
 address (a false match), there is no need to delete anything: set `APP_ENV=staging` for a while, fix the
 addresses, then go back to `production`.
 
+„Demo data is loaded only into an empty database”: `APP_ENV=demo` és `OPENHDID_DEMO_DATA=true` mellett az adatbázisban
+valódi adat van (ügyfél, ügyféltörzstétel, átvételi futás); a `migrate` semmit nem változtatott. A demóhoz új,
+üres adatbázis (új kötet) kell. / With `APP_ENV=demo` and `OPENHDID_DEMO_DATA=true` the database holds real data
+(clients, master-data records, sync runs); `migrate` changed nothing. The demo needs a new, empty database (a new
+volume).
+
 ## 17. „Ismeretlen kiszolgálónév” (400) / "Unknown host name" (400)
 
 Az alkalmazás csak az `APP_URL` gépnevére, a `localhost` névre és az `OPENHDID_EXTRA_HOSTS` neveire szóló
@@ -552,7 +609,7 @@ Javítás a `.env`-ben, majd `docker compose up -d`. Az `OPENHDID_EXTRA_HOSTS` n
 Fix `.env`, then `docker compose up -d`. The names in `OPENHDID_EXTRA_HOSTS` are for machine calls (call
 centre, mobile backend): in a browser the panel and the portal work on the `APP_URL` address only.
 
-## 18. Sok 429 vagy 503 / Many 429 or 503 answers
+## 18. Sok 429 vagy 503, megtelt /tmp / Many 429 or 503 answers, a full /tmp
 
 Az `install.sh check` lelete / Finding of `install.sh check`: `ENV-11`, `ENV-13`, `LOG-07`; javítás / fix: `./install.sh fix --only ENV-11`, `./install.sh fix --only ENV-13`.
 
@@ -579,6 +636,30 @@ docker compose logs web | grep -E 'nginx: (at most|no request)'      # a korlát
   /8, illetve /32), majd `docker compose up -d`; érvénytelen elemmel a konténer nem indul. / Users behind a
   company NAT: `HDID_RATE_LIMIT_EXEMPT_NETWORKS=203.0.113.0/24` (at most /8 or /32 per entry), then
   `docker compose up -d`; an invalid entry stops the container.
+- Egy NAT-cím mögötti ügyfélszolgálat is ide tartozik: az ügyintézők vezérlőpultjainak frissítései és a
+  műszakkezdési belépések egy címről jönnek (a panel belépője címenként percenként 5 jelszavas próbát enged). Ha
+  ilyenkor 429 jön, a válasz a mentesítés, nem a korlát emelése. / A helpdesk behind one NAT address belongs here
+  too: the agents' dashboard refreshes and the sign-ins at the start of a shift come from one address (the panel's
+  sign-in page allows 5 password attempts a minute per address). If 429 answers come then, exempt the network;
+  do not raise the limit.
+- 429 egy fájlfeltöltésre (például ügyféltörzsfájl a panelen): egyszerre legfeljebb 13 feltöltés fut, az összes
+  ügyféltől együtt (a 256 MB-os `/tmp` 60 %-a, feltöltésenként 11 MB); ez a mentesített hálózatokra és
+  `OPENHDID_NGINX_CONN_LIMIT=0` mellett is hat, a naplóban `limiting connections by zone "openhdid_upload"`. Néhány
+  másodperc múlva újra; tartósan feltöltési áradatra utal. / A 429 on a file upload (for example a master-data file
+  in the panel): at most 13 uploads run at once from all clients together (60 % of the 256 MB `/tmp`, 11 MB per
+  upload); it applies to exempt networks and with `OPENHDID_NGINX_CONN_LIMIT=0` too, the log says `limiting
+  connections by zone "openhdid_upload"`. Retry after a few seconds; if it lasts, it points to a flood of uploads.
+- Megtelt `/tmp`: a webkonténer `/tmp`-je memóriában van (256 MB), ide kerülnek a 16 KB-nál nagyobb kéréstörzsek,
+  a feltöltések és a nagy letöltések pufferei. Ha betelik, ezek a kérések elbuknak, a naplóban `No space left on
+  device`; a Kapacitás kártya 80 %-tól sárga, és mutatja a telítettséget. Előbb a feltöltési áradatot kell
+  keresni (fenti sor); tartósan nagyobb `/tmp` a `web` szolgáltatás `tmpfs` méretével (Kubernetesen az `emptyDir`
+  `sizeLimit`-jével) és ugyanennyivel nagyobb `OPENHDID_WEB_MEM_LIMIT`-tel (a pod memóriakorlátjával), mert a
+  `/tmp` a konténer memóriájába számít. / A full `/tmp`: the web container's `/tmp` is in memory (256 MB) and holds
+  request bodies above 16 KB, uploads and the buffers of large downloads. When it is full these requests fail and
+  the log says `No space left on device`; the Capacity tile turns yellow from 80 % and shows how full it is. Look
+  for a flood of uploads first (line above); a larger `/tmp` for good takes a larger `tmpfs` size on the `web`
+  service (the `emptyDir` `sizeLimit` on Kubernetes) and an `OPENHDID_WEB_MEM_LIMIT` (the pod's memory limit)
+  raised by the same amount, because `/tmp` counts against the container's memory.
 - Csak mérő- vagy tesztpéldányon: `OPENHDID_NGINX_RATE_LIMIT=0`, `OPENHDID_NGINX_CONN_LIMIT=0`. / Only on a
   load-test or test instance: `OPENHDID_NGINX_RATE_LIMIT=0`, `OPENHDID_NGINX_CONN_LIMIT=0`.
 - Tartós 503: a Rendszerállapot Kapacitás kártyája; több PHP-FPM folyamat (`OPENHDID_FPM_MAX_CHILDREN`) csak
@@ -646,6 +727,21 @@ kulcselőtagot használja: saját Valkey, vagy legalább saját adatbázis, ACL-
 fejezet). / If the scheduler and queue tiles are red because of "another installation", another installation
 uses the same Valkey and key prefix: give each its own Valkey, or at least its own database, ACL user and
 `REDIS_PREFIX`/`CACHE_PREFIX` (change the prefix only while the queue is empty: operations manual, chapter 6).
+
+Ha a munkamenet-tár kártyája piros „másik telepítés” miatt, egy másik telepítés (teszt, staging vagy klón)
+ugyanabba a munkamenet-Valkey-be írja a munkameneteit. 1.15.1 óta egyik sem fogadja el a másik munkamenetét,
+„emlékezz rám” sütijét és második lépését, de a mindenki kiléptetése vagy a visszaállítás az egyiken a másik
+munkameneteit is megszünteti: saját munkamenet-Valkey, vagy legalább saját `REDIS_SESSION_DB`,
+ACL-felhasználó (`REDIS_SESSION_USERNAME`, `REDIS_SESSION_PASSWORD`) és előtag kell; az új adatbázis vagy előtag
+egyszer mindenkit kiléptet. Éles adatbázisból klónozott telepítés az első használat előtt
+`docker compose exec web php artisan hdid:sign-out-all --force --reason=clone`. / If the session store tile is
+red because of "another installation", another installation (a test, staging or cloned one) keeps its sessions
+in the same session Valkey. Since 1.15.1 neither accepts the other's sessions, remember-me cookies or second
+factor, but a sign-out of everyone or a restore on one also ends the sessions of the other: give each its own
+session Valkey, or at least its own `REDIS_SESSION_DB`, ACL user (`REDIS_SESSION_USERNAME`,
+`REDIS_SESSION_PASSWORD`) and prefix; a new database or prefix signs everybody out once. An installation cloned
+from a production database runs `docker compose exec web php artisan hdid:sign-out-all --force --reason=clone`
+once before it is used.
 
 ## 21. Régi, adatbázisos alapértékű telepítés / An old installation with the database defaults
 
@@ -775,12 +871,12 @@ Az azonosítók és a fejezetek / The ids and the chapters:
 | `HOST-01`…`HOST-07` | gép: mag, memória, lemez, idő, root, portok, rootless alsó portok / host | telepítési útmutató 2., 3., 6.1 | – |
 | `DOCKER-01`…`DOCKER-08` | Docker: démon, verziók, Podman, rootless, démon-proxy, image-ek, rootless NFS / Docker | 4., 5. | – |
 | `FILES-01`…`FILES-09` | fájlok: compose.yaml, .env, db.env, jogok, profilfájl, override, Compose-hiba, ellenőrzőösszeg, válaszfájl, mentés / files | 6., 7., 14., 15. | `FILES-03` FIX-PERMS, `FILES-04` FIX-PROFILE-FILE, `FILES-05` FIX-OVERRIDE |
-| `ENV-01`…`ENV-18`, `ENV-21` | környezet: új és megszűnt kulcsok, verzió, APP_KEY, APP_URL, éles védelmek, adatbázisos alapérték, Valkey-jelszó, mentesített hálózatok, terheléselosztó, nginx-dolgozók, átvételi sor, log levelező, 10k szerep, check-env, előtag, adatbázis-jelszó / environment | 3., 18., 20., 21., 23.; UPGRADE.md 3.–5. | `ENV-01` FIX-ENV-KEYS, `ENV-02` FIX-ENV-OBSOLETE, `ENV-04` FIX-APP-KEY, `ENV-07`/`ENV-08` FIX-DB-TO-REDIS, `ENV-09` FIX-REDIS-PASSWORD-FILE, `ENV-10` FIX-VALKEY-RECREATE, `ENV-11` FIX-EXEMPT, `ENV-13` FIX-NGINX-WORKERS, `ENV-14` FIX-PRIORITY-QUEUE |
+| `ENV-01`…`ENV-18`, `ENV-21` | környezet: új és megszűnt kulcsok, verzió, APP_KEY, APP_URL, éles védelmek (köztük `EWS_VERIFY_TLS=false`), adatbázisos alapérték, Valkey-jelszó, mentesített hálózatok, terheléselosztó, nginx-dolgozók, átvételi sor, log levelező, 10k szerep, check-env, előtag, adatbázis-jelszó / environment | 3., 10., 18., 20., 21., 23.; UPGRADE.md 3.–5. | `ENV-01` FIX-ENV-KEYS, `ENV-02` FIX-ENV-OBSOLETE, `ENV-04` FIX-APP-KEY, `ENV-07`/`ENV-08` FIX-DB-TO-REDIS, `ENV-09` FIX-REDIS-PASSWORD-FILE, `ENV-10` FIX-VALKEY-RECREATE, `ENV-11` FIX-EXEMPT, `ENV-13` FIX-NGINX-WORKERS, `ENV-14` FIX-PRIORITY-QUEUE |
 | `TLS-01`…`TLS-05` | tanúsítvány: fájlok, lejárat, kulcspár és lánc, CA-mappa és annak joga / certificate, CA folder and its mode | 6., 10.; telepítési útmutató 6.3 | `TLS-01`…`TLS-03` FIX-TLS-INSTALL, `TLS-04` FIX-CA-RESTART, `TLS-05` kézi / manual |
 | `NET-01`…`NET-03` | hálózat: DNS, névfeloldás a konténerből, portok (`OPENHDID_TLS=off` mellett csak a HTTP-port) / network, ports (HTTP only behind a TLS-terminating balancer) | 7.; telepítési útmutató 6.1, 6.2 | `NET-03` FIX-UP |
-| `DB-01`…`DB-03` | adatbázis: futási és migrációs fiók, függő migráció, jogok / database | telepítési útmutató 7. | – |
+| `DB-01`…`DB-04` | adatbázis: futási és migrációs fiók, függő migráció, jogok, LOAD DATA LOCAL / database | 14.; telepítési útmutató 7. | – |
 | `SVC-01`…`SVC-05` | szolgáltatások: állapot, migrate, image és a beállítás lenyomata (a Compose config-hash-e), OOM, ütemező a B gépen / services, image and configuration hash | 3., 16.; UPGRADE.md 5. | `SVC-01`, `SVC-03` FIX-UP |
-| `HEALTH-<csempe>` | a `hdid:health` nem zöld csempéi; a bekötetlen integráció figyelmeztetés / status tiles | 1.; üzemeltetési kézikönyv 1., 6. | – |
+| `HEALTH-<csempe>` | a `hdid:health` nem zöld csempéi (például `HEALTH-environment`, `HEALTH-capacity`); a bekötetlen integráció figyelmeztetés / status tiles | 1., 18.; üzemeltetési kézikönyv 1., 6. | – |
 | `VALKEY-01` | Valkey-politika és memória / Valkey policy and memory | 20. | – |
 | `SCHED-01` | beragadt ütemező-zár / stuck scheduler lock | 22. | FIX-SCHED-LOCK |
 | `LOG-01`…`LOG-09` | ismert naplóhibák (24 óra) / known log errors | 2., 3., 7., 10., 18.–20., 23. | `LOG-02` FIX-VALKEY-RECREATE, `LOG-04` FIX-CA-RESTART |

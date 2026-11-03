@@ -43,8 +43,11 @@ Route::prefix('api/v1/client')->name('api.v1.client.')->group(function (): void 
         Route::post('logout-all', [SessionController::class, 'logoutAll'])->name('logout-all');
 
         Route::get('questions', [AnswersController::class, 'index'])->name('questions');
-        Route::put('answers/{question}', [AnswersController::class, 'store'])->name('answers.store');
-        Route::delete('answers/{question}', [AnswersController::class, 'destroy'])->name('answers.destroy');
+        // The writes without a bucket of their own share one, per client: plenty
+        // for a person clicking, not for a script filling the audit log or
+        // flipping where the SMS codes go.
+        Route::put('answers/{question}', [AnswersController::class, 'store'])->middleware('throttle:30,1,client-write')->name('answers.store');
+        Route::delete('answers/{question}', [AnswersController::class, 'destroy'])->middleware('throttle:30,1,client-write')->name('answers.destroy');
 
         // The uniqueness check answers "taken" or "free" for any candidate,
         // so this endpoint needs a bucket of its own.
@@ -52,8 +55,8 @@ Route::prefix('api/v1/client')->name('api.v1.client.')->group(function (): void 
         Route::delete('pin', [PinController::class, 'destroy'])->middleware('throttle:10,1,pin-change')->name('pin.destroy');
 
         Route::post('phone-numbers', [PhoneNumbersController::class, 'store'])->middleware('throttle:10,1,phone-add')->name('phone-numbers.store');
-        Route::delete('phone-numbers/{phoneNumber}', [PhoneNumbersController::class, 'destroy'])->name('phone-numbers.destroy');
-        Route::post('phone-numbers/{phoneNumber}/primary', [PhoneNumbersController::class, 'makePrimary'])->name('phone-numbers.primary');
+        Route::delete('phone-numbers/{phoneNumber}', [PhoneNumbersController::class, 'destroy'])->middleware('throttle:30,1,client-write')->name('phone-numbers.destroy');
+        Route::post('phone-numbers/{phoneNumber}/primary', [PhoneNumbersController::class, 'makePrimary'])->middleware('throttle:30,1,client-write')->name('phone-numbers.primary');
         Route::post('phone-numbers/{phoneNumber}/verify/request', [PhoneNumbersController::class, 'requestVerification'])->middleware('throttle:3,10,phone-verify-request')->name('phone-numbers.verify.request');
         Route::post('phone-numbers/{phoneNumber}/verify', [PhoneNumbersController::class, 'verify'])->middleware('throttle:10,10,phone-verify')->name('phone-numbers.verify');
 

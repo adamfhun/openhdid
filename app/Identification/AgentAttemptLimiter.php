@@ -11,7 +11,9 @@ use Illuminate\Support\Facades\RateLimiter;
  * Caps the number of failed code and PIN checks one agent may run in an
  * hour (a setting, 50 by default). Successful checks are free: the limit
  * exists to stop an account from being used to guess codes, not to slow
- * down a busy agent.
+ * down a busy agent. A check takes its attempt before the slow work
+ * (reserve) and gives it back when it passes or cannot run (giveBack), so
+ * overlapping checks can never go past the limit.
  */
 class AgentAttemptLimiter
 {
@@ -25,20 +27,30 @@ class AgentAttemptLimiter
     }
 
     /**
+     * Takes one attempt before the check; at the limit it takes nothing and
+     * refuses.
+     *
      * @throws IdentificationException
      */
-    public function assertAllowed(User $agent): void
+    public function reserve(User $agent): void
     {
-        if (RateLimiter::tooManyAttempts($this->key($agent), $this->limit())) {
+        if (RateLimiter::hit($this->key($agent), self::WINDOW_SECONDS) > $this->limit()) {
+            $this->giveBack($agent);
             $minutes = (int) ceil(RateLimiter::availableIn($this->key($agent)) / 60);
 
             throw new IdentificationException(__('You have reached the hourly limit of :n failed verifications. Try again in :m minutes.', ['n' => $this->limit(), 'm' => max(1, $minutes)]));
         }
     }
 
-    public function hit(User $agent): void
+    /**
+     * Returns a reserved attempt: the check passed, or could not run. Never
+     * below zero (the window may have ended meanwhile).
+     */
+    public function giveBack(User $agent): void
     {
-        RateLimiter::hit($this->key($agent), self::WINDOW_SECONDS);
+        if (RateLimiter::attempts($this->key($agent)) > 0) {
+            RateLimiter::decrement($this->key($agent), self::WINDOW_SECONDS);
+        }
     }
 
     public function remaining(User $agent): int

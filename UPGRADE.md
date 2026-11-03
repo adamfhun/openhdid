@@ -11,7 +11,7 @@ The commands run in the installation folder (`/opt/openhdid` in the examples), a
 ### 1. Előkészítés
 
 ```sh
-v=1.15.0
+v=1.15.1
 cd /opt/openhdid
 base=https://github.com/adamfhun/openhdid/releases/download/v$v
 ```
@@ -113,6 +113,12 @@ mindhárom 0), csak ezután a `REDIS_PASSWORD` (ha üres), a `redis` compose-pro
 A kiadás többi teendője (STARTTLS, kéréskorlát, szerepkörök ellenőrzése, Kubernetes NetworkPolicy, demóadat
 élesben) a CHANGELOG „Frissítés előtt” részében áll.
 
+Az 1.15.1-re frissítés egyszer mindenkit kiléptet (a korábbi „emlékezz rám” sütik sem léptetnek be), a
+korlátszámlálók nulláról indulnak, és az 5. lépés a beépített `mariadb` konténert is újra létrehozza (`--local-infile=0`,
+néhány másodperc adatbázis-kiesés). Ezután az `APP_URL` vagy az `APP_KEY` minden cseréje ugyanígy mindenkit
+kiléptet. Élesben, EWS-levelezésnél `EWS_VERIFY_TLS=false` mellett az új image nem indul: a 3. lépés után az
+`./install.sh check` ezt `ENV-06` lelettel előre jelzi (TROUBLESHOOTING.md 10. fejezet).
+
 ### 5. Frissítés
 
 ```sh
@@ -154,11 +160,39 @@ Migrációval a frissítés előtti mentés kell; ez a régi verziót is vissza�
 ./backup.sh restore <a frissítés előtti mentés neve>
 ```
 
+A kiléptetést ilyenkor a visszaállított régi verzió parancsa végzi: az 1.15.0 és a korábbi kiadások a Valkey
+munkamenet- és gyorsítótár-adatbázisát még `FLUSHDB`-vel ürítik, a várakozó sorfeladatokkal együtt (a ki nem
+küldött üzeneteket az ütemező legfeljebb öt percen belül újra sorba állítja). Az 1.15.1-től a parancs csak a
+telepítés kulcselőtagja alatti kulcsokat törli, a sor megmarad.
+
 ### Két alkalmazásgép (10k profil)
 
 A két gép (A: elsődleges, `COMPOSE_PROFILES=primary`, ütemező és ügyféltörzs-feldolgozó; B: másodlagos) ugyanazt
 a külső MariaDB-t, a két külső Valkey-t és az NFS-en közös `storage` kötetet használja. Előbb mindkét gépen az
-1. lépés, utána ebben a sorrendben:
+1. lépés, utána ebben a sorrendben.
+
+**1.15.1-re a két gép egy karbantartási ablakban frissül** (nem gördülően): a zárak és a korlátszámlálók neve a
+telepítésazonosítót viseli, a munkamenetek a telepítéshez kötöttek, így a régi és az új kiadás nem futhat együtt.
+A 3. lépés előtt mindkét gépen `docker compose stop web worker` (az A gépen a `sync-worker` és a `scheduler` is), és
+egyik gép sem kap forgalmat, amíg mindkettő frissült. A frissítés egyszer mindenkit kiléptet, a korábbi
+„emlékezz rám” sütik sem léptetnek be; a két gép `APP_URL`-je pontosan egyezzen.
+
+0. **Infra gép (csak ha a kétgépes profil infra gépét használja, és a kiadás a `profile-10k-infra.yaml`-t vagy a
+   MariaDB- és Valkey-image digestjét megváltoztatta; a kiadási jegyzet „Frissítés előtt” része mondja).** A mentés
+   a MariaDB-konténeren belül készül, utána a fájl cseréje, a változott szolgáltatások újralétrehozása (a
+   `configs.content` változása is csak így hat) és ellenőrzés. Mindkét alkalmazásgép rövid ideig nem éri el az
+   adatbázist és a Valkey-t, ezért a B és az A gép frissítése közvetlenül utána jön.
+
+   ```sh
+   docker compose exec -T mariadb sh -c 'MYSQL_PWD="$DB_PASSWORD" exec mariadb-dump -u"$DB_USERNAME" --single-transaction --no-tablespaces --default-character-set=utf8mb4 "$MARIADB_DATABASE"' | gzip > openhdid-infra-$(date +%F).sql.gz
+   curl -fsSL -O "$base/profile-10k-infra.yaml" -O "$base/install.sh" -O "$base/SHA256SUMS"
+   sha256sum -c --ignore-missing SHA256SUMS
+   chmod 755 install.sh
+   mv profile-10k-infra.yaml profiles/10k/infra.yaml
+   docker compose pull
+   docker compose up -d --wait --force-recreate mariadb valkey valkey-sessions
+   ./install.sh check
+   ```
 
 1. **Mentés a fájlok cseréje és a migráció előtt.** A `backup.sh` külső adatbázist nem ment (az `info.txt` `database=external` sora
    jelzi): a MariaDB-t a kiszolgáló saját eszközével kell menteni, a `storage` kötetet az NFS-kiszolgálón, a
@@ -177,10 +211,10 @@ a külső MariaDB-t, a két külső Valkey-t és az NFS-en közös `storage` kö
    szétválnak.
 
    ```sh
-   curl -fsSL -O "$base/compose.yaml" -O "$base/backup.sh" -O "$base/SHA256SUMS" -O "$base/profile-10k.yaml"
+   curl -fsSL -O "$base/compose.yaml" -O "$base/backup.sh" -O "$base/install.sh" -O "$base/SHA256SUMS" -O "$base/profile-10k.yaml"
    curl -fsSL -o env.example "$base/env.example"
    sha256sum -c --ignore-missing SHA256SUMS
-   chmod 755 backup.sh
+   chmod 755 backup.sh install.sh
    mkdir -p profiles/10k && mv profile-10k.yaml profiles/10k/compose.yaml
    ```
 
@@ -200,9 +234,9 @@ majd az A gép frissítése, és csak utána kap forgalmat bármelyik.
 **Visszalépés.** Migráció nélkül: a régi `OPENHDID_VERSION` vissza, `docker compose up -d`, előbb az A, aztán a
 B gépen. Migrációval: mindkét gépen `docker compose stop`; az adatbázis visszaállítása a frissítés előtti
 mentésből a kiszolgáló eszközével; a régi `OPENHDID_VERSION` vissza mindkét gépen; az A gépen
-`./backup.sh signout` (mindenki kilép, hogy a mentés óta visszavont belépések ne éledjenek újra; a közös Valkey
-munkamenet- és gyorsítótár-adatbázisát üríti), végül `docker compose up -d` az A, majd a B gépen. A mentés óta
-keletkezett adat elvész.
+`./backup.sh signout` (mindenki kilép, hogy a mentés óta visszavont belépések ne éledjenek újra; a régi kiadás
+parancsa a közös Valkey munkamenet- és gyorsítótár-adatbázisát még `FLUSHDB`-vel üríti, a várakozó
+sorfeladatokkal együtt), végül `docker compose up -d` az A, majd a B gépen. A mentés óta keletkezett adat elvész.
 
 ### Kubernetes (20k profil)
 
@@ -228,13 +262,20 @@ Előbb a migrációs Job fut le (a migrációs fiókkal, a közös Valkey zárja
 pods`, `kubectl -n openhdid exec deploy/openhdid-web -- php artisan hdid:health`; a Rendszerállapot fejlécében az
 új verzió.
 
+Az 1.15.1-nél a gördülő csere perceiben a régi és az új podok együtt futnak: a két verzió zárai nem zárják ki
+egymást, és a régi podon ekkor létrejött munkamenetet az új pod még egyszer kilépteti. Forgalmon kívüli időben
+frissítsen; teljesen elkerülhető, ha a migrációs Job előtt leállítja a podokat
+(`kubectl -n openhdid scale deploy --all --replicas=0`), ekkor a teljes `apply` végéig kiesés van.
+
 **Visszalépés.** Migráció nélkül: `kubectl -n openhdid rollout undo deploy/openhdid-web deploy/openhdid-worker
 deploy/openhdid-sync-worker deploy/openhdid-scheduler`. Migrációval a `rollout undo` nem elég (a régi verzió az új
 sémán futna): a podok leállítása (`kubectl -n openhdid scale deploy --all --replicas=0`), az adatbázis
 visszaállítása a frissítés előtti mentésből a menedzselt szolgáltatás eszközével, mindenki kiléptetése, még a podok
 indítása előtt, az alkalmazás saját parancsával egy egyszeri podban (a régi kiadás image-ével; ugyanaz, amit a
-`backup.sh` hív: növeli minden fiók munkamenet-korszakát, törli a tokeneket, érvényteleníti az élő kódokat, és
-`FLUSHDB`-vel üríti a két Valkey munkamenet- és gyorsítótár-adatbázisát; a végén kiírja, mi történt):
+`backup.sh` hív: növeli minden fiók munkamenet-korszakát, törli a tokeneket, érvényteleníti az élő kódokat; a régi
+kiadás parancsa a két Valkey munkamenet- és gyorsítótár-adatbázisát még `FLUSHDB`-vel üríti, a várakozó
+sorfeladatokkal együtt, az 1.15.1-től a parancs csak a telepítés kulcselőtagja alatti kulcsokat törli; a végén
+kiírja, mi történt):
 
 ```sh
 kubectl -n openhdid run openhdid-signout --rm -i --restart=Never \
@@ -274,7 +315,7 @@ kubectl apply -k kubernetes/overlays/20k      # a régi címke klónjában
 ### 1. Preparation
 
 ```sh
-v=1.15.0
+v=1.15.1
 cd /opt/openhdid
 base=https://github.com/adamfhun/openhdid/releases/download/v$v
 ```
@@ -374,6 +415,12 @@ unchanged and web and the scheduler start again. The same by hand: TROUBLESHOOTI
 The other steps of this release (STARTTLS, request limit, reviewing the roles, Kubernetes NetworkPolicy, demo
 data in production) are in the "Before upgrading" part of the CHANGELOG.
 
+The upgrade to 1.15.1 signs everybody out once (remember-me cookies issued earlier do not sign them in again), the
+rate counters start from zero, and step 5 recreates the bundled `mariadb` container too (`--local-infile=0`, a few seconds
+without the database). From then on every change of `APP_URL` or `APP_KEY` signs everybody out the same way. In
+production, with EWS mail, the new image does not start with `EWS_VERIFY_TLS=false`: after step 3,
+`./install.sh check` reports it beforehand as finding `ENV-06` (TROUBLESHOOTING.md, chapter 10).
+
 ### 5. Upgrade
 
 ```sh
@@ -415,11 +462,40 @@ With migrations, restore the backup taken before the upgrade; it brings back and
 ./backup.sh restore <name of the backup taken before the upgrade>
 ```
 
+The sign-out is then done by the command of the restored old version: 1.15.0 and earlier releases still empty
+the session and cache databases of Valkey with `FLUSHDB`, waiting queue jobs with them (the scheduler requeues
+unsent messages within five minutes). From 1.15.1 the command deletes only the keys under the installation's key
+prefix, and the queue stays.
+
 ### Two application hosts (10k profile)
 
 Both hosts (A: primary, `COMPOSE_PROFILES=primary`, scheduler and master-data worker; B: secondary) use the same
 external MariaDB, the two external Valkeys and the `storage` volume shared on NFS. First step 1 on both hosts, then
-in this order:
+in this order.
+
+**For 1.15.1 both hosts are upgraded in one maintenance window** (not rolling): the names of the locks and rate
+counters carry the installation id and the sessions are bound to the installation, so the old and the new release
+cannot run side by side. Before step 3 run `docker compose stop web worker` on both hosts (on host A the
+`sync-worker` and the `scheduler` too), and neither host takes traffic until both are upgraded. The upgrade signs
+everybody out once, and remember-me cookies issued earlier do not sign them in again; the `APP_URL` of both hosts
+must match exactly.
+
+0. **Infra host (only if you use the infra host of the two-host profile, and the release changed
+   `profile-10k-infra.yaml` or the digest of the MariaDB and Valkey images; the "Before upgrading" part of the
+   release notes says so).** The backup is made inside the MariaDB container, then the file is replaced, the
+   changed services are recreated (a `configs.content` change takes effect only this way) and checked. Both
+   application hosts lose the database and Valkey for a short while, so hosts B and A follow right away.
+
+   ```sh
+   docker compose exec -T mariadb sh -c 'MYSQL_PWD="$DB_PASSWORD" exec mariadb-dump -u"$DB_USERNAME" --single-transaction --no-tablespaces --default-character-set=utf8mb4 "$MARIADB_DATABASE"' | gzip > openhdid-infra-$(date +%F).sql.gz
+   curl -fsSL -O "$base/profile-10k-infra.yaml" -O "$base/install.sh" -O "$base/SHA256SUMS"
+   sha256sum -c --ignore-missing SHA256SUMS
+   chmod 755 install.sh
+   mv profile-10k-infra.yaml profiles/10k/infra.yaml
+   docker compose pull
+   docker compose up -d --wait --force-recreate mariadb valkey valkey-sessions
+   ./install.sh check
+   ```
 
 1. **Back up before replacing the files and before the migration.** `backup.sh` does not back up an external database (the `database=external`
    line of `info.txt` says so): back MariaDB up with the server's own tool, the `storage` volume on the NFS
@@ -438,10 +514,10 @@ in this order:
    locks and sessions drift apart.
 
    ```sh
-   curl -fsSL -O "$base/compose.yaml" -O "$base/backup.sh" -O "$base/SHA256SUMS" -O "$base/profile-10k.yaml"
+   curl -fsSL -O "$base/compose.yaml" -O "$base/backup.sh" -O "$base/install.sh" -O "$base/SHA256SUMS" -O "$base/profile-10k.yaml"
    curl -fsSL -o env.example "$base/env.example"
    sha256sum -c --ignore-missing SHA256SUMS
-   chmod 755 backup.sh
+   chmod 755 backup.sh install.sh
    mkdir -p profiles/10k && mv profile-10k.yaml profiles/10k/compose.yaml
    ```
 
@@ -460,9 +536,9 @@ upgrade host B, then host A, and only then let either take traffic.
 **Going back.** Without migrations: set the old `OPENHDID_VERSION` back, `docker compose up -d`, on host A first,
 then on B. With migrations: `docker compose stop` on both hosts; restore the database from the backup taken before
 the upgrade with the server's tool; set the old `OPENHDID_VERSION` back on both hosts; on host A
-`./backup.sh signout` (signs everybody out so that sign-ins revoked since the backup do not come back; it empties
-the session and cache databases of the shared Valkey), finally `docker compose up -d` on host A, then on B. Data
-written since the backup is lost.
+`./backup.sh signout` (signs everybody out so that sign-ins revoked since the backup do not come back; the old
+release's command still empties the session and cache databases of the shared Valkey with `FLUSHDB`, waiting queue
+jobs with them), finally `docker compose up -d` on host A, then on B. Data written since the backup is lost.
 
 ### Kubernetes (20k profile)
 
@@ -488,13 +564,20 @@ worker with the `Recreate` strategy. For the 10k overlay use `kubernetes/overlay
 get pods`, `kubectl -n openhdid exec deploy/openhdid-web -- php artisan hdid:health`; the system status header
 shows the new version.
 
+For 1.15.1 the old and the new pods run side by side during the minutes of the rolling update: the locks of the two
+versions do not exclude each other, and a session created on an old pod then is signed out once more by a new pod.
+Upgrade outside office hours; to avoid it entirely, stop the pods before the migration Job
+(`kubectl -n openhdid scale deploy --all --replicas=0`), with an outage until the full `apply` is done.
+
 **Going back.** Without migrations: `kubectl -n openhdid rollout undo deploy/openhdid-web deploy/openhdid-worker
 deploy/openhdid-sync-worker deploy/openhdid-scheduler`. With migrations `rollout undo` is not enough (the old
 version would run on the new schema): stop the pods (`kubectl -n openhdid scale deploy --all --replicas=0`),
 restore the database from the backup taken before the upgrade with the managed service's tool, sign everybody out
 before any pod starts, with the application's own command in a one-off pod (the image of the old release; the same
-command `backup.sh` runs: it moves every account's session epoch on, deletes the tokens, uses up the live codes and
-empties the session and cache databases of both Valkeys with `FLUSHDB`; it reports what it did):
+command `backup.sh` runs: it moves every account's session epoch on, deletes the tokens and uses up the live codes;
+the old release's command still empties the session and cache databases of both Valkeys with `FLUSHDB`, waiting
+queue jobs with them, while from 1.15.1 it deletes only the keys under the installation's key prefix; it reports
+what it did):
 
 ```sh
 kubectl -n openhdid run openhdid-signout --rm -i --restart=Never \

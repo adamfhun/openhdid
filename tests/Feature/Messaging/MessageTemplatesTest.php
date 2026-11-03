@@ -132,3 +132,34 @@ it('stores the largest allowed template inside the layout, and its subject cut t
         ->and(strlen((string) $stored->body))->toBeLessThan(16_777_215)
         ->and(mb_strlen((string) $stored->subject))->toBeLessThanOrEqual(255);
 });
+
+it('says in the login link e-mail that a newer request makes the link stop working', function (): void {
+    expect(MessageKey::MagicLink->defaultBody('hu'))->toContain('Ha közben újabb belépési hivatkozást kér (vagy valaki az Ön e-mail-címével kér egyet), ez a hivatkozás érvényét veszti; mindig a legutóbbi levelet használja.')
+        ->and(MessageKey::MagicLink->defaultBody('en'))->toContain('If a newer login link is requested in the meantime (by you, or by someone with your e-mail address), this link stops working; always use the latest e-mail.');
+});
+
+it('treats a template test send like the real message: its content is wiped once it is out, and the mail keeps no saved copy', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create(['email' => 'admin@x.hu']));
+    Filament::setCurrentPanel('admin');
+    Mail::fake();
+    $sms = new FakeSmsSender;
+    app()->instance(SmsSender::class, $sms);
+    // The list page creates the template rows.
+    $this->get('/admin/content/message-templates')->assertOk();
+
+    $pin = MessageTemplate::query()->where('key', 'pin_sms')->where('locale', 'hu')->first();
+    Livewire::test(EditMessageTemplate::class, ['record' => $pin->id])
+        ->callAction('sendTest', ['phone' => '+36301234567'])
+        ->assertNotified(__('Test message queued to :to', ['to' => '+36301234567']));
+
+    $message = OutboundMessage::query()->latest('id')->first();
+    expect($sms->lastTo('+36301234567'))->not->toBeNull()
+        ->and($message->isRedacted())->toBeTrue()
+        ->and($message->body)->toBe('');
+
+    $email = MessageTemplate::query()->where('key', 'magic_link')->where('locale', 'en')->first();
+    Livewire::test(EditMessageTemplate::class, ['record' => $email->id])
+        ->callAction('sendTest', ['email' => 'admin@x.hu']);
+    Mail::assertSent(TemplatedMail::class, fn (TemplatedMail $mail): bool => $mail->hasTo('admin@x.hu') && $mail->carriesSecret === true);
+});

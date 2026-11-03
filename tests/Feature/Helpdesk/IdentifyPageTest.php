@@ -4,6 +4,7 @@ use App\Auth\Permission;
 use App\Auth\Role;
 use App\CallCenter\CallCenterService;
 use App\Enums\CallStatus;
+use App\Enums\ClientTier;
 use App\Enums\IdMethod;
 use App\Enums\IdSessionStatus;
 use App\Enums\PhoneNumberSource;
@@ -16,6 +17,7 @@ use App\Filament\Admin\Resources\Clients\Pages\ListClients;
 use App\Filament\Admin\Widgets\MissedCallsWidget;
 use App\Filament\Admin\Widgets\OngoingCallsWidget;
 use App\Identification\ClientAnswers;
+use App\Identification\CurrentIdentification;
 use App\Identification\PinService;
 use App\Identification\QaSessionEngine;
 use App\Models\AuditLog;
@@ -31,6 +33,7 @@ use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Hash;
 use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Livewire;
 
@@ -488,3 +491,106 @@ it('refuses a manual identification of a client whose package no longer counts, 
 
     expect(IdSession::query()->where('method', IdMethod::Manual)->count())->toBe(0);
 });
+
+it('refuses a manual identification whose reason is shorter than ten characters without the surrounding spaces', function (): void {
+    $call = Call::factory()->create(['client_id' => $this->client->id, 'agent_user_id' => $this->agent->id]);
+
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id])
+        ->callAction('manualIdentify', data: ['reason' => str_repeat(' ', 9).'x'])
+        ->assertHasActionErrors(['reason']);
+
+    expect(IdSession::query()->where('method', IdMethod::Manual)->exists())->toBeFalse()
+        ->and(AuditLog::query()->where('event', 'id_session.manual')->exists())->toBeFalse();
+});
+
+/** A held call identified (by PIN) as the given client. */
+function identifiedCall(Client $client, User $agent): Call
+{
+    $call = Call::factory()->create(['client_id' => $client->id, 'agent_user_id' => $agent->id, 'status' => CallStatus::Active]);
+    IdSession::factory()->create(['client_id' => $client->id, 'agent_user_id' => $agent->id, 'call_id' => $call->id, 'method' => IdMethod::Pin, 'status' => IdSessionStatus::Passed, 'decided_at' => now()]);
+
+    return $call->fresh();
+}
+
+it('does not move an identified call to another client without confirmation', function (): void {
+    $other = Client::factory()->synced()->create(['name' => 'Más Márta']);
+    $call = identifiedCall($other, $this->agent);
+
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id])
+        ->assertOk()
+        ->assertSee(__('This call is identified as :client.', ['client' => 'Más Márta']))
+        ->assertActionVisible('moveIdentifiedCall');
+
+    expect($call->fresh()->client_id)->toBe($other->id)
+        ->and($call->fresh()->isIdentified())->toBeTrue();
+});
+
+it('ends the identification when an identified call is moved after confirmation, and moving it back does not bring it back', function (): void {
+    $other = Client::factory()->synced()->create(['name' => 'Más Márta']);
+    $call = identifiedCall($other, $this->agent);
+
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id])
+        ->callAction('moveIdentifiedCall')
+        ->assertHasNoActionErrors();
+
+    expect($call->fresh()->client_id)->toBe($this->client->id)
+        ->and($call->fresh()->isIdentified())->toBeFalse()
+        ->and(IdSession::query()->where('call_id', $call->id)->where('client_id', $other->id)->sole()->voided_at)->not->toBeNull();
+
+    // Back to the first client: its ended pass does not count again.
+    Livewire::test(Identify::class, ['client' => $other->id, 'call' => $call->id])->assertOk();
+    expect($call->fresh()->client_id)->toBe($other->id)
+        ->and($call->fresh()->isIdentified())->toBeFalse()
+        ->and(app(CurrentIdentification::class)->forClient($this->agent, $other, $call->fresh()))->toBeNull()
+        ->and(OngoingCallsWidget::identificationOf($call->fresh()))->toBeNull();
+});
+
+it('stops a confirmed move when the identification on the call changed meanwhile', function (): void {
+    $other = Client::factory()->synced()->create(['name' => 'Más Márta']);
+    $call = identifiedCall($other, $this->agent);
+    $page = Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id]);
+
+    // Another pass on the call after the page showed the first one.
+    IdSession::factory()->create(['client_id' => $other->id, 'agent_user_id' => $this->agent->id, 'call_id' => $call->id, 'method' => IdMethod::Manual, 'status' => IdSessionStatus::Passed, 'decided_at' => now()->addSecond()]);
+
+    $page->callAction('moveIdentifiedCall')->assertNotified();
+
+    expect($call->fresh()->client_id)->toBe($other->id)
+        ->and(IdSession::query()->whereNotNull('voided_at')->exists())->toBeFalse();
+});
+
+it('does not offer identification of another client while the identified call has not been moved', function (): void {
+    app(Settings::class)->set(SettingKey::PinAgentVerificationEnabled, true);
+    $this->client->forceFill(['pin_hash' => Hash::make('123456'), 'pin_lookup' => app(PinService::class)->lookupOf('123456')])->save();
+    $other = Client::factory()->synced()->create(['name' => 'Más Márta']);
+    $call = identifiedCall($other, $this->agent);
+
+    $page = Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id]);
+    expect($page->instance()->availableMethods()['qa']['enabled'])->toBeFalse()
+        ->and($page->instance()->availableMethods()['qa']['note'])->toBe(__('Move the call to this client first; it is identified as :client.', ['client' => 'Más Márta']));
+
+    $page->call('startQa')->set('pin', '123456')->call('verifyPin')
+        ->callAction('manualIdentify', data: ['reason' => 'Visszahívtam a rögzített számon, egyeztettük.']);
+
+    expect(IdSession::query()->where('client_id', $this->client->id)->exists())->toBeFalse();
+});
+
+it('does not show a call on the client search that the user may not work on, nor pass it on', function (string $case): void {
+    $colleague = User::factory()->withRole(Role::Agent)->create();
+    $viewer = User::factory()->create();
+    $viewer->givePermissionTo(Permission::ClientsView->value);
+    [$call, $user] = match ($case) {
+        'another level' => [Call::factory()->create(['tier' => ClientTier::Premium, 'caller_number_e164' => '+36309998877', 'agent_user_id' => $this->agent->id]), tap($this->agent)->forceFill(['handles_tiers' => ['standard']])->save() ? $this->agent : $this->agent],
+        'a colleague\'s call' => [Call::factory()->create(['caller_number_e164' => '+36309998877', 'agent_user_id' => $colleague->id, 'status' => CallStatus::Active]), $this->agent],
+        'no identification permission' => [Call::factory()->create(['caller_number_e164' => '+36309998877', 'status' => CallStatus::Missed, 'agent_user_id' => null]), $viewer],
+    };
+    $this->actingAs($user);
+
+    Livewire::test(SearchClients::class, ['call' => $call->id])
+        ->assertDontSee('+36 30 999 8877')->assertDontSee('+36309998877')
+        ->assertSee(__('The call in the address is not one you can work on (another service level, or another agent has it); the search works without it.'))
+        ->tap(fn ($livewire) => expect($livewire->instance()->identifyUrl($this->client))->not->toContain($call->id))
+        ->set('q', 'Kovács');
+
+    expect(AuditLog::query()->where('event', 'client.searched')->latest('id')->first()?->context['call_id'] ?? null)->toBeNull();
+})->with(['another level', 'a colleague\'s call', 'no identification permission']);

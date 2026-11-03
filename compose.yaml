@@ -123,10 +123,15 @@ services:
 
   # Beépített adatbázis: COMPOSE_PROFILES=db. Külső MariaDB esetén a profil kimarad.
   mariadb:
-    image: mariadb:12.3.3@sha256:99c125f103f5d081ebbc9ffe064e63daf7f688ac33a5f7f29af2d7260a96debf
+    image: mariadb:12.3.3@sha256:d46e102fa8b9b72bfcdeb56f9dd538742092119dc8b11f31fe662605cd234cd9
     profiles: [db]
     restart: unless-stopped
     env_file: [db.env]
+    # LOAD DATA LOCAL off on the server too: a restored dump (or any client) cannot make the server
+    # read a file of the client's host. A command, not configs.content: a changed command makes a
+    # plain "docker compose up -d" recreate the container. A compose.override.yaml that sets its own
+    # command (the replica's binary log) must repeat --local-infile=0.
+    command: [--local-infile=0]
     environment:
       MARIADB_DATABASE: ${DB_DATABASE:-openhdid}
       OPENHDID_RUNTIME_USER: ${DB_USERNAME:-openhdid}
@@ -158,7 +163,7 @@ services:
   # memóriaplafonja a Valkey maxmemory korlátja fölött hagy helyet az AOF-újraírásnak és a
   # puffereknek, így egy betelt tár sem fogyasztja el a gazdagép memóriáját.
   valkey:
-    image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
+    image: valkey/valkey:9.1.3-alpine3.24@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
     profiles: [redis]
     restart: unless-stopped
     command: [valkey-server, /etc/valkey/valkey.conf]
@@ -186,7 +191,7 @@ services:
   # pillanatkép: tervezett újraindításkor a Valkey leálláskor ment, így senki nem lép ki;
   # összeomláskor legfeljebb az utolsó öt perc új belépései vesznek el.
   valkey-sessions:
-    image: valkey/valkey:9.1.2-alpine3.24@sha256:48332870af354a799964c0012ae1194a0bf2bf894eb508f945810596dc2d8d11
+    image: valkey/valkey:9.1.3-alpine3.24@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
     profiles: [redis]
     restart: unless-stopped
     command: [valkey-server, /etc/valkey/valkey.conf]

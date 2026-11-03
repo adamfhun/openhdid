@@ -26,7 +26,11 @@ class AnswerMatcher
     public function __construct(private readonly AnswerNormalizer $normalizer) {}
 
     /**
-     * @return array{result: AnswerCheckResult, distance: int}
+     * The verdict, and the number of typos only for a match (the page names
+     * them there): for a miss, how far the typed answer was from the stored
+     * one would tell something about the stored answer.
+     *
+     * @return array{result: AnswerCheckResult, distance: ?int}
      */
     public function compare(string $stored, string $given, int $tolerance): array
     {
@@ -35,7 +39,7 @@ class AnswerMatcher
         $distance = self::distance($expected, $actual);
 
         if ($actual === '' || self::digits($expected) !== self::digits($actual)) {
-            return ['result' => AnswerCheckResult::Mismatch, 'distance' => $distance];
+            return ['result' => AnswerCheckResult::Mismatch, 'distance' => null];
         }
 
         $allowed = strlen($expected) < self::EXACT_BELOW ? 0 : max(0, min($tolerance, self::MAX_TOLERANCE));
@@ -46,7 +50,7 @@ class AnswerMatcher
             default => AnswerCheckResult::Mismatch,
         };
 
-        return ['result' => $result, 'distance' => $distance];
+        return ['result' => $result, 'distance' => $result === AnswerCheckResult::Matched ? $distance : null];
     }
 
     public function comparable(string $answer): string

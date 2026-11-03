@@ -91,6 +91,19 @@
                 </dl>
             </x-filament::section>
 
+            @if ($elsewhere = $this->getIdentifiedCallElsewhere())
+                @if ($elsewhere['pass'])
+                    <x-filament::section :heading="__('Call')">
+                        <div class="rounded-lg bg-warning-50 p-3 text-sm text-warning-800 dark:bg-warning-400/10 dark:text-warning-300">
+                            <p class="font-medium">{{ __('This call is identified as :client.', ['client' => $elsewhere['call']->client?->name ?? '?']) }}</p>
+                            <p class="mt-1">{{ __('via :method at :time', ['method' => $elsewhere['pass']->method->label(), 'time' => $elsewhere['pass']->decided_at?->format(\App\Support\HuDate::DATETIME)]) }}</p>
+                            <p class="mt-1">{{ __('Nothing identifies this client until the call is moved here, and the move ends that identification.') }}</p>
+                        </div>
+                        <div class="mt-3">{{ $this->moveIdentifiedCallAction }}</div>
+                    </x-filament::section>
+                @endif
+            @endif
+
             @if ($call)
                 <x-filament::section :heading="__('Call')">
                     <dl class="space-y-1 text-sm">

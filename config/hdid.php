@@ -71,10 +71,16 @@ return [
     // tile compares it with the memory limit of the container and with max_connections.
     'capacity' => [
         'fpm_max_children' => env('OPENHDID_FPM_MAX_CHILDREN') ?: null,
+        // Set only in the OpenHDID web container: there nginx and the memory-backed /tmp share
+        // the container's memory with PHP-FPM, and the tile counts them too.
+        'nginx_workers' => env('OPENHDID_NGINX_WORKERS') ?: null,
     ],
 
     // Public source repository of the running build. When set, the portal and panel footers link to
-    // it, which is how a network service offers its source under the AGPL-3.0 (section 13).
+    // it, which is how a network service offers its source under the AGPL-3.0 (section 13). The image
+    // points it at the exact source of the running release (.../tree/v<version>): the one place the
+    // running version is named in public, a documented exception (owner decision D6, 2026-11-02).
+    // SHOW_SC=false hides the link; HDID_SOURCE_URL in the installation's .env may name the repository root.
     'source_url' => env('HDID_SOURCE_URL') ?: null,
 
     // Whether the footers show the "Source code" link at all. Only an explicit off value hides it,
@@ -146,7 +152,9 @@ return [
             'client_secret' => env('EWS_OAUTH_CLIENT_SECRET'),
             'scope' => env('EWS_OAUTH_SCOPE', 'https://outlook.office365.com/.default'),
         ],
-        'verify_tls' => (bool) env('EWS_VERIFY_TLS', true),
+        // Only an explicit false turns the certificate check off: an empty or garbled
+        // value keeps it on (as MAIL_REQUIRE_TLS, and as the container start check reads it).
+        'verify_tls' => in_array(env('EWS_VERIFY_TLS'), [null, ''], true) ? true : (filter_var(env('EWS_VERIFY_TLS'), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true),
     ],
 
     'security' => [

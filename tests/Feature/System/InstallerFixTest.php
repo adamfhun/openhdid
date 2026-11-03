@@ -142,9 +142,11 @@ it('adds missing keys with their comments and comments out removed ones', functi
     $added = substr($env, strpos($env, '# --- install.sh fix '));
     // The comment block right above the key in env.example comes with it, the default too.
     preg_match('/((?:^#[^\n]*\n)+)HDID_PRIORITY_QUEUE=priority\n/m', $example, $block);
-    expect($added)->toContain('az OpenHDID 1.15.0 új kulcsai ---', $block[0], "EMD_SYNC_QUEUE=sync\n")
+    $release = InstallerSandbox::releaseVersion();
+    // The block is headed by the installation's release, a removed key names the installer's.
+    expect($added)->toContain('az OpenHDID '.InstallerSandbox::INSTALLED_VERSION.' új kulcsai ---', $block[0], "EMD_SYNC_QUEUE=sync\n")
         // Nothing before the block changed but the removed key, which is commented out, not deleted.
-        ->and(str_replace("USER_ENTRA_MOBILE_CLIENT_ID=old-client-id\n", "# megszűnt (1.15.0): USER_ENTRA_MOBILE_CLIENT_ID=old-client-id\n", $before))->toBe(substr($env, 0, strlen($env) - strlen($added) - 1))
+        ->and(str_replace("USER_ENTRA_MOBILE_CLIENT_ID=old-client-id\n", "# megszűnt ({$release}): USER_ENTRA_MOBILE_CLIENT_ID=old-client-id\n", $before))->toBe(substr($env, 0, strlen($env) - strlen($added) - 1))
         ->and(glob($sandbox->dir.'/.env.bak-*'))->toHaveCount(1)
         ->and($sandbox->mode($sandbox->dir.'/.env'))->toBe('600');
 });

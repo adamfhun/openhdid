@@ -6,34 +6,6 @@ use Illuminate\Redis\Connections\Connection;
 use Illuminate\Support\Facades\Redis;
 
 /**
- * A file of the container release: under deploy/openhdid/repo in the main
- * tree, at the root of the published OpenHDID tree. Null when neither has it.
- */
-function openhdidReleaseFile(string $path): ?string
-{
-    foreach ([base_path('deploy/openhdid/repo/'.$path), base_path($path)] as $candidate) {
-        if (is_file($candidate)) {
-            return (string) file_get_contents($candidate);
-        }
-    }
-
-    return null;
-}
-
-/**
- * The indented block under a two-space key of a top-level YAML section
- * ("services" or "configs"), without parsing YAML (no YAML parser ships
- * with the release).
- */
-function composeBlock(string $compose, string $section, string $name): string
-{
-    preg_match('/^'.$section.':\n(.*?)(?=^\S|\z)/ms', $compose, $sectionMatch);
-    preg_match('/^  '.preg_quote($name, '/').':\n((?:(?:    .*)?\n)+)/m', $sectionMatch[1] ?? '', $blockMatch);
-
-    return $blockMatch[1] ?? '';
-}
-
-/**
  * A Valkey/Redis server answering INFO (and CONFIG GET) as given; a
  * Throwable makes that command fail.
  *

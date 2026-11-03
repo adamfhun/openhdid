@@ -16,14 +16,18 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\SettingRules;
 use App\Settings\Settings;
+use App\Support\HuDate;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
+use App\System\Installation;
+use App\System\InstallationRateLimiter;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\RateLimiter;
 use Livewire\Livewire;
 use PragmaRX\Google2FA\Google2FA;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
@@ -253,7 +257,7 @@ it('lets an administrator reset the second factor of a colleague, signing them o
     $superAdmin = User::factory()->synced()->withRole(Role::SuperAdmin)->create();
     withAppFactor($superAdmin);
     $this->actingAs($admin);
-    session()->put('hdid_mfa_passed', ['user' => $admin->id, 'epoch' => (int) $admin->session_epoch]);
+    session()->put('hdid_mfa_passed', ['user' => $admin->id, 'epoch' => (int) $admin->session_epoch, 'installation' => Installation::id()]);
     $epoch = (int) $this->agent->session_epoch;
 
     Livewire::test(ListUsers::class)->callTableAction('resetMfa', $this->agent);
@@ -381,4 +385,153 @@ it('refuses an over-long code inside the service, before anything is counted', f
 
     expect(fn () => $this->mfa->verify($agent, MfaMethod::App, str_repeat('1', 100_000)))->toThrow(MfaException::class, 'at most');
     expect((int) $agent->fresh()->failed_mfa_attempts)->toBe(0);
+});
+
+it('does not accept the second-factor mark of another installation that reads the same session', function (): void {
+    $secret = withAppFactor($this->agent);
+    config()->set('app.url', 'https://hdid.example.test');
+    $this->actingAs($this->agent);
+    Livewire::test(MfaChallenge::class)->set('code', totp($secret))->call('verify')->assertHasNoErrors();
+    expect($this->mfa->isSatisfied($this->agent))->toBeTrue();
+
+    // A cloned staging installation (the same APP_KEY at another address) on the same session store.
+    config()->set('app.url', 'https://staging.example.test');
+    expect($this->mfa->isSatisfied($this->agent))->toBeFalse();
+    $this->get('/admin')->assertRedirect(route('filament.admin.mfa.challenge'));
+
+    config()->set('app.url', 'https://hdid.example.test');
+    expect($this->mfa->isSatisfied($this->agent))->toBeTrue();
+});
+
+it('keeps the full EMD mobile numbers out of the setup page, its HTML and its Livewire state, before any second factor', function (): void {
+    $this->agent->externalRecord->update(['phones' => ['+36301234567', '+36209876543', '+3612345678']]);
+    $this->actingAs($this->agent);
+
+    $page = Livewire::test(MfaSetup::class)->call('start', 'sms')
+        ->assertDontSeeHtml('+36301234567')
+        ->assertDontSeeHtml('+36209876543')
+        ->assertSee(StaffMfa::mask('+36301234567'));
+
+    expect((string) $page->get('smsNumber'))->not->toContain('1234567')
+        ->and(json_encode($page->snapshot))->not->toContain('301234567')->not->toContain('209876543');
+
+    $page->call('start', 'email')->assertSet('smsNumber', null);
+});
+
+it('refuses a setup code to a number the page did not offer and sends it to the offered choice', function (): void {
+    $this->agent->externalRecord->update(['phones' => ['+36301234567', '+36209876543']]);
+    $this->actingAs($this->agent);
+    $page = Livewire::test(MfaSetup::class)->call('start', 'sms');
+
+    // The raw number, although it is on the record: only an offered choice goes.
+    $page->set('smsNumber', '+36209876543')->call('sendCode')->assertHasErrors(['code']);
+    expect(OutboundMessage::query()->count())->toBe(0);
+
+    $page->set('smsNumber', array_keys($page->instance()->smsOptions())[1])->call('sendCode')->assertHasNoErrors();
+    expect(OutboundMessage::query()->sole()->recipient)->toBe('+36209876543');
+});
+
+it('records a locked second factor at most once a minute per account, however often it is tried', function (): void {
+    withAppFactor($this->agent);
+    $this->agent->forceFill(['mfa_email_enabled_at' => now(), 'mfa_locked_until' => now()->addHour()])->save();
+    $this->actingAs($this->agent);
+    $locked = fn () => AuditLog::query()->where('event', 'mfa.failed')->where('context->reason', 'locked')->get();
+
+    foreach (range(1, 20) as $i) {
+        expect(fn () => $this->mfa->verify($this->agent, MfaMethod::App, '000000'))->toThrow(MfaException::class);
+    }
+    foreach (range(1, 5) as $i) {
+        expect(fn () => $this->mfa->sendCode($this->agent, MfaMethod::Email, StaffMfa::PURPOSE_CHALLENGE))->toThrow(MfaException::class);
+    }
+    expect($locked())->toHaveCount(1);
+
+    $this->travel(61)->seconds();
+    expect(fn () => $this->mfa->verify($this->agent, MfaMethod::App, '000000'))->toThrow(MfaException::class);
+
+    expect($locked())->toHaveCount(2)
+        ->and($locked()->last()->context['suppressed'] ?? null)->toBe(24);
+});
+
+it('still tells the staff member on every try that the second factor is locked', function (): void {
+    withAppFactor($this->agent);
+    $this->agent->forceFill(['mfa_locked_until' => now()->addHour()])->save();
+    $this->actingAs($this->agent);
+
+    foreach (range(1, 3) as $i) {
+        Livewire::test(MfaChallenge::class)->set('code', '000000')->call('verify')->assertHasErrors(['code'])
+            ->assertSee(__('Too many wrong codes: sign-in with a code is locked until :time.', ['time' => $this->agent->fresh()->mfa_locked_until->format(HuDate::DATETIME)]));
+    }
+});
+
+it('sends one code when two code requests of the same account overlap', function (): void {
+    $this->agent->forceFill(['mfa_email_enabled_at' => now()])->save();
+    $this->actingAs($this->agent);
+    $agent = $this->agent;
+    $limiter = new class(app('cache')->store(), $agent) extends InstallationRateLimiter
+    {
+        private bool $raced = false;
+
+        public function __construct($cache, private User $agent)
+        {
+            parent::__construct($cache);
+        }
+
+        public function hit($key, $decaySeconds = 60)
+        {
+            $hits = parent::hit($key, $decaySeconds);
+            $this->race($key);
+
+            return $hits;
+        }
+
+        public function tooManyAttempts($key, $maxAttempts)
+        {
+            $too = parent::tooManyAttempts($key, $maxAttempts);
+            $this->race($key);
+
+            return $too;
+        }
+
+        private function race(string $key): void
+        {
+            if ($this->raced || ! str_contains($key, 'hdid:mfa-send-minute:')) {
+                return;
+            }
+
+            $this->raced = true;
+
+            try {
+                app(StaffMfa::class)->sendCode($this->agent, MfaMethod::Email, StaffMfa::PURPOSE_CHALLENGE);
+            } catch (MfaException) {
+                // The overlapping request was refused.
+            }
+        }
+    };
+    RateLimiter::swap($limiter);
+
+    try {
+        $this->mfa->sendCode($this->agent, MfaMethod::Email, StaffMfa::PURPOSE_CHALLENGE);
+    } catch (MfaException) {
+        // This request lost the race.
+    }
+
+    expect(OutboundMessage::query()->count())->toBe(1)
+        ->and(AuditLog::query()->where('event', 'mfa.code_sent')->count())->toBe(1);
+});
+
+it('keeps naming the quarter-hour limit, not the minute, while the quarter-hour code budget is used up', function (): void {
+    $this->agent->forceFill(['mfa_email_enabled_at' => now()])->save();
+    $this->actingAs($this->agent);
+
+    foreach (range(1, StaffMfa::SENDS_PER_QUARTER) as $i) {
+        $this->mfa->sendCode($this->agent, MfaMethod::Email, StaffMfa::PURPOSE_CHALLENGE);
+        $this->travel(61)->seconds();
+    }
+
+    $message = fn (): string => rescue(fn () => $this->mfa->sendCode($this->agent, MfaMethod::Email, StaffMfa::PURPOSE_CHALLENGE), fn (MfaException $e) => $e->getMessage(), report: false);
+    expect($message())->toContain('15')->not->toContain('Wait a minute');
+
+    $this->travel(10)->seconds();
+    expect($message())->toContain('15')->not->toContain('Wait a minute')
+        ->and(OutboundMessage::query()->count())->toBe(StaffMfa::SENDS_PER_QUARTER);
 });

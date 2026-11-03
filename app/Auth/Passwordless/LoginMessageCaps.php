@@ -5,6 +5,7 @@ namespace App\Auth\Passwordless;
 use App\Audit\Auditor;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\Installation;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\RateLimiter;
@@ -115,7 +116,7 @@ class LoginMessageCaps
         Cache::put(self::reachedKey($channel, $window), ['at' => now()->toIso8601String(), 'limit' => $limit], $remaining);
         RateLimiter::hit(self::reachedKey($channel, $window).':refused', $remaining);
 
-        if (Cache::add('hdid:login-cap:'.$channel.':audited', true, 60)) {
+        if (Cache::add(Installation::key('hdid:login-cap:'.$channel.':audited'), true, 60)) {
             $this->auditor->record('login.request_capped', null, ['channel' => $channel, 'method' => $method, 'window' => $window, 'limit' => $limit]);
         }
     }
@@ -125,8 +126,14 @@ class LoginMessageCaps
         return 'passwordless:cap:'.$channel.':'.$window;
     }
 
+    /**
+     * The notice of a full window, under this installation's id like the
+     * counters (the rate limiter adds it to those): a staging installation
+     * reaching its limit must not put the notice on production's login
+     * page or status tile when the two share a store.
+     */
     private static function reachedKey(string $channel, string $window): string
     {
-        return 'hdid:login-cap:'.$channel.':'.$window;
+        return Installation::key('hdid:login-cap:'.$channel.':'.$window);
     }
 }

@@ -21,11 +21,13 @@ use App\Sync\SyncExternalRecords;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
 use App\System\NotDemoAddressRule;
+use Database\Seeders\DemoCallHistorySeeder;
 use Database\Seeders\DemoSeeder;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Faker\Generator;
 use Illuminate\Cookie\CookieValuePrefix;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
@@ -348,4 +350,58 @@ it('signs a demo account out on its next request once the installation runs in p
     Auth::forgetGuards();
     $this->flushSession();
     $this->actingAs($real, 'web')->get('/admin')->assertOk();
+});
+
+it('loads demo data only into an empty database, naming what it found and changing nothing', function (): void {
+    Client::query()->create(['name' => 'Valódi Vera', 'email' => 'vera@example.org']);
+
+    expect(fn () => app(DemoSeeder::class)->run())->toThrow(RuntimeException::class, 'only into an empty database');
+
+    expect(User::query()->count())->toBe(0)
+        ->and((string) DB::table('settings')->where('key', SettingKey::PackagesPremium->value)->value('value'))->not->toContain('Premium+')
+        ->and(app(Settings::class)->array(SettingKey::PackagesPremium))->not->toContain('Premium+');
+});
+
+it('rolls the whole demo load back when a step fails', function (): void {
+    app()->bind(DemoCallHistorySeeder::class, fn () => throw new RuntimeException('a step failed'));
+
+    // Seeded the way the console does, so the seeder resolves its steps from the container.
+    expect(fn () => $this->seed(DemoSeeder::class))->toThrow(RuntimeException::class, 'a step failed');
+
+    expect(User::query()->count())->toBe(0)
+        ->and(Client::query()->count())->toBe(0)
+        ->and((string) DB::table('settings')->where('key', SettingKey::PackagesPremium->value)->value('value'))->not->toContain('Premium+')
+        ->and(app(Settings::class)->array(SettingKey::PackagesPremium))->not->toContain('Premium+');
+});
+
+it('refuses the demo call history on its own outside the demo environments', function (): void {
+    app()->detectEnvironment(fn () => 'production');
+
+    try {
+        expect(fn () => app(DemoCallHistorySeeder::class)->run())->toThrow(RuntimeException::class, 'APP_ENV=demo');
+        expect(Call::withTrashed()->count())->toBe(0);
+    } finally {
+        app()->detectEnvironment(fn () => 'testing');
+    }
+});
+
+it('stops the demo container start with the reason when the database is not empty', function (): void {
+    $database = sys_get_temp_dir().'/openhdid-demo-'.Str::random(12).'.sqlite';
+    touch($database);
+    $helper = demoDataRuntimeHelper();
+    $env = ['APP_ENV' => 'testing', 'DB_CONNECTION' => 'sqlite', 'DB_DATABASE' => $database, 'DB_URL' => '', 'OPENHDID_DEMO_DATA' => 'true', 'APP_KEY' => config('app.key')];
+    $artisan = fn (array $arguments) => Process::path(base_path())->env($env)->timeout(300)->run([PHP_BINARY, 'artisan', ...$arguments, '--no-interaction']);
+
+    try {
+        expect($artisan(['migrate', '--force'])->successful())->toBeTrue()
+            ->and($artisan(['tinker', '--execute', 'App\Models\Client::query()->create(["name" => "Valódi Vera", "email" => "vera@example.org"]);'])->successful())->toBeTrue();
+
+        $start = Process::path(base_path())->env(['APP_ENV' => 'demo'] + $env)->timeout(120)->run([PHP_BINARY, $helper, 'demo-data']);
+
+        expect($start->exitCode())->toBe(64)
+            ->and($start->errorOutput())->toContain('only into an empty database');
+    } finally {
+        @unlink($database);
+        @unlink($helper);
+    }
 });

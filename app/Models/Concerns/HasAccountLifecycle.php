@@ -2,6 +2,7 @@
 
 namespace App\Models\Concerns;
 
+use App\Audit\Auditor;
 use App\Auth\AccountLogin;
 use App\Auth\Passwordless\OneTimeCodes;
 use App\Enums\PrincipalType;
@@ -199,11 +200,33 @@ trait HasAccountLifecycle
      */
     private function liveTokens(): MorphMany
     {
-        $minutes = config('sanctum.expiration');
+        return self::whereTokenLive($this->tokens());
+    }
 
-        return $this->tokens()
-            ->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()))
-            ->when($minutes, fn ($query) => $query->where('created_at', '>', now()->subMinutes((int) $minutes)));
+    /**
+     * Narrows a token query to the tokens that still sign requests in, or
+     * with $live false to those that no longer do (past their expires_at, or
+     * older than the configured lifetime): what the daily prune deletes.
+     * One rule for both, so they cannot drift apart.
+     *
+     * @template TQuery of Builder|MorphMany
+     *
+     * @param  TQuery  $query
+     * @return TQuery
+     */
+    public static function whereTokenLive(Builder|MorphMany $query, bool $live = true): Builder|MorphMany
+    {
+        $minutes = (int) config('sanctum.expiration');
+
+        if ($live) {
+            return $query
+                ->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()))
+                ->when($minutes > 0, fn ($query) => $query->where('created_at', '>', now()->subMinutes($minutes)));
+        }
+
+        return $query->where(fn ($query) => $query
+            ->where('expires_at', '<=', now())
+            ->when($minutes > 0, fn ($query) => $query->orWhere('created_at', '<=', now()->subMinutes($minutes))));
     }
 
     /**
@@ -237,6 +260,31 @@ trait HasAccountLifecycle
     public function isLoginLocked(): bool
     {
         return $this->locked_until !== null && $this->locked_until->isFuture();
+    }
+
+    /**
+     * Before the row goes to the trash: the account ends up closed by an
+     * administrator and signed out everywhere, so a restore brings back no
+     * old session or remember-me cookie, and a returning EMD record does not
+     * reopen it (the sync reopens only what it closed). An open account is
+     * closed; one closed for another reason (the sync's) gets the
+     * administrator's reason, audited once as account.close_reason_changed.
+     */
+    public function closeForRemoval(): void
+    {
+        if (! $this->isClosed()) {
+            $this->close('admin');
+
+            return;
+        }
+
+        if ($this->closed_reason !== 'admin') {
+            $previous = $this->closed_reason;
+            $this->forceFill(['closed_reason' => 'admin'])->saveQuietly();
+            app(Auditor::class)->record('account.close_reason_changed', $this, ['previous_reason' => $previous, 'via' => 'delete']);
+        }
+
+        $this->revokeAccess();
     }
 
     public function reopen(): void

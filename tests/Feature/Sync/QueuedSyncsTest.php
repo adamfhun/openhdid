@@ -5,6 +5,7 @@ use App\Enums\SyncRunStatus;
 use App\Enums\SyncSource;
 use App\Filament\Admin\Resources\SyncRuns\Pages\ManageSyncRuns;
 use App\Jobs\RunDirectorySync;
+use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\SyncRun;
 use App\Models\User;
@@ -19,6 +20,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
@@ -172,4 +174,52 @@ it('marks a queued file import failed and removes the upload when the worker is 
     expect($run->fresh()->status)->toBe(SyncRunStatus::Failed)
         ->and($run->fresh()->error)->toContain('1200')
         ->and(Storage::disk('local')->exists($upload))->toBeFalse();
+});
+
+it('removes the upload when the job finds its run no longer waiting, without running it', function (SyncRunStatus $status): void {
+    $admin = User::factory()->withRole(Role::Admin)->create();
+    $upload = 'sync-uploads/'.str_repeat('z', 40).'.csv';
+    Storage::disk('local')->put($upload, "external_user_id,name,email\n1,A,a@client.hu\n");
+    $run = app(QueuedSyncs::class)->start($admin, false, $upload);
+    $run->forceFill(['status' => $status])->save();
+
+    app(QueuedSyncs::class)->execute($run->id, $upload);
+
+    expect(Storage::disk('local')->exists($upload))->toBeFalse()
+        ->and($run->fresh()->status)->toBe($status)
+        ->and(Client::query()->count())->toBe(0);
+})->with([SyncRunStatus::Failed, SyncRunStatus::Completed]);
+
+it('removes the upload when the run of the job no longer exists', function (): void {
+    $upload = 'sync-uploads/'.str_repeat('w', 40).'.csv';
+    Storage::disk('local')->put($upload, 'x');
+
+    app(QueuedSyncs::class)->execute((string) Str::uuid7(), $upload);
+
+    expect(Storage::disk('local')->exists($upload))->toBeFalse();
+});
+
+it('claims the run before loading it, so an abandon that comes later cannot take it from the worker', function (): void {
+    $admin = User::factory()->withRole(Role::Admin)->create();
+    $upload = 'sync-uploads/'.str_repeat('v', 40).'.csv';
+    Storage::disk('local')->put($upload, "external_user_id,name,email\n1,A,a@client.hu\n");
+    $run = app(QueuedSyncs::class)->start($admin, true, $upload);
+    $abandoned = null;
+    SyncRun::retrieved(function (SyncRun $retrieved) use (&$abandoned, $run): void {
+        if ($abandoned === null && $retrieved->id === $run->id) {
+            $abandoned = app(QueuedSyncs::class)->abandon($run->id, 'queue cleared');
+        }
+    });
+
+    try {
+        app(QueuedSyncs::class)->execute($run->id, $upload);
+    } catch (Throwable) {
+        // The tiny file may not pass the shrink guard; only the claim matters here.
+    } finally {
+        SyncRun::flushEventListeners();
+    }
+
+    expect($abandoned)->toBeFalse()
+        ->and($run->fresh()->status)->not->toBe(SyncRunStatus::Queued)
+        ->and(AuditLog::query()->where('event', 'sync.failed')->where('context->abandoned', true)->exists())->toBeFalse();
 });

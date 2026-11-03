@@ -4,11 +4,13 @@ use App\Auth\AccountLogin;
 use App\Auth\LoginRejectedException;
 use App\Clients\ClientLinks;
 use App\Enums\PrincipalType;
+use App\Enums\SyncChangeKind;
 use App\Enums\SyncSource;
 use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\ClientLink;
 use App\Models\ExternalRecord;
+use App\Models\SyncRunChange;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Sync\AccountProvisioner;
@@ -240,4 +242,70 @@ it('does not count an active link to an open sponsor or an ended link as holding
     $links->unlink($link->fresh());
     expect($links->closedSponsorLink($dependent))->toBeNull()
         ->and(ClientLink::query()->active()->count())->toBe(0);
+});
+
+/**
+ * A sponsor closed by an administrator with a linked client closed with it;
+ * the sponsor's record carries an implicit premium package.
+ *
+ * @return array{0: Client, 1: Client, 2: ExternalRecordDto, 3: ExternalRecordDto}
+ */
+function closedSponsorPair(): array
+{
+    $sponsorRow = sponsorClosureRow(1, 'fo@x.hu', 'Premium', null);
+    $dependentRow = sponsorClosureRow(2, 'kap@x.hu', 'Basic', 'Premium');
+    app(SyncExternalRecords::class)->run(sponsorClosureReader([$sponsorRow, $dependentRow, ...sponsorClosureFillers()]));
+    $sponsor = Client::query()->where('email', 'fo@x.hu')->firstOrFail();
+    $dependent = Client::query()->where('email', 'kap@x.hu')->firstOrFail();
+    app(ClientLinks::class)->link($sponsor, $dependent);
+    $sponsor->close('admin');
+
+    return [$sponsor, $dependent->fresh(), $sponsorRow, $dependentRow];
+}
+
+it('counts and names on the run the linked clients reopened because the directory changed a closed sponsor\'s implicit package', function (bool $dryRun): void {
+    [$sponsor, $dependent, , $dependentRow] = closedSponsorPair();
+    expect($dependent->closed_reason)->toBe(ClientLinks::CLOSE_REASON_SPONSOR);
+
+    $run = app(SyncExternalRecords::class)->run(sponsorClosureReader([sponsorClosureRow(1, 'fo@x.hu', 'Basic', null), $dependentRow, ...sponsorClosureFillers()]), dryRun: $dryRun);
+
+    expect($run->stats['sponsor_links_ended'])->toBe(1)
+        ->and($run->stats['linked_reopened'])->toBe(1)
+        ->and(json_encode($run->stats['linked_reopened_samples']))->toContain('Name 2')
+        ->and($dependent->fresh()->isClosed())->toBe($dryRun);
+})->with(['a run' => false, 'a dry run' => true]);
+
+it('does not count link endings made before the run started', function (): void {
+    [$sponsor, , , $dependentRow] = closedSponsorPair();
+    $sponsor->forceFill(['implicit_package' => 'Basic'])->save();
+
+    $run = app(SyncExternalRecords::class)->run(sponsorClosureReader([sponsorClosureRow(1, 'fo@x.hu', 'Basic', null), $dependentRow, ...sponsorClosureFillers()]));
+
+    expect($run->stats['linked_reopened'])->toBe(0);
+});
+
+it('does not mark the row of a closed sponsor as reopened when its linked client reopens because the directory changed its package', function (): void {
+    [$sponsor, $dependent, , $dependentRow] = closedSponsorPair();
+
+    $run = app(SyncExternalRecords::class)->run(sponsorClosureReader([sponsorClosureRow(1, 'fo@x.hu', 'Basic', null), $dependentRow, ...sponsorClosureFillers()]));
+
+    $row = SyncRunChange::query()->where('sync_run_id', $run->id)->where('external_id', 1)->sole();
+    expect($row->kind)->not->toBe(SyncChangeKind::Reopened)
+        ->and($row->subject_id)->toBe($sponsor->id)
+        ->and(AuditLog::query()->where('event', 'account.reopened')->where('subject_id', $dependent->id)->exists())->toBeTrue();
+});
+
+it('keeps a linked client open when its sponsor leaves the directory after the directory gave it an implicit premium of its own', function (): void {
+    app(Settings::class)->set(SettingKey::SyncMissedRunsBeforeClose, 1);
+    $sponsorRow = sponsorClosureRow(1, 'fo@x.hu', 'Premium', null);
+    app(SyncExternalRecords::class)->run(sponsorClosureReader([$sponsorRow, sponsorClosureRow(2, 'kap@x.hu', 'Basic', 'Premium'), ...sponsorClosureFillers()]));
+    $sponsor = Client::query()->where('email', 'fo@x.hu')->firstOrFail();
+    $dependent = Client::query()->where('email', 'kap@x.hu')->firstOrFail();
+    $link = app(ClientLinks::class)->link($sponsor, $dependent);
+
+    app(SyncExternalRecords::class)->run(sponsorClosureReader([$sponsorRow, sponsorClosureRow(2, 'kap@x.hu', 'Premium', 'Premium'), ...sponsorClosureFillers()]));
+    app(SyncExternalRecords::class)->run(sponsorClosureReader([sponsorClosureRow(2, 'kap@x.hu', 'Premium', 'Premium'), ...sponsorClosureFillers()]));
+
+    expect($link->fresh()->ended_reason)->toBe(ClientLinks::END_REASON_LINKED_OWN_PREMIUM)
+        ->and($dependent->fresh()->isClosed())->toBeFalse();
 });

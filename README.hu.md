@@ -120,7 +120,7 @@ Nem privilegizált felhasználóként (uid 82) fut, csak olvasható gyökér-fá
 Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz. A `v` a telepített verzió (a `.env` `OPENHDID_VERSION` értéke):
 
 ```sh
-v=1.15.0
+v=1.15.1
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -157,7 +157,7 @@ A repó gyökerében és kiadási mellékletként: `UPGRADE.md` (frissítés), `
 
 ## Biztonság
 
-Az alapbeállítások az OWASP ASVS 5.0 és az OWASP Docker Security Cheat Sheet ajánlásait követik; a telepítési útmutató sorolja fel a védelmeket és a nyitott tételeket. A sérülékenységet kérjük, ne nyilvános hibajegyben, hanem a GitHub privát bejelentési felületén jelezze (**Security › Report a vulnerability**). Biztonsági javítás a legfrissebb minor kiadáshoz készül.
+Az alapbeállítások az OWASP ASVS 5.0 és az OWASP Docker Security Cheat Sheet ajánlásait követik; a telepítési útmutató sorolja fel a védelmeket és a nyitott tételeket. A sérülékenységet kérjük, ne nyilvános hibajegyben, hanem a GitHub privát bejelentési felületén jelezze (**Security › Report a vulnerability**). **Támogatott verzió:** mindig csak a legutolsó kiadás. A javítás, a biztonsági javítás is, új kiadásként jön; a korábbi kiadások nem kapnak javítást, ezért a legutolsóra kell frissíteni (UPGRADE.md). A kiadott verziók változatlanul elérhetők maradnak.
 
 ## Fordítás forrásból
 
@@ -175,6 +175,6 @@ Copyright © 2026 az OpenHDID szerzői.
 
 Az OpenHDID szabad szoftver: terjeszthető és módosítható a Free Software Foundation által kiadott GNU Affero General Public License 3. vagy (választása szerint) bármely későbbi változatának feltételei szerint. Abban a reményben terjesztjük, hogy hasznos lesz, de MINDENFÉLE GARANCIA NÉLKÜL, az ELADHATÓSÁGRA vagy VALAMELY CÉLRA VALÓ ALKALMASSÁGRA vonatkozó hallgatólagos garanciát is beleértve. A részletek a [LICENSE](LICENSE) fájlban (angolul, ez a hiteles szöveg).
 
-Ha módosított változatot üzemeltet hálózaton elérhető szolgáltatásként, a licenc szerint a felhasználóknak fel kell ajánlania annak forráskódját. Ehhez állítsa a `HDID_SOURCE_URL` értékét a közzétett forrásra; a portál és a panel erre hivatkozik.
+Ha módosított változatot üzemeltet hálózaton elérhető szolgáltatásként, a licenc szerint a felhasználóknak fel kell ajánlania annak forráskódját. Ehhez állítsa a `HDID_SOURCE_URL` értékét a közzétett forrásra; a portál és a panel erre hivatkozik. A konténer-image ezt a „Forráskód” hivatkozást a futó kiadás pontos forrására állítja (`…/tree/v<verzió>`), így a hivatkozás nyilvánosan megnevezi a futó verziót. Elrejtése `SHOW_SC=false` (a forrást ekkor más úton kell felajánlani), vagy a `HDID_SOURCE_URL` a repó gyökerére állítható.
 
 Az OpenHDID a Laravel, Filament, Livewire, Vue, Tailwind CSS, nginx, headers-more, PHP és Alpine Linux összetevőkre épül, mindegyik a saját licence szerint; minden image SBOM-ja felsorolja az összetevőket.

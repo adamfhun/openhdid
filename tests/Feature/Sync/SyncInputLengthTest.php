@@ -14,6 +14,7 @@ use App\Support\InputLimits;
 use App\Sync\Contracts\SourceReader;
 use App\Sync\ExternalRecordDto;
 use App\Sync\QueuedSyncs;
+use App\Sync\Readers\JsonApiReader;
 use App\Sync\Readers\SpreadsheetReader;
 use App\Sync\SkippedRow;
 use App\Sync\SourceLabel;
@@ -22,6 +23,8 @@ use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
 use Filament\Infolists\Components\Entry;
+use Illuminate\Http\Client\Factory;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
@@ -104,6 +107,27 @@ it('turns a mapped row into a record or a skipped row with the reason', function
         ->and(ExternalRecordDto::fromRowOrSkip(['id' => 'x', 'mail' => 'a@x.hu'], $mapping)->reason)->toBe(SkippedRow::REASON_INVALID_ROW)
         ->and(ExternalRecordDto::fromRowOrSkip(['id' => '5', 'mail' => ''], $mapping)->reason)->toBe(SkippedRow::REASON_INVALID_ROW)
         ->and(ExternalRecordDto::fromRowOrSkip(['id' => '5', 'mail' => 'a@'.str_repeat('b', 64).'.hu'], $mapping)->reason)->toBe(SkippedRow::REASON_INVALID_EMAIL);
+});
+
+it('skips a row whose mapped field holds a list or an object instead of failing the whole run', function (): void {
+    Http::fake(['https://dir.test/people*' => Http::response(['data' => [
+        ['external_id' => 1, 'name' => 'Anna', 'email' => 'anna@x.hu'],
+        ['external_id' => 2, 'name' => 'Béla', 'email' => ['bela@x.hu', 'b2@x.hu']],
+        ['external_id' => [3], 'name' => 'Cili', 'email' => 'cili@x.hu'],
+        ['external_id' => 4, 'name' => ['first' => 'Dóra'], 'email' => 'dora@x.hu'],
+        ['external_id' => 5, 'name' => 'Ede', 'email' => 'ede@x.hu', 'phone' => ['+36301234567']],
+        ['external_id' => 6, 'name' => 'Feri', 'email' => 'feri@x.hu', 'extra' => ['nested' => true]],
+    ]])]);
+    $mapping = ['external_id' => 'external_id', 'name' => 'name', 'email' => 'email', 'phones' => 'phone'];
+
+    $run = app(SyncExternalRecords::class)->run(new JsonApiReader(app(Factory::class), 'https://dir.test/people', [], $mapping, 'data', null));
+
+    expect($run->status)->toBe(SyncRunStatus::Completed)
+        ->and($run->stats['incoming']['invalid_row'])->toBe(4)
+        ->and(collect($run->skipped_rows)->pluck('reason')->unique()->all())->toBe([SkippedRow::REASON_INVALID_ROW])
+        ->and(collect($run->skipped_rows)->pluck('sample.name')->filter()->values()->all())->toBe(['Béla', 'Cili', 'Ede'])
+        ->and(ExternalRecord::query()->orderBy('external_id')->pluck('external_id')->all())->toBe([1, 6])
+        ->and(ExternalRecord::query()->where('external_id', 6)->sole()->attributes)->toMatchArray(['extra.nested' => true]);
 });
 
 it('labels a run by its source address without the query, the credentials and beyond the column', function (): void {

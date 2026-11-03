@@ -242,3 +242,42 @@ it('keeps the stricter domain filter of a tenant listed twice and says so', func
         ->and($parsed->tenants[0]->isTrustedForAnyDomain())->toBeFalse()
         ->and($parsed->note)->toContain('more than once');
 });
+
+it('keeps the domain filter of a repeated tenant whichever order its entries come in', function (string $list): void {
+    $id = '22222222-2222-4222-8222-222222222222';
+
+    $parsed = EntraTenants::parse(null, str_replace('{id}', $id, $list));
+
+    expect($parsed->tenants[0]->domains)->toBe(['partner.hu'])
+        ->and($parsed->tenants[0]->isTrustedForAnyDomain())->toBeFalse()
+        ->and($parsed->note)->toContain('more than once');
+})->with(['{id},{id}:partner.hu', '{id}:partner.hu,{id}']);
+
+it('takes the domains of both entries of a tenant listed twice with domains', function (): void {
+    $id = '22222222-2222-4222-8222-222222222222';
+
+    $parsed = EntraTenants::parse(null, "{$id}:a.hu,{$id}:b.hu");
+
+    expect($parsed->tenants[0]->domains)->toBe(['a.hu', 'b.hu'])
+        ->and($parsed->note)->toContain('more than once');
+});
+
+it('keeps the domain filter when the single tenant key names a tenant of the list with domains', function (): void {
+    $id = '22222222-2222-4222-8222-222222222222';
+
+    $parsed = EntraTenants::parse($id, "{$id}:partner.hu");
+
+    expect($parsed->tenants[0]->domains)->toBe(['partner.hu'])
+        ->and($parsed->tenants[0]->isTrustedForAnyDomain())->toBeFalse()
+        ->and($parsed->note)->toContain('Both the single tenant');
+});
+
+it('turns the login providers tile yellow for a tenant listed twice', function (): void {
+    $id = '22222222-2222-4222-8222-222222222222';
+    configureClientEntra(null, "{$id}:partner.hu,{$id}");
+
+    $check = app(HealthChecks::class)->oidc();
+
+    expect($check->status)->toBe(CheckStatus::Warn)
+        ->and($check->detail)->toContain('more than once');
+});

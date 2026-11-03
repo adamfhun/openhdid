@@ -77,7 +77,7 @@ it('writes a diagnostic package with mode 600 that holds no secret', function ()
     expect($files['env.txt'])->toContain('DB_PASSWORD=***('.strlen(InstallerSandbox::DB_PASSWORD).' characters)', 'APP_URL=https://hdid.example.org', 'OPENHDID_TLS_KEY=/etc/openhdid/tls/privkey.pem')
         ->and($files['db-env.txt'])->toContain('MARIADB_ROOT_PASSWORD=***(', 'DB_USERNAME=openhdid_migrate')
         ->and($files['compose-config.yaml'])->toContain('requirepass "***"', 'DB_PASSWORD: ***(')
-        ->and($files['versions.txt'])->toContain('install.sh: 1.15.0', 'OPENHDID_VERSION: 1.15.0');
+        ->and($files['versions.txt'])->toContain('install.sh: '.InstallerSandbox::releaseVersion(), 'OPENHDID_VERSION: '.InstallerSandbox::INSTALLED_VERSION);
 });
 
 it('masks addresses and e-mail addresses in the logs of the package', function (): void {

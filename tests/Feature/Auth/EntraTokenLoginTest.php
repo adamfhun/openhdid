@@ -8,6 +8,7 @@ use App\Models\Client;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\Installation;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Http\Client\Events\RequestSending;
 use Illuminate\Support\Facades\Cache;
@@ -99,6 +100,17 @@ it('answers 503 with a reason when Entra cannot be reached', function (): void {
     $this->assertDatabaseCount('personal_access_tokens', 0);
 });
 
+it('keeps the structured provider_unavailable answer in debug mode', function (): void {
+    config()->set('app.debug', true);
+    Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    Http::fake([ENTRA_DISCOVERY => Http::failedConnection()]);
+
+    $response = $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => 'x', 'device_name' => 'x'])
+        ->assertServiceUnavailable()->assertJsonPath('reason', 'provider_unavailable');
+
+    expect(array_keys($response->json()))->toBe(['message', 'reason']);
+});
+
 it('answers 503 provider_unavailable when the Entra JWKS endpoint is down during a token exchange', function (string $failure): void {
     Client::factory()->synced()->create(['email' => 'c@x.hu']);
     Http::fake([
@@ -124,14 +136,14 @@ it('refreshes a stale cached key set once when the token was signed with a rotat
     Client::factory()->synced()->create(['email' => 'c@x.hu']);
     FakeOidc::fake([], ENTRA_ISSUER, ENTRA_DISCOVERY);
     $stale = openssl_pkey_get_details(openssl_pkey_new(['private_key_bits' => 2048, 'private_key_type' => OPENSSL_KEYTYPE_RSA]));
-    Cache::put('oidc.jwks.'.md5('https://idp.test/jwks'), ['keys' => [[
+    Cache::put(Installation::key('oidc.jwks.v2.'.md5('https://idp.test/jwks')), ['document' => ['keys' => [[
         'kty' => 'RSA',
         'kid' => 'stale-kid',
         'use' => 'sig',
         'alg' => 'RS256',
         'n' => rtrim(strtr(base64_encode($stale['rsa']['n']), '+/', '-_'), '='),
         'e' => rtrim(strtr(base64_encode($stale['rsa']['e']), '+/', '-_'), '='),
-    ]]], 3600);
+    ]]], 'fetched_at' => now()->getTimestamp()], 3600);
     $idToken = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => '11111111-1111-4111-8111-111111111111', 'preferred_username' => 'c@x.hu'], ENTRA_ISSUER);
 
     $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'iPhone'])
@@ -159,8 +171,9 @@ it('rejects the token when the JWKS endpoint answers with an unusable document, 
         ->assertUnprocessable()->assertJsonPath('errors.id_token.0', 'The token is not valid.');
     expect(AuditLog::query()->where('event', 'login.rejected')->sole()->context['error'])->toStartWith('ID token invalid: ');
 
-    // The unusable set is refreshed once, like a stale key, before giving up.
-    Http::assertSentCount(3);
+    // The unusable set counts as a failed download: no refresh within the next
+    // 30 seconds, and it is not kept.
+    Http::assertSentCount(2);
     $this->assertDatabaseCount('personal_access_tokens', 0);
 });
 

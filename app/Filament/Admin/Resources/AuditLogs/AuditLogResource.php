@@ -99,7 +99,7 @@ class AuditLogResource extends BaseResource
                 ->visible(fn (AuditLog $record) => $record->subject_id !== null && static::describe($record->subject)['url'] === null),
             TextEntry::make('ip_address')->label(__('IP address'))->placeholder('-'),
             TextEntry::make('request_id')->label(__('Request id'))->placeholder(__('none'))->copyable()->fontFamily('mono')
-                ->helperText(__('Every entry written while serving one web request shares this id and the list can be filtered by it; scheduled tasks, commands and entries from before this feature have none.')),
+                ->helperText(__('Every entry written while serving one web request shares this id and the list can be filtered by it; scheduled tasks, commands and entries from before this feature have none.').' '.__('HDID generates this id; an id the caller sent is kept under Details as caller_request_id.')),
             TextEntry::make('user_agent')->label(__('User agent'))->placeholder('-')->columnSpanFull(),
             TextEntry::make('context')->label(__('Details'))->columnSpanFull()->placeholder('-')->copyable()->fontFamily('mono')
                 ->state(fn (AuditLog $record) => filled($record->context) ? json_encode($record->context, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null),

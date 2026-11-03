@@ -3,6 +3,9 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Http\Request;
 
+// PHP's own error output stays off whatever php.ini says; the framework renders errors.
+ini_set('display_errors', '0');
+
 define('LARAVEL_START', microtime(true));
 
 // Determine if the application is in maintenance mode...

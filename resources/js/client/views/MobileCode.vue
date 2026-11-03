@@ -97,15 +97,13 @@ function askGenerate() {
     else generate();
 }
 
+// The clipboard API exists only on a secure (https) page; without it the button says why it is off.
+const canCopy = Boolean(navigator.clipboard?.writeText);
+
 async function copy() {
-    const text = formatted.value ?? code.value;
+    if (!canCopy) return;
     try {
-        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-        else {
-            const area = document.createElement('textarea');
-            area.value = text; area.setAttribute('readonly', ''); area.style.position = 'absolute'; area.style.left = '-9999px';
-            document.body.appendChild(area); area.select(); document.execCommand('copy'); document.body.removeChild(area);
-        }
+        await navigator.clipboard.writeText(formatted.value ?? code.value);
         copied.value = true;
         store.toast(t('Code copied.'));
         setTimeout(() => (copied.value = false), 2000);
@@ -156,9 +154,10 @@ onUnmounted(() => { clearInterval(timer); stopPolling(); window.removeEventListe
                 <p class="max-w-md text-sm text-ink-muted">{{ t('Read the code to the agent in pairs: 12 – 34 – 56 – 78. It works once and only for a few minutes.') }}</p>
 
                 <div class="flex flex-wrap justify-center gap-2">
-                    <button type="button" class="btn-secondary" :aria-label="t('Copy code')" @click="copy"><Icon :name="copied ? 'check' : 'copy'" class="h-4 w-4" />{{ copied ? t('Copied') : t('Copy') }}</button>
+                    <button type="button" class="btn-secondary" :aria-label="t('Copy code')" :disabled="!canCopy" :title="canCopy ? undefined : t('Copying works only over a secure (https) connection.')" @click="copy"><Icon :name="copied ? 'check' : 'copy'" class="h-4 w-4" />{{ copied ? t('Copied') : t('Copy') }}</button>
                     <button type="button" class="btn-primary" :disabled="busy" @click="askGenerate"><Icon name="refresh" class="h-4 w-4" />{{ t('Generate a new code') }}</button>
                 </div>
+                <p v-if="!canCopy" class="max-w-md text-xs text-ink-muted">{{ t('Copying works only over a secure (https) connection.') }}</p>
             </div>
 
             <div v-else-if="identified" class="flex flex-col items-center gap-4 text-center" role="status" aria-live="polite">

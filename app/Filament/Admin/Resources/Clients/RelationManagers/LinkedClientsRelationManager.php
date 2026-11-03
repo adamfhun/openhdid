@@ -8,6 +8,7 @@ use App\Clients\ClientTiers;
 use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Concerns\LimitsSearchInput;
 use App\Filament\Concerns\RequiresServedOwner;
+use App\Filament\NotificationText;
 use App\Models\Client;
 use App\Models\ClientLink;
 use App\Support\InputLimits;
@@ -159,12 +160,13 @@ class LinkedClientsRelationManager extends RelationManager
                             $links->link($this->getOwnerRecord(), static::servedClients()->findOrFail($data['client_id']), auth()->user());
                             Notification::make()->title(__('Client linked'))->success()->send();
                         } catch (ValidationException $e) {
-                            Notification::make()->title($e->validator->errors()->first())->danger()->send();
+                            Notification::make()->title(NotificationText::of($e->validator->errors()->first()))->danger()->send();
                         }
                     }),
             ])
             ->recordActions([
                 Action::make('unlink')->label(__('End link'))->icon('heroicon-o-x-mark')->color('danger')->requiresConfirmation()
+                    ->modalHeading(fn (ClientLink $record): string => __('End the link of :linked to :sponsor?', ['linked' => $record->linked?->name ?? '?', 'sponsor' => $record->sponsor?->name ?? '?']))
                     ->modalDescription(__('The link ends now and stays in the list with its end date. The linked account is not closed by this.'))
                     ->authorize(fn () => auth()->user()?->can('update', $this->getOwnerRecord()) ?? false)
                     ->visible(fn (ClientLink $record) => $record->isActive())

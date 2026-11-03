@@ -3,6 +3,8 @@
 namespace App\Sync;
 
 use App\Audit\Auditor;
+use App\Clients\ClientLinks;
+use App\Clients\LinkEndReport;
 use App\Enums\PrincipalType;
 use App\Enums\SyncRunStatus;
 use App\Models\Client;
@@ -62,6 +64,7 @@ class SyncExternalRecords
         private readonly Auditor $auditor,
         private readonly PhoneNormalizer $phones,
         private readonly RunChangeRecorder $changes,
+        private readonly LinkEndReport $linkEnds,
     ) {}
 
     public function run(SourceReader $reader, ?User $triggeredBy = null, bool $dryRun = false, ?SyncRun $run = null): SyncRun
@@ -180,6 +183,12 @@ class SyncExternalRecords
         $stats['holder_data_removed_samples'] = [];
         $stats['reissued'] = 0;
         $stats['reissued_samples'] = [];
+        $stats['deleted_returned'] = 0;
+        $stats['deleted_returned_samples'] = [];
+        $stats['sponsor_links_ended'] = 0;
+        $stats['own_premium_links_ended'] = 0;
+        $stats['linked_reopened'] = 0;
+        $stats['linked_reopened_samples'] = [];
         $stats['demo_conflicts'] = 0;
         $stats['kind_pending'] = 0;
         $stats['kind_changed'] = 0;
@@ -194,6 +203,8 @@ class SyncExternalRecords
 
         // The per-record diffs go to sync_run_changes, not the audit log.
         $this->changes->begin($run);
+        // The links the run's package changes end, reported on the run.
+        $this->linkEnds->start();
 
         try {
             $transactionStarted = false;
@@ -346,6 +357,8 @@ class SyncExternalRecords
                 [$stats['closing_next'], $samples['closing_next']] = $this->closingAtNextRun();
             } finally {
                 $this->provisioner->discardPendingRebounds();
+                $this->collectLinkEnds($stats);
+                $this->linkEnds->stop();
                 $stats['changes'] = $this->changes->end();
                 if ($transactionStarted) {
                     DB::rollBack();
@@ -382,6 +395,14 @@ class SyncExternalRecords
             }
         }
 
+        // Records whose client is in the trash: the client stays deleted.
+        foreach ($this->provisioner->takeDeletedReturns() as $return) {
+            $stats['deleted_returned']++;
+            if (count($stats['deleted_returned_samples']) < self::CHANGE_SAMPLE_SIZE) {
+                $stats['deleted_returned_samples'][] = $return;
+            }
+        }
+
         // Accounts handed to another person's record, cleared of the previous holder's data.
         foreach ($this->provisioner->takeHolderDataRemovals() as $removal) {
             $stats['holder_data_removed']++;
@@ -399,9 +420,28 @@ class SyncExternalRecords
         }
     }
 
-    /** @param array<string, mixed> $stats
-     * @return list<string>
+    /**
+     * The links the run's package changes ended, and the linked clients
+     * reopened because a closed sponsor stopped sponsoring (or they got a
+     * premium of their own): the sponsor itself stays closed, so this is
+     * the only place the run shows it (NYT-06.3).
+     *
+     * @param  array<string, mixed>  $stats
      */
+    private function collectLinkEnds(array &$stats): void
+    {
+        $taken = $this->linkEnds->take();
+        $stats['sponsor_links_ended'] += $taken['ended'][ClientLinks::END_REASON_SPONSOR_INELIGIBLE] ?? 0;
+        $stats['own_premium_links_ended'] += $taken['ended'][ClientLinks::END_REASON_LINKED_OWN_PREMIUM] ?? 0;
+
+        foreach ($taken['reopened'] as $reopened) {
+            $stats['linked_reopened']++;
+            if (count($stats['linked_reopened_samples']) < self::CHANGE_SAMPLE_SIZE) {
+                $stats['linked_reopened_samples'][] = $reopened;
+            }
+        }
+    }
+
     /**
      * The reader's request report (status codes, IDs sent), kept on failed
      * runs too.

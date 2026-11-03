@@ -21,6 +21,9 @@ final readonly class ExternalRecordDto
     /** The text fields kept in varchar(255) columns, cut to fit. */
     private const TEXT_FIELDS = ['name', 'company', 'implicit_package', 'explicit_package', 'title', 'department', 'login_name', 'room', 'employment_status'];
 
+    /** The fields a row maps by name; each holds one value, text or a number. */
+    private const FIELDS = ['external_id', 'name', 'email', 'company', 'implicit_package', 'explicit_package', 'title', 'department', 'login_name', 'room', 'employment_status'];
+
     /**
      * @param  list<string>  $phones  raw phone strings, normalised by the importer
      * @param  array<string, mixed>  $attributes  everything else from the source
@@ -79,8 +82,9 @@ final readonly class ExternalRecordDto
 
     /**
      * The record of a row, or the skipped row with the reason it was not
-     * usable: no numeric identifier or no address (invalid_row), an
-     * address that is no usable e-mail address (invalid_email).
+     * usable: no numeric identifier or no address, or a mapped field or
+     * phone column holding a list or an object (invalid_row), an address
+     * that is no usable e-mail address (invalid_email).
      *
      * @param  array<string, mixed>  $row
      * @param  array<string, string|list<string>>  $mapping
@@ -99,10 +103,22 @@ final readonly class ExternalRecordDto
      */
     private static function build(array $row, array $mapping): self|string
     {
-        $truncated = [];
-        $pick = static function (string $target) use ($row, $mapping, &$truncated): ?string {
+        $cell = static function (string $target) use ($row, $mapping): mixed {
             $column = $mapping[$target] ?? $target;
-            $value = is_string($column) ? ($row[$column] ?? $row[$target] ?? null) : null;
+
+            return is_string($column) ? ($row[$column] ?? $row[$target] ?? null) : null;
+        };
+        $phoneColumns = (array) ($mapping['phones'] ?? 'phone');
+        $cells = [...array_map($cell, self::FIELDS), ...array_map(fn (string $column): mixed => $row[$column] ?? null, $phoneColumns)];
+
+        // A JSON source may nest a value; one field cannot hold a list, so the row is not usable.
+        if (array_filter($cells, fn (mixed $value): bool => is_array($value) || is_object($value)) !== []) {
+            return SkippedRow::REASON_INVALID_ROW;
+        }
+
+        $truncated = [];
+        $pick = static function (string $target) use ($cell, &$truncated): ?string {
+            $value = $cell($target);
             $value = $value === null || trim((string) $value) === '' ? null : trim((string) $value);
 
             if ($value !== null && in_array($target, self::TEXT_FIELDS, true) && mb_strlen($value) > InputLimits::NAME) {
@@ -125,7 +141,6 @@ final readonly class ExternalRecordDto
             return SkippedRow::REASON_INVALID_EMAIL;
         }
 
-        $phoneColumns = (array) ($mapping['phones'] ?? 'phone');
         $phones = [];
         foreach ($phoneColumns as $column) {
             $value = $row[$column] ?? null;
@@ -142,7 +157,7 @@ final readonly class ExternalRecordDto
         $mappedColumns = array_merge(
             array_values(array_filter($mapping, 'is_string')),
             array_keys($mapping),
-            ['external_id', 'name', 'email', 'company', 'implicit_package', 'explicit_package', 'title', 'department', 'login_name', 'room', 'employment_status'],
+            self::FIELDS,
             $phoneColumns,
         );
 

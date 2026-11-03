@@ -10,6 +10,7 @@ use App\Filament\Admin\NavigationGroup;
 use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\IdSessions\Pages\ManageIdSessions;
 use App\Models\IdSession;
+use App\Support\HuDate;
 use App\Support\InputLimits;
 use BackedEnum;
 use Filament\Actions\ViewAction;
@@ -63,7 +64,8 @@ class IdSessionResource extends BaseResource
                 TextEntry::make('call.external_call_id')->label(__('Call'))->placeholder('-'),
                 TextEntry::make('method')->label(__('Method'))->badge()->formatStateUsing(fn (IdMethod $state) => $state->label()),
                 TextEntry::make('channel')->label(__('Channel'))->badge()->formatStateUsing(fn (IdChannel $state) => __($state->value)),
-                TextEntry::make('status')->label(__('Status'))->badge()->formatStateUsing(fn (IdSessionStatus $state) => __($state->value))->color(fn (IdSessionStatus $state) => static::statusColor($state)),
+                TextEntry::make('status')->label(__('Status'))->badge()->formatStateUsing(fn (IdSessionStatus $state) => __($state->value))->color(fn (IdSessionStatus $state) => static::statusColor($state))
+                    ->belowContent(fn (IdSession $record): ?string => $record->isVoided() ? __('Ended :at: the call was moved to another client, so this pass identifies nobody any more.', ['at' => $record->voided_at->format(HuDate::DATETIME)]) : null),
                 TextEntry::make('outcome_reason')->label(__('Outcome'))->placeholder('-')
                     ->formatStateUsing(fn (?string $state, IdSession $record) => $state ? app(ClientTiers::class)->servedText($record->client, __($state)) : '-'),
                 TextEntry::make('started_at')->label(__('Started'))->dateTime(),
@@ -92,7 +94,8 @@ class IdSessionResource extends BaseResource
                 TextColumn::make('agent.name')->label(__('Agent'))->placeholder('-'),
                 TextColumn::make('method')->label(__('Method'))->badge()->formatStateUsing(fn (IdMethod $state) => $state->label()),
                 TextColumn::make('channel')->label(__('Channel'))->badge()->formatStateUsing(fn (IdChannel $state) => __($state->value)),
-                TextColumn::make('status')->label(__('Status'))->badge()->formatStateUsing(fn (IdSessionStatus $state) => __($state->value))->color(fn (IdSessionStatus $state) => static::statusColor($state)),
+                TextColumn::make('status')->label(__('Status'))->badge()->formatStateUsing(fn (IdSessionStatus $state) => __($state->value))->color(fn (IdSessionStatus $state) => static::statusColor($state))
+                    ->description(fn (IdSession $record): ?string => $record->isVoided() ? __('ended by a call move') : null),
                 TextColumn::make('outcome_reason')->label(__('Outcome'))->placeholder('-')
                     ->formatStateUsing(fn (?string $state, IdSession $record) => $state ? app(ClientTiers::class)->servedText($record->client, __($state)) : '-'),
                 TextColumn::make('accepted_count')->label(__('OK'))->badge()->color('success'),

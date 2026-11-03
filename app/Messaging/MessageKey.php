@@ -15,11 +15,12 @@ enum MessageKey: string
     case PinSms = 'pin_sms';
     case LoginOtpSms = 'login_otp_sms';
     case PhoneVerifySms = 'phone_verify_sms';
+    case SignInNumberAdded = 'sign_in_number_added';
 
     public function channel(): Channel
     {
         return match ($this) {
-            self::MagicLink => Channel::Email,
+            self::MagicLink, self::SignInNumberAdded => Channel::Email,
             self::PinSms, self::LoginOtpSms, self::PhoneVerifySms => Channel::Sms,
         };
     }
@@ -27,12 +28,15 @@ enum MessageKey: string
     /**
      * Whether the rendered message carries a secret (PIN, login code, login
      * link). Such bodies are wiped once the message left the system and are
-     * never shown in the panel. Every key does today; new keys must opt out
-     * explicitly.
+     * never shown in the panel. A new key carries one unless it opts out
+     * here explicitly.
      */
     public function carriesSecret(): bool
     {
-        return true;
+        return match ($this) {
+            self::SignInNumberAdded => false,
+            default => true,
+        };
     }
 
     public function label(): string
@@ -42,6 +46,7 @@ enum MessageKey: string
             self::PinSms => __('New PIN SMS'),
             self::LoginOtpSms => __('Login code SMS'),
             self::PhoneVerifySms => __('Phone number verification SMS'),
+            self::SignInNumberAdded => __('New sign-in phone number e-mail'),
         };
     }
 
@@ -74,6 +79,7 @@ enum MessageKey: string
             self::PinSms => ['pin' => __('The new PIN')],
             self::LoginOtpSms => ['code' => __('The login code'), 'minutes' => __('Validity of the code in minutes')],
             self::PhoneVerifySms => ['code' => __('The verification code'), 'minutes' => __('Validity of the code in minutes')],
+            self::SignInNumberAdded => ['number' => __('The phone number that can now receive SMS sign-in codes')],
         };
 
         return $own + self::commonPlaceholders();
@@ -98,6 +104,7 @@ enum MessageKey: string
             'days' => '3',
             'pin' => '1234',
             'code' => '123456',
+            'number' => '+36301234567',
         ];
     }
 
@@ -125,6 +132,8 @@ enum MessageKey: string
 
         return match ([$this, $locale]) {
             [self::MagicLink, 'hu'] => 'Belépési hivatkozás – {{ app_name }}',
+            [self::SignInNumberAdded, 'hu'] => 'Új belépési telefonszám – {{ app_name }}',
+            [self::SignInNumberAdded, 'en'] => 'A new sign-in phone number – {{ app_name }}',
             default => 'Your {{ app_name }} login link',
         };
     }
@@ -137,6 +146,7 @@ enum MessageKey: string
 <p>Az alábbi gombra kattintva beléphet a(z) {{ app_name }} ügyfélfelületére. A hivatkozás {{ hours }} óráig érvényes, és egyszer használható fel.</p>
 <p><a class="button" href="{{ link }}">Belépés</a></p>
 <p>Ha a gomb nem működik, másolja be ezt a címet a böngészőbe:<br>{{ link }}</p>
+<p>Ha közben újabb belépési hivatkozást kér (vagy valaki az Ön e-mail-címével kér egyet), ez a hivatkozás érvényét veszti; mindig a legutóbbi levelet használja.</p>
 <p>Ha nem Ön kérte a belépést, ezt a levelet figyelmen kívül hagyhatja.</p>
 <p>Kérdés esetén ügyfélszolgálatunk elérhető: {{ support_phone }} · {{ support_email }} ({{ support_hours }})</p>
 HTML,
@@ -145,8 +155,19 @@ HTML,
 <p>Use the button below to sign in to {{ app_name }}. The link is valid for {{ hours }} hours and can be used once.</p>
 <p><a class="button" href="{{ link }}">Sign in</a></p>
 <p>If the button does not work, copy this address into your browser:<br>{{ link }}</p>
+<p>If a newer login link is requested in the meantime (by you, or by someone with your e-mail address), this link stops working; always use the latest e-mail.</p>
 <p>If you did not request this, you can ignore this e-mail.</p>
 <p>Questions? Our support is available at {{ support_phone }} · {{ support_email }} ({{ support_hours }})</p>
+HTML,
+            [self::SignInNumberAdded, 'hu'] => <<<'HTML'
+<h2>Kedves {{ name }}!</h2>
+<p>A(z) {{ number }} telefonszámot megerősítették a fiókjában, így ezentúl erre a számra is mehet SMS-es belépési kód a(z) {{ app_name }} ügyfélfelületére.</p>
+<p>Ha ezt a számot nem Ön adta meg, lépjen be, törölje a számot a Telefonszámok oldalon, és használja a „Kilépés minden eszközről” lehetőséget, vagy hívja ügyfélszolgálatunkat: {{ support_phone }} · {{ support_email }} ({{ support_hours }})</p>
+HTML,
+            [self::SignInNumberAdded, 'en'] => <<<'HTML'
+<h2>Hello {{ name }},</h2>
+<p>The phone number {{ number }} was confirmed on your account, so SMS sign-in codes for {{ app_name }} can go to it from now on.</p>
+<p>If you did not add this number, sign in, remove it on the Phone numbers page and use "Sign out on every device", or call our support: {{ support_phone }} · {{ support_email }} ({{ support_hours }})</p>
 HTML,
             [self::PinSms, 'hu'] => '{{ app_name }}: az új azonosító PIN-kódja: {{ pin }}. Ne ossza meg senkivel.',
             [self::PhoneVerifySms, 'hu'] => '{{ app_name }}: a telefonszám megerősítő kódja: {{ code }} ({{ minutes }} percig érvényes).',

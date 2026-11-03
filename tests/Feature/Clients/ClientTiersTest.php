@@ -91,3 +91,13 @@ it('shows only relevant clients by default and keeps the rest reachable', functi
         ->and(app(Settings::class)->bool(SettingKey::ClientsListRelevantOnly))->toBeTrue()
         ->and(app(ClientSearch::class)->search('Ernő')->pluck('id')->all())->toBe([$untouched->id], 'search still finds everyone');
 });
+
+it('gives no tier to a client whose package differs from a listed one only in a character without an ASCII spelling', function (string $listed, string $worn): void {
+    app(Settings::class)->set(SettingKey::PackagesPremium, [$listed]);
+    $client = Client::factory()->synced()->create(['implicit_package' => $worn, 'explicit_package' => null]);
+
+    expect(app(ClientTiers::class)->tierFor($client))->not->toBe(ClientTier::Premium);
+})->with([
+    ['VIP 金', 'VIP 银'],
+    ['Premium', 'Premium®'],
+]);

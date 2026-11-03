@@ -20,6 +20,7 @@ enum DirectoryLinkOutcome: string
     case Missing = 'missing';
     case Taken = 'taken';
     case Ambiguous = 'ambiguous';
+    case DeletedHolder = 'deleted_holder';
 
     public function isLinked(): bool
     {
@@ -78,6 +79,7 @@ enum DirectoryLinkOutcome: string
             self::Missing => __('Not linked to EMD yet: the EMD record with this e-mail is missing from the recent syncs. The sync links the account when the record returns; until then it cannot sign in.'),
             self::Taken => __('Not linked to EMD: the EMD record with this e-mail is already linked to another account. Check the accounts and the EMD record.'),
             self::Ambiguous => __('Not linked to EMD yet: several EMD records carry this e-mail. The next EMD sync decides which one the account belongs to.'),
+            self::DeletedHolder => __('Not linked to EMD: the EMD record with this e-mail belongs to a deleted client. Restore that client (Clients list, Deleted filter) instead of creating a new one, or check the EMD record.'),
         };
     }
 }

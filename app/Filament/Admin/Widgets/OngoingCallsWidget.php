@@ -14,7 +14,9 @@ use App\Filament\Admin\Pages\SearchClients;
 use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
 use App\Filament\Concerns\LimitsSearchInput;
+use App\Filament\NotificationText;
 use App\Models\Call;
+use App\Models\IdSession;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Filament\Actions\Action;
@@ -114,11 +116,11 @@ class OngoingCallsWidget extends TableWidget
                         try {
                             app(CallCenterService::class)->claim($call, auth()->user(), takeOver: $from !== null, takeOverFrom: $from);
                         } catch (CallAlreadyClaimedException $e) {
-                            Notification::make()->title($e->getMessage())->warning()->send();
+                            Notification::make()->title(NotificationText::of($e->getMessage()))->warning()->send();
 
                             return;
                         } catch (ValidationException $e) {
-                            Notification::make()->title($e->validator->errors()->first())->warning()->send();
+                            Notification::make()->title(NotificationText::of($e->validator->errors()->first()))->warning()->send();
 
                             return;
                         }
@@ -139,7 +141,7 @@ class OngoingCallsWidget extends TableWidget
                         try {
                             app(CallCenterService::class)->release($call, auth()->user());
                         } catch (ValidationException $e) {
-                            Notification::make()->title($e->validator->errors()->first())->warning()->send();
+                            Notification::make()->title(NotificationText::of($e->validator->errors()->first()))->warning()->send();
                         }
                     }),
             ]);
@@ -155,7 +157,8 @@ class OngoingCallsWidget extends TableWidget
             return null;
         }
 
-        return $call->passedSession() !== null ? 'passed' : ($call->clientIdSessions()->isNotEmpty() ? 'failed' : null);
+        // A pass the call's move ended is no failure either: it shows nothing.
+        return $call->passedSession() !== null ? 'passed' : ($call->clientIdSessions()->contains(fn (IdSession $session): bool => ! $session->isVoided()) ? 'failed' : null);
     }
 
     /**

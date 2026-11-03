@@ -47,7 +47,7 @@ class UnbindSsoAction
      */
     public static function summary(Principal&Model $record): string
     {
-        $providers = $record->ssoIdentities->map(fn (SsoIdentity $identity): string => $identity->provider->label());
+        $providers = $record->ssoIdentities->map(fn (SsoIdentity $identity): string => $identity->provider->label().($identity->isReleased() ? ' ('.__('released').')' : ''));
 
         return $providers->isEmpty() ? __('not bound') : $providers->implode(', ');
     }
@@ -62,6 +62,13 @@ class UnbindSsoAction
     public static function lines(Principal&Model $record): array
     {
         return $record->ssoIdentities->sortBy('bound_at')->values()->map(function (SsoIdentity $identity): string {
+            if ($identity->isReleased()) {
+                return $identity->provider->label().': '.__('released to :account at :at: every company sign-in of this account is refused until the binding is cleared', [
+                    'account' => $identity->releasedTo()?->getEmail() ?? '?',
+                    'at' => $identity->released_at->format(HuDate::DATETIME),
+                ]);
+            }
+
             $line = __(':provider: bound :at by :via', [
                 'provider' => $identity->provider->label(),
                 'at' => $identity->bound_at->format(HuDate::DATETIME),

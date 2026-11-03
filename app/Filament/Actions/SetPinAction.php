@@ -5,6 +5,7 @@ namespace App\Filament\Actions;
 use App\Audit\Auditor;
 use App\Auth\Permission;
 use App\Enums\OutboundMessageStatus;
+use App\Filament\NotificationText;
 use App\Identification\PinService;
 use App\Messaging\MessageKey;
 use App\Messaging\Messenger;
@@ -82,7 +83,7 @@ class SetPinAction
 
                     throw ValidationException::withMessages([$path.'.pin' => $e->errors()['pin']]);
                 } catch (Throwable $e) {
-                    Notification::make()->title($e->getMessage())->danger()->send();
+                    Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
 
                     return;
                 }
@@ -95,7 +96,7 @@ class SetPinAction
                     if ($message->status === OutboundMessageStatus::Cancelled) {
                         Notification::make()
                             ->title(__('PIN set; the SMS was not sent'))
-                            ->body((string) $message->error.' '.__('Tell the client the PIN in person.'))
+                            ->body(NotificationText::of((string) $message->error.' '.__('Tell the client the PIN in person.')))
                             ->warning()
                             ->persistent()
                             ->send();
@@ -105,7 +106,7 @@ class SetPinAction
 
                     app(Auditor::class)->record('client.pin_sent_sms', $record, ['phone' => $phone]);
 
-                    Notification::make()->title(__('PIN set and sent by SMS to :number', ['number' => $phone]))->success()->send();
+                    Notification::make()->title(NotificationText::of(__('PIN set and sent by SMS to :number', ['number' => $phone])))->success()->send();
 
                     return;
                 }

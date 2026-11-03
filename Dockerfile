@@ -5,13 +5,14 @@
 #   web (nginx + PHP-FPM), worker [queue], scheduler, migrate, artisan <args>.
 #
 # Every base image is pinned by digest and every download by SHA-256. The
-# maintainer script (platform.sh) updates the values below together; nginx
-# and curl tarballs are checked against their PGP signatures before pinning,
-# and the curl signature is checked again at build time.
+# maintainer script (platform.sh) updates the values below together. It pins a
+# new nginx or curl tarball only when a pinned key signed it, and the build
+# checks the curl signature against the pinned key again. headers-more and
+# phpredis publish no signature: their SHA-256 comes from the first download.
 
 ARG PHP_IMAGE=php:8.5.12-fpm-alpine3.24@sha256:4c2818074ec49f6abe46620f3965e0cb75bc3a5f2b417edd1aacaba6f091c40e
-ARG NODE_IMAGE=node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
-ARG COMPOSER_IMAGE=composer:2.10.3@sha256:b6dcd72ca98fa19d0e5b8476de179859704891fad06dd9e0b96833d4c430a5fc
+ARG NODE_IMAGE=node:26.13.0-alpine3.24@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94
+ARG COMPOSER_IMAGE=composer:2.11.1@sha256:5190d9b445add2fa26090108273cb1ef1e1af98175201c737b85b3c4f90fbf7c
 ARG ALPINE_IMAGE=alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 ARG NGINX_VERSION=1.31.8
 ARG NGINX_SHA256=0652b760b3b772d2ec17b47c2fc15d9a95e6fe35cd5b877eadc1a62d9bc75af1
@@ -21,7 +22,8 @@ ARG PHPREDIS_VERSION=6.3.0
 ARG PHPREDIS_SHA256=0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5
 ARG CURL_VERSION=8.23.0
 ARG CURL_SHA256=8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5
-# Daniel Stenberg's release-signing key (https://daniel.haxx.se/mykey.asc); the build refuses any other.
+# Daniel Stenberg's release-signing key (https://daniel.haxx.se/mykey.asc). Only this key goes from the
+# downloaded key file into the keyring gpgv checks with: a key added beside it signs nothing.
 ARG CURL_PGP_FINGERPRINT=27EDEAF22F3ABCEB50DB9A125CC908FDB71E12C2
 
 FROM ${COMPOSER_IMAGE} AS composer
@@ -93,6 +95,8 @@ ARG CURL_SHA256
 ARG CURL_PGP_FINGERPRINT
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 WORKDIR /src
+# The signature is checked with gpgv against a keyring that holds the pinned key alone
+# (a full 40-digit fingerprint: a short key id or an empty value would select other keys).
 # The archive is decompressed to a file and untarred in a second step: busybox's
 # built-in xz path (tar -J) runs the decompressor as a piped child, which now and
 # then died with a silent exit code 1 on the GitHub runners (two of four release
@@ -103,11 +107,14 @@ RUN set -eux; \
     wget -q -O curl.tar.xz.asc "https://curl.se/download/curl-${CURL_VERSION}.tar.xz.asc"; \
     wget -q -O mykey.asc https://daniel.haxx.se/mykey.asc; \
     echo "${CURL_SHA256}  curl.tar.xz" | sha256sum -c -; \
+    test "${#CURL_PGP_FINGERPRINT}" -eq 40; \
+    test -z "$(printf '%s' "${CURL_PGP_FINGERPRINT}" | tr -d '0-9A-F')"; \
     GNUPGHOME="$(mktemp -d)"; export GNUPGHOME; \
     gpg --batch --quiet --import mykey.asc; \
-    gpg --batch --with-colons --fingerprint | grep -q "^fpr:::::::::${CURL_PGP_FINGERPRINT}:"; \
-    gpg --batch --verify curl.tar.xz.asc curl.tar.xz; \
-    gpgconf --kill all; rm -rf "$GNUPGHOME"; \
+    gpg --batch --export "${CURL_PGP_FINGERPRINT}" > pinned.gpg; \
+    test -s pinned.gpg; \
+    gpgv --keyring ./pinned.gpg curl.tar.xz.asc curl.tar.xz; \
+    gpgconf --kill all; rm -rf "$GNUPGHOME" pinned.gpg mykey.asc curl.tar.xz.asc; \
     xz -d curl.tar.xz; \
     tar -xf curl.tar; \
     rm -f curl.tar; \
@@ -129,7 +136,8 @@ RUN set -eux; \
         --without-brotli --without-libidn2 --without-libpsl --without-zstd; \
     make -j"$(nproc)"; \
     make install-strip DESTDIR=/out; \
-    LD_LIBRARY_PATH=/out/usr/local/lib /out/usr/local/bin/curl -V | grep -q NTLM
+    features="$(LD_LIBRARY_PATH=/out/usr/local/lib /out/usr/local/bin/curl -V)"; \
+    case "$features" in *NTLM*) ;; *) echo "libcurl was built without NTLM" >&2; exit 1 ;; esac
 
 # --- PHP with only the extensions the application needs ---
 FROM ${PHP_IMAGE} AS php

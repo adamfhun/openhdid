@@ -5,6 +5,7 @@ namespace App\Filament\Concerns;
 use App\Enums\DirectoryLinkOutcome;
 use App\Enums\MfaMethod;
 use App\Filament\Admin\Resources\SyncRuns\SyncRunResource;
+use App\Filament\NotificationText;
 use App\Models\Client;
 use App\Models\User;
 use App\Support\HuDate;
@@ -95,7 +96,7 @@ trait LinksToDirectory
         $typed = $this->data['email'] ?? null;
 
         if (is_string($typed) && AccountProvisioner::emailKey($typed) !== AccountProvisioner::emailKey($record->email)) {
-            Notification::make()->title(__('The e-mail was not changed'))->body($reason)->warning()->persistent()->send();
+            Notification::make()->title(__('The e-mail was not changed'))->body(NotificationText::of($reason))->warning()->persistent()->send();
         }
 
         return $data;
@@ -204,15 +205,15 @@ trait LinksToDirectory
     {
         $now = $this->emailChangeFingerprint();
 
-        if ($now === null || $now === $this->confirmedEmailChange) {
+        if ($now === null || hash_equals((string) $this->confirmedEmailChange, $now)) {
             return;
         }
 
         $this->confirmedEmailChange = $now;
         Notification::make()->title(__('The consequences changed: check them again'))
-            ->body($this->getRecord() instanceof Client
+            ->body(NotificationText::of($this->getRecord() instanceof Client
                 ? __('Something the e-mail change depends on changed while the question was open (an EMD record with the new address, the PIN, the security answers or the phone numbers added by hand, the stored address). The question now shows what saving does; confirm again to save.')
-                : __('Something the e-mail change depends on changed while the question was open (an EMD record with the new address, a second factor, the stored address). The question now shows what saving does; confirm again to save.'))
+                : __('Something the e-mail change depends on changed while the question was open (an EMD record with the new address, a second factor, the stored address). The question now shows what saving does; confirm again to save.')))
             ->warning()->send();
 
         $action->halt();
@@ -362,7 +363,7 @@ trait LinksToDirectory
         ]));
 
         return Notification::make()->title(__('Signed out everywhere: the e-mail changed'))
-            ->body(implode(' ', $lines))
+            ->body(NotificationText::of(implode(' ', $lines)))
             ->info()->persistent();
     }
 
@@ -408,10 +409,10 @@ trait LinksToDirectory
 
         // The first link after a hand-made address change: the record is taken as another person's.
         foreach ($provisioner->takeHolderDataRemovals() as $removal) {
-            Notification::make()->title(__('Handed to another person: EMD record :id', ['id' => $removal['external_id']]))
-                ->body(__('The address was changed by hand earlier, so the record is taken as another person\'s. The account was signed out everywhere. Removed from the previous holder: :items.', [
+            Notification::make()->title(NotificationText::of(__('Handed to another person: EMD record :id', ['id' => $removal['external_id']])))
+                ->body(NotificationText::of(__('The address was changed by hand earlier, so the record is taken as another person\'s. The account was signed out everywhere. Removed from the previous holder: :items.', [
                     'items' => $removal['removed'] === [] ? __('nothing was set up') : implode(', ', array_map(fn (string $trace): string => SyncRunResource::traceLabel($trace), $removal['removed'])),
-                ]))
+                ])))
                 ->warning()->persistent()->send();
         }
     }
@@ -424,8 +425,18 @@ trait LinksToDirectory
 
         /** @var User|Client $record */
         $record = $this->getRecord();
-        $notification->body($this->directoryLink->message($record));
+        $notification->body(NotificationText::of($this->directoryLinkText($record)));
 
         return $this->directoryLink->isLinked() ? $notification : $notification->warning()->persistent();
+    }
+
+    /**
+     * The link outcome as plain text, null when nothing was offered. A page
+     * that adds a sentence of its own composes the plain text first and
+     * escapes the whole body once (NotificationText).
+     */
+    private function directoryLinkText(User|Client $record): ?string
+    {
+        return $this->directoryLink?->message($record);
     }
 }

@@ -4,6 +4,7 @@ namespace App\Filament\Admin\Resources\Clients\RelationManagers;
 
 use App\Filament\Concerns\LimitsSearchInput;
 use App\Filament\Concerns\RequiresServedOwner;
+use App\Identification\ClientAnswers;
 use App\Models\ClientAnswer;
 use Filament\Actions\DeleteAction;
 use Filament\Resources\RelationManagers\RelationManager;
@@ -40,7 +41,9 @@ class AnswersRelationManager extends RelationManager
                 TextColumn::make('updated_at')->label(__('Answered'))->since(),
             ])
             ->recordActions([
-                DeleteAction::make()->label(__('Remove answer')),
+                DeleteAction::make()->label(__('Remove answer'))
+                    ->modalDescription(__('The answer is deleted for good and the helpdesk can no longer ask this question; the client can give a new answer on the portal. The removal is recorded in the audit log.'))
+                    ->using(fn (ClientAnswer $record): bool => app(ClientAnswers::class)->remove($record->client, $record->question, actor: auth('web')->user(), via: 'staff')),
             ]);
     }
 }

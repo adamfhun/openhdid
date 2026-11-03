@@ -217,3 +217,50 @@ it('shows the e-mail tile yellow with the key to change while SMTP may send unen
     config()->set('mail.default', 'failover');
     expect($checks->mail()->status)->toBe(CheckStatus::Warn);
 });
+
+it('keeps the EWS certificate check on unless EWS_VERIFY_TLS is an explicit false', function (string $value, bool $verify): void {
+    expect(ewsConfigWithEnv(['EWS_VERIFY_TLS' => $value])['verify_tls'])->toBe($verify);
+})->with([
+    'empty' => ['', true],
+    'garbled' => ['garbage', true],
+    'true' => ['true', true],
+    'false' => ['false', false],
+    '0' => ['0', false],
+    'off' => ['off', false],
+    'no' => ['no', false],
+]);
+
+/**
+ * A complete EWS configuration (basic) with the certificate check as given.
+ */
+function ewsWithCertificateCheck(bool $verify, string $mailer = 'ews'): void
+{
+    config()->set('mail.default', $mailer);
+    config()->set('hdid.ews', ['url' => 'https://mail.example.test/EWS/Exchange.asmx', 'auth' => 'basic', 'username' => 'svc', 'password' => 'secret', 'oauth' => [], 'verify_tls' => $verify]);
+}
+
+it('turns the e-mail tile red in production while EWS_VERIFY_TLS is off, and yellow elsewhere, naming the key', function (): void {
+    $checks = app(HealthChecks::class);
+    ewsWithCertificateCheck(true);
+    expect($checks->mail()->status)->toBe(CheckStatus::Ok);
+
+    ewsWithCertificateCheck(false);
+    expect($checks->mail()->status)->toBe(CheckStatus::Warn)
+        ->and($checks->mail()->detail)->toContain('EWS_VERIFY_TLS');
+
+    app()->detectEnvironment(fn () => 'production');
+    try {
+        expect($checks->mail()->status)->toBe(CheckStatus::Fail)
+            ->and($checks->mail()->detail)->toContain('EWS_VERIFY_TLS')
+            ->and(HealthChecks::hint('mail'))->toContain('EWS_VERIFY_TLS');
+    } finally {
+        app()->detectEnvironment(fn () => 'testing');
+    }
+});
+
+it('checks the certificate setting of an EWS leg of a failover or round-robin mailer too', function (string $mailer): void {
+    ewsWithCertificateCheck(false, $mailer);
+
+    expect(app(HealthChecks::class)->mail()->status)->not->toBe(CheckStatus::Ok)
+        ->and(app(HealthChecks::class)->mail()->detail)->toContain('EWS_VERIFY_TLS');
+})->with(['failover', 'roundrobin']);

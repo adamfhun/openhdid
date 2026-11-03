@@ -4,6 +4,7 @@ use App\Auth\Role;
 use App\Enums\OneTimeCodePurpose;
 use App\Enums\OutboundMessageStatus;
 use App\Enums\PhoneNumberSource;
+use App\Enums\PhoneVerificationSource;
 use App\Filament\Admin\Pages\ManageSettings;
 use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
 use App\Filament\Admin\Resources\Clients\RelationManagers\PhoneNumbersRelationManager;
@@ -23,6 +24,8 @@ use App\Settings\Settings;
 use App\Sms\FakeSmsSender;
 use App\Sms\SmsDestinations;
 use App\Sms\SmsSender;
+use App\System\CheckStatus;
+use App\System\HealthChecks;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
@@ -111,8 +114,8 @@ it('sends the login code to the client\'s mobile when the primary number is a la
     app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
     $client = Client::factory()->synced()->create(['email' => 'c@x.hu']);
     // The client added the landline first, so it became the primary one.
-    $client->phoneNumbers()->create(['number_e164' => '+3612345678', 'source' => PhoneNumberSource::ClientSelf, 'is_primary' => true]);
-    $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::ClientSelf, 'is_primary' => false]);
+    $client->phoneNumbers()->create(['number_e164' => '+3612345678', 'source' => PhoneNumberSource::ClientSelf, 'is_primary' => true, 'verified_at' => now(), 'verified_via' => PhoneVerificationSource::Staff]);
+    $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::ClientSelf, 'is_primary' => false, 'verified_at' => now(), 'verified_via' => PhoneVerificationSource::Sms]);
 
     $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
 
@@ -281,4 +284,33 @@ it('offers the PIN by SMS only to a number that receives text messages, and neve
 
     expect(array_column($this->sms->sent, 'to'))->toBe(['+36301234567'])
         ->and(AuditLog::query()->where('event', 'client.pin_sent_sms')->sole()->context)->toMatchArray(['phone' => '+36301234567']);
+});
+
+it('keeps sending the PIN text message to the primary number even when it is not confirmed', function (): void {
+    $client = Client::factory()->synced()->create();
+    $client->phoneNumbers()->create(['number_e164' => '+36309999999', 'source' => PhoneNumberSource::ClientSelf, 'is_primary' => true]);
+    $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Sync]);
+
+    expect(app(SmsDestinations::class)->targetFor($client))->toBe('+36309999999')
+        ->and(app(SmsDestinations::class)->signInTargetFor($client))->toBe('+36301234567');
+});
+
+it('counts on the status page the open clients whose numbers cannot get the SMS sign-in code', function (): void {
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
+    $selfOnly = Client::factory()->synced()->create();
+    $selfOnly->phoneNumbers()->create(['number_e164' => '+36309999999', 'source' => PhoneNumberSource::ClientSelf]);
+    $confirmed = Client::factory()->synced()->create();
+    $confirmed->phoneNumbers()->create(['number_e164' => '+36308888888', 'source' => PhoneNumberSource::ClientSelf, 'verified_at' => now(), 'verified_via' => PhoneVerificationSource::Sms]);
+    $directory = Client::factory()->synced()->create();
+    $directory->phoneNumbers()->create(['number_e164' => '+36307777777', 'source' => PhoneNumberSource::Sync]);
+    Client::factory()->synced()->closed()->create()->phoneNumbers()->create(['number_e164' => '+36306666666', 'source' => PhoneNumberSource::ClientSelf]);
+
+    $check = app(HealthChecks::class)->smsSignInNumbers();
+
+    expect($check->status)->toBe(CheckStatus::Info)
+        ->and($check->detail)->toBe(__(':n client(s) have only numbers they added themselves and nobody confirmed, so no SMS sign-in code goes to them.', ['n' => 1]))
+        ->and(HealthChecks::hint('sms_sign_in_numbers'))->not->toBeNull();
+
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, false);
+    expect(app(HealthChecks::class)->smsSignInNumbers()->status)->toBe(CheckStatus::Ok);
 });

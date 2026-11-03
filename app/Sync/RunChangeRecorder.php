@@ -5,6 +5,7 @@ namespace App\Sync;
 use App\Audit\Auditor;
 use App\Enums\SyncChangeKind;
 use App\Models\Client;
+use App\Models\ClientPhoneNumber;
 use App\Models\ExternalRecord;
 use App\Models\SyncRun;
 use App\Models\SyncRunChange;
@@ -21,6 +22,12 @@ use Illuminate\Support\Str;
  * (account.closed, account.reopened, account.email_changed, sync.*) are not
  * on the list and stay in the audit log, where a security review looks for
  * them. The run's own summary row (sync.completed) carries the count.
+ *
+ * Only the focused record's own diffs are diverted: the record, the account
+ * bound to it and that account's phone numbers. What the change drags along
+ * on other accounts (a linked client reopened because its sponsor's package
+ * changed) stays in the audit log under its own subject, so the record's row
+ * neither names that account nor shows its reopening as the record's.
  *
  * @phpstan-import-type ChangeEntry from SyncRunChange
  */
@@ -96,6 +103,10 @@ class RunChangeRecorder
             return false;
         }
 
+        if (! $this->belongsToRecord($subject, $context)) {
+            return false;
+        }
+
         $this->pending[] = [
             'event' => $event,
             'subject_type' => $subject?->getMorphClass(),
@@ -104,6 +115,25 @@ class RunChangeRecorder
         ];
 
         return true;
+    }
+
+    /**
+     * The focused record itself, the account bound to it (before or after
+     * this change), or a phone number of that account.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    private function belongsToRecord(?Model $subject, array $context): bool
+    {
+        $recordId = $this->record?->getKey();
+
+        return match (true) {
+            $subject instanceof ExternalRecord => $subject->getKey() === $recordId,
+            $subject instanceof Client, $subject instanceof User => $subject->getAttribute('external_record_id') === $recordId
+                || ($context['from']['external_record_id'] ?? null) === $recordId,
+            $subject instanceof ClientPhoneNumber => Client::withTrashed()->whereKey($subject->getAttribute('client_id'))->value('external_record_id') === $recordId,
+            default => false,
+        };
     }
 
     private function flush(): void

@@ -21,6 +21,8 @@ umask 027
 APP_DIR=/app
 SHARE=/usr/local/share/openhdid
 RUNTIME=/tmp/openhdid
+CA_DIR=/etc/openhdid/ca
+SYSTEM_CA=/etc/ssl/certs/ca-certificates.crt
 
 log() { printf '%s openhdid: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; }
 die() { log "ERROR: $*"; exit 64; }
@@ -52,13 +54,38 @@ prepare_dirs() {
 }
 
 # Extra CA certificates (internal Exchange, SSO, EMD or database CA) mounted as *.crt / *.pem.
+# Kubernetes mounts a ConfigMap as symbolic links (name -> ..data/name), so links are followed;
+# its ..data and ..<timestamp> entries start with a dot and the glob leaves them out. A file that
+# cannot be used (another extension, a dangling link, unreadable) is named in a warning.
 prepare_ca_bundle() {
-    extra=$(find /etc/openhdid/ca -maxdepth 1 -type f \( -name '*.crt' -o -name '*.pem' \) 2>/dev/null | sort)
-    [ -n "$extra" ] || return 0
-    # shellcheck disable=SC2086
-    cat /etc/ssl/certs/ca-certificates.crt $extra > "$RUNTIME/ca-bundle.pem"
+    found=0
+    skipped=''
+    extra="$RUNTIME/ca-extra.pem"
+    : > "$extra"
+    for file in "$CA_DIR"/*; do
+        # The pattern itself comes back for an empty or missing folder.
+        [ -e "$file" ] || [ -L "$file" ] || continue
+        case $file in
+            *.crt | *.pem)
+                if [ -f "$file" ] && [ -r "$file" ]; then
+                    # A file without a final newline must not run into the next one.
+                    { cat "$file"; printf '\n'; } >> "$extra"
+                    found=$((found + 1))
+                    continue
+                fi
+                ;;
+        esac
+        skipped="$skipped ${file##*/}"
+    done
+    [ -z "$skipped" ] || log "warning: $CA_DIR holds entries that are not a readable *.crt or *.pem file and were left out:$skipped"
+    if [ "$found" -eq 0 ]; then
+        rm -f "$extra"
+        return 0
+    fi
+    { cat "$SYSTEM_CA"; printf '\n'; cat "$extra"; } > "$RUNTIME/ca-bundle.pem"
+    rm -f "$extra"
     printf 'openssl.cafile = %s\ncurl.cainfo = %s\n' "$RUNTIME/ca-bundle.pem" "$RUNTIME/ca-bundle.pem" > "$RUNTIME/php/zz-ca.ini"
-    log "trusting $(printf '%s\n' "$extra" | wc -l | tr -d ' ') extra CA file(s) from /etc/openhdid/ca"
+    log "trusting $found extra CA file(s) from $CA_DIR"
 }
 
 warm_caches() {

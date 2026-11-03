@@ -30,4 +30,12 @@ class IdSessionFactory extends Factory
             'expires_at' => now()->addMinutes(30),
         ];
     }
+
+    /**
+     * A pass ended by the move of its call to another client.
+     */
+    public function voided(): static
+    {
+        return $this->state(['status' => IdSessionStatus::Passed, 'decided_at' => now(), 'voided_at' => now(), 'voided_reason' => 'call_moved']);
+    }
 }

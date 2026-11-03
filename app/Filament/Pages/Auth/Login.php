@@ -15,6 +15,7 @@ use App\Settings\Settings;
 use App\Support\ClientAddress;
 use App\Support\EmailAddressRule;
 use App\Support\RateLimitExemptions;
+use App\System\Installation;
 use DanHarrin\LivewireRateLimiting\Exceptions\TooManyRequestsException;
 use Filament\Auth\Http\Responses\Contracts\LoginResponse;
 use Filament\Auth\Pages\Login as BaseLogin;
@@ -23,7 +24,10 @@ use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Component;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\ValidationException;
+use SensitiveParameter;
 
 /**
  * Staff login: password form (if enabled) plus the enabled SSO providers.
@@ -33,6 +37,21 @@ class Login extends BaseLogin
     /** The password field takes what the account form takes (UserResource). */
     public const PASSWORD_MAX_LENGTH = 255;
 
+    /** Lock around one staff account's password checks. */
+    private const PASSWORD_LOCK_PREFIX = 'hdid:login-password:';
+
+    /**
+     * Set while an attempt runs whose one per-address count was taken
+     * first; the parent's own count of the same attempt is then skipped.
+     * Not public: it is no Livewire state a request could set.
+     */
+    private bool $attemptCounted = false;
+
+    /** The exact account of the typed address, looked up once per request. */
+    private ?User $exactUser = null;
+
+    private ?string $exactUserFor = null;
+
     /**
      * The password form logs in through Filament's own guard call, so the
      * last-login stamp and the audit entry the SSO flows write have to be
@@ -40,28 +59,63 @@ class Login extends BaseLogin
      */
     public function authenticate(): ?LoginResponse
     {
+        // Every attempt counts once, first, in one bucket, whichever branch it
+        // takes: the early refusals (password login off, locked account) as
+        // well as the password check.
+        try {
+            $this->rateLimit(5, method: 'authenticate');
+        } catch (TooManyRequestsException $exception) {
+            $this->getRateLimitedNotification($exception)?->send();
+
+            return null;
+        }
+
+        $this->attemptCounted = true;
+
+        try {
+            return $this->authenticateCounted();
+        } finally {
+            $this->attemptCounted = false;
+        }
+    }
+
+    private function authenticateCounted(): ?LoginResponse
+    {
         // Hiding the form is not enough: the Livewire action can be called
         // directly, so a disabled password login has to be refused here.
-        // These early refusals count towards the same per-address limit as
-        // the password check in the parent, which they never reach.
         if (! app(Settings::class)->bool(SettingKey::UserLoginPasswordEnabled)) {
-            if ($this->refusedByRateLimit()) {
-                return null;
-            }
-
             app(AccountLogin::class)->recordRejection(PrincipalType::User, 'password', LoginRejection::MethodDisabled, ['email' => $this->attemptedEmail()]);
 
             parent::throwFailureValidationException();
         }
 
-        // A locked account is refused before its password is even checked.
-        if (($locked = $this->attemptedUser()) !== null && $locked->isLoginLocked()) {
-            if ($this->refusedByRateLimit()) {
-                return null;
-            }
+        $user = $this->attemptedUser();
 
+        // No account by exactly this address: the parent finds none either
+        // (getCredentialsFromFormData) and refuses it as a wrong password.
+        if ($user === null) {
+            return $this->checkPassword(null);
+        }
+
+        // One account's attempts are judged one at a time: the lock check,
+        // the password check, the failure count and the success form one
+        // critical section, so a parallel wrong guess that locks the account
+        // cannot be passed by a right password checked at the same moment.
+        try {
+            return Cache::lock(Installation::lockName(self::PASSWORD_LOCK_PREFIX.$user->id), 15)->block(5, fn (): ?LoginResponse => $this->checkPassword($user));
+        } catch (LockTimeoutException) {
+            app(AccountLogin::class)->recordRejection(PrincipalType::User, 'password', LoginRejection::InvalidCredentials, ['email' => $user->email, 'detail' => 'busy'], $user);
+
+            parent::throwFailureValidationException();
+        }
+    }
+
+    private function checkPassword(?User $user): ?LoginResponse
+    {
+        // A locked account is refused before its password is even checked.
+        if ($user !== null && $user->refresh()->isLoginLocked()) {
             try {
-                app(LoginLockout::class)->assertNotLocked($locked, 'password');
+                app(LoginLockout::class)->assertNotLocked($user, 'password');
             } catch (LoginRejectedException $e) {
                 throw ValidationException::withMessages(['data.email' => $e->getMessage()]);
             }
@@ -70,26 +124,60 @@ class Login extends BaseLogin
         app(AccountLogin::class)->applyRememberDuration(PrincipalType::User);
         $response = parent::authenticate();
 
-        if ($response !== null && ($user = auth()->user()) instanceof User) {
+        if ($response !== null && ($signedIn = auth()->user()) instanceof User) {
+            // The account signed in, as it is now: a parallel wrong guess may
+            // have locked it while the password was being checked.
+            if ($signedIn->refresh()->isLoginLocked()) {
+                $this->signOutRefused();
+                app(AccountLogin::class)->recordRejection(PrincipalType::User, 'password', LoginRejection::AccountLocked, ['email' => $signedIn->email, 'detail' => 'locked_during_check', 'locked_until' => $signedIn->locked_until?->toIso8601String()], $signedIn);
+
+                throw ValidationException::withMessages(['data.email' => (new LoginRejectedException(LoginRejection::AccountLocked))->getMessage()]);
+            }
+
             // The one login rule covers the password path too: Filament's own
             // check only looks at the closed flag and the panel permission, so
             // a missing or mismatched directory record would pass here while
             // the SSO paths refuse it.
             try {
-                app(AccountLogin::class)->assertEligible($user, PrincipalType::User, 'password');
+                app(AccountLogin::class)->assertEligible($signedIn, PrincipalType::User, 'password');
             } catch (LoginRejectedException $e) {
-                auth()->logout();
-                session()->invalidate();
-                session()->regenerateToken();
+                $this->signOutRefused();
 
                 throw ValidationException::withMessages(['data.email' => $e->getMessage()]);
             }
 
-            app(LoginLockout::class)->recordSuccess($user);
-            app(AccountLogin::class)->recordSuccess($user, 'password');
+            app(LoginLockout::class)->recordSuccess($signedIn);
+            app(AccountLogin::class)->recordSuccess($signedIn, 'password');
         }
 
         return $response;
+    }
+
+    private function signOutRefused(): void
+    {
+        auth()->logout();
+        session()->invalidate();
+        session()->regenerateToken();
+    }
+
+    /**
+     * The guard looks up exactly the account attemptedUser() names, by its
+     * key: on MariaDB a look-alike address ("víctim@…") would find the
+     * account through the accent-insensitive collation while every other
+     * check here (the lock, the lockout count) saw no account. A look-alike
+     * address is an unknown one.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected function getCredentialsFromFormData(#[SensitiveParameter] array $data): array
+    {
+        $exact = $this->attemptedUser();
+
+        return [
+            'email' => fn ($query) => $exact === null ? $query->whereRaw('1 = 0') : $query->whereKey($exact->getKey()),
+            'password' => $data['password'],
+        ];
     }
 
     /**
@@ -133,6 +221,11 @@ class Login extends BaseLogin
 
         $method ??= debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, limit: 2)[1]['function'];
 
+        // The attempt was counted once, first (authenticate()).
+        if ($this->attemptCounted && $method === 'authenticate') {
+            return;
+        }
+
         parent::rateLimit($maxAttempts, $decaySeconds, $method, $component);
     }
 
@@ -149,25 +242,7 @@ class Login extends BaseLogin
         $method ??= debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, limit: 2)[1]['function'];
         $component ??= static::class;
 
-        return 'livewire-rate-limiter:'.sha1($component.'|'.$method.'|'.ClientAddress::limitKey(request()->ip()));
-    }
-
-    /**
-     * Filament's own per-address limit, applied where the parent's check is
-     * not reached; true (with the notification sent) when the limit is hit.
-     * (Not named isRateLimited: the rate-limiting trait took that name.)
-     */
-    private function refusedByRateLimit(): bool
-    {
-        try {
-            $this->rateLimit(5);
-        } catch (TooManyRequestsException $exception) {
-            $this->getRateLimitedNotification($exception)?->send();
-
-            return true;
-        }
-
-        return false;
+        return 'livewire-rate-limiter:'.hash('sha256', $component.'|'.$method.'|'.ClientAddress::limitKey(request()->ip()));
     }
 
     /**
@@ -229,9 +304,13 @@ class Login extends BaseLogin
             return null;
         }
 
-        $user = app(AccountLogin::class)->findByEmail(PrincipalType::User, $email);
+        if ($this->exactUserFor !== $email) {
+            $user = app(AccountLogin::class)->findByEmail(PrincipalType::User, $email);
+            $this->exactUser = $user instanceof User ? $user : null;
+            $this->exactUserFor = $email;
+        }
 
-        return $user instanceof User ? $user : null;
+        return $this->exactUser;
     }
 
     /**

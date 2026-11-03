@@ -11,6 +11,7 @@ use App\Models\OutboundMessage;
 use App\System\HealthChecks;
 use App\System\Installation;
 use App\System\QueueMaintenance;
+use App\System\SessionStore;
 use Illuminate\Support\Facades\Schedule;
 
 /*
@@ -39,7 +40,8 @@ Schedule::call(fn () => app(PackageOverrides::class)->endExpired())
     ->hourly()
     ->name('hdid:expire-package-overrides');
 
-// A sponsor whose package left the premium list (settings change) stops sponsoring.
+// A sponsor whose package left the premium list (settings change) stops sponsoring, and a
+// linked client whose own implicit package is premium no longer needs its sponsor.
 Schedule::call(fn () => app(ClientLinks::class)->endLinksOfIneligibleSponsors())
     ->hourly()
     ->name('hdid:end-stale-links')
@@ -68,12 +70,15 @@ Schedule::command('hdid:prune')
 // queues too (unique per queue while waiting).
 // The scheduler heartbeat names this installation: another one writing the
 // same key means a shared Valkey/Redis and key prefix (see Installation).
+// A heartbeat in the session store does the same for the sessions (SessionStore).
 Schedule::call(function (): void {
     Installation::beat(HealthChecks::SCHEDULER_HEARTBEAT_KEY, 'scheduler');
 
     foreach (app(QueueMaintenance::class)->configuredQueues() as $queue) {
         QueueHeartbeat::dispatch($queue);
     }
+
+    SessionStore::beat();
 })->everyMinute()->name('hdid:heartbeat');
 
 // Fallback for messages no worker picked up: re-dispatch them, a sign-in

@@ -41,8 +41,12 @@ class UnlockLoginAction
             ->authorizationTooltip()
             ->authorizationMessage(fn (Principal&Model $record): ?string => UserResource::manageRefusal($record))
             ->requiresConfirmation()
-            ->modalHeading(__('Unlock the login?'))
-            ->modalDescription(__('The account was locked after repeated wrong passwords, SMS codes or second-factor codes. Unlocking lets it sign in again at once; the unlock is recorded in the audit log.'))
+            ->modalHeading(fn (Principal&Model $record): string => __('Unlock the login of :name?', ['name' => (string) $record->getAttribute('name')]))
+            ->modalDescription(fn (Principal&Model $record): string => __(':name (:email) is locked until :until after repeated wrong passwords, SMS codes or second-factor codes. Unlocking lets the account sign in again at once; the unlock is recorded in the audit log.', [
+                'name' => (string) $record->getAttribute('name'),
+                'email' => $record->getEmail(),
+                'until' => self::lockedUntil($record)?->format(HuDate::DATETIME) ?? '-',
+            ]))
             ->action(function (Principal&Model $record): void {
                 abort_unless(self::allowed($record) && self::lockedUntil($record) !== null, 403);
 

@@ -42,7 +42,7 @@ it('documents the request signing scheme on every machine operation and nowhere 
     foreach (['ivr', 'mobile', 'api'] as $document) {
         $doc = $this->get("/docs/{$document}.json")->assertOk()->json();
 
-        expect($doc['info']['description'])->toContain('Request signing', 'X-Timestamp', 'X-Signature', 'HMAC-SHA256', 'stale_timestamp', 'bad_signature', 'replayed');
+        expect($doc['info']['description'])->toContain('Request signing', 'X-Timestamp', 'X-Signature', 'HMAC-SHA256', 'stale_timestamp', 'bad_signature', 'replayed', 'unsigned_body');
     }
 
     $ivr = $this->get('/docs/ivr.json')->json();

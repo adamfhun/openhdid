@@ -7,6 +7,7 @@ use App\Enums\ClientTier;
 use App\Models\Call;
 use App\Models\User;
 use Illuminate\Database\Seeder;
+use RuntimeException;
 
 /**
  * Two weeks of finished calls for the dashboard's agent chart and the
@@ -20,6 +21,11 @@ class DemoCallHistorySeeder extends Seeder
 
     public function run(): void
     {
+        // Run on its own too: the same environment rule as the demo seeder.
+        if (! app()->environment(['demo', 'local', 'testing'])) {
+            throw new RuntimeException('Demo data is loaded only with APP_ENV=demo (or local, testing); its passwords are published (now APP_ENV='.app()->environment().').');
+        }
+
         if (Call::withTrashed()->where('external_call_id', 'like', self::PREFIX.'%')->exists()) {
             return;
         }

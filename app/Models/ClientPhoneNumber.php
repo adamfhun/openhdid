@@ -63,6 +63,17 @@ class ClientPhoneNumber extends Model
     }
 
     /**
+     * Whether the SMS sign-in code may go to this number: it came from the
+     * directory, the helpdesk added it, or something confirmed it. A number
+     * the client added and nobody confirmed is not enough, because anyone
+     * signed in as the client could have added it.
+     */
+    public function vouchedForSignIn(): bool
+    {
+        return $this->isVerified() || in_array($this->source, [PhoneNumberSource::Sync, PhoneNumberSource::Admin], true);
+    }
+
+    /**
      * "SMS code", "identified call", … or "not verified".
      */
     public function verificationLabel(): string

@@ -1,0 +1,19 @@
+# OpenHDID – a gyártói biztonsági közlemények elfogadott kivételei (upstream-advisories.sh).
+#
+# Az upstream-advisories.sh a forrásból épített összetevők (nginx, libcurl, PHP, phpredis, headers-more)
+# verzióit veti össze a gyártók közleményeivel: a kiadás előtti ellenőrzés megáll, a heti vizsgálat
+# (security-scan.yml) riaszt, ha egy közlemény a használt verziót érinti. Ide csak olyan közlemény
+# kerülhet, amely az image-et bizonyíthatóan nem érinti, mert a hibás rész nincs a buildben. A fájl
+# nyilvános: a telepítő is látja, mit tartunk nem érintettnek, és miért.
+#
+# Soronként egy kivétel:  komponens | közlemény-azonosító | felülvizsgálat | indoklás
+#   komponens       nginx, libcurl, php, phpredis vagy headers-more
+#   azonosító       CVE-…, GHSA-…, CURL-CVE-… vagy PHP-x.y.z (a kis- és nagybetű nem számít)
+#   felülvizsgálat  ÉÉÉÉ-HH-NN, legfeljebb egy évre előre; a lejárt kivétel hiba, újra át kell nézni
+#   indoklás        miért nem érinti az image-et, a build kapcsolójával, például
+#                   „nincs befordítva: --without-http_ssi_module” vagy „kikapcsolva: --disable-ftp”
+# Indoklás nélküli, lejárt vagy egy évnél későbbi felülvizsgálatú sor hibát ad; a nem használt kivételt
+# a futás jelzi (törölhető). Minden új kivétel a CHANGELOG-ban is szerepel.
+#
+# Minta (megjegyzésként, nem kivétel):
+# nginx | CVE-2026-56434 | 2027-05-01 | nincs befordítva: --without-http_ssi_module (Dockerfile)

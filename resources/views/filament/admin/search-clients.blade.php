@@ -1,4 +1,7 @@
 <x-filament-panels::page>
+    @if ($this->hasUnusableCall())
+        <p class="text-sm text-gray-500 dark:text-gray-400">{{ __('The call in the address is not one you can work on (another service level, or another agent has it); the search works without it.') }}</p>
+    @endif
     @if ($this->callRecord)
         <x-filament::section>
             <div class="flex flex-wrap items-center gap-4 text-sm">

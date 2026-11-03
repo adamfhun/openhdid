@@ -19,7 +19,9 @@ use App\Models\SyncIdListItem;
 use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use App\System\DemoData;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 /**
@@ -33,12 +35,39 @@ use RuntimeException;
  */
 class DemoSeeder extends Seeder
 {
-    public function run(): void
+    /**
+     * Demo data goes only where its published passwords cannot meet real
+     * people: a demo environment, and a database that holds nothing but
+     * demo data (DemoData::foreignData). Nothing is changed when it refuses.
+     */
+    public static function assertLoadable(): void
     {
         if (! app()->environment(['demo', 'local', 'testing'])) {
             throw new RuntimeException('Demo data is loaded only with APP_ENV=demo (or local, testing); its passwords are published (now APP_ENV='.app()->environment().').');
         }
 
+        $foreign = app(DemoData::class)->foreignData();
+
+        if (array_sum($foreign) > 0) {
+            throw new RuntimeException("Demo data is loaded only into an empty database: it holds {$foreign['records']} EMD record(s), {$foreign['clients']} client(s), {$foreign['sync_runs']} sync run(s) and {$foreign['id_list']} ID list item(s) that are not demo data; nothing was changed. Use a new database (a fresh volume) for the demo.");
+        }
+    }
+
+    public function run(): void
+    {
+        self::assertLoadable();
+
+        // All or nothing: a failed step leaves no half demo behind. The settings
+        // memo may hold values the rollback undid, so it is dropped either way.
+        try {
+            DB::transaction(fn () => $this->load());
+        } finally {
+            app(Settings::class)->forget();
+        }
+    }
+
+    private function load(): void
+    {
         $this->call(RolesAndPermissionsSeeder::class);
 
         app(Settings::class)->set(SettingKey::PackagesPremium, ['Premium+']);

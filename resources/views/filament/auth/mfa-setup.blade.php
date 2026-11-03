@@ -62,8 +62,8 @@
                             <span class="{{ $muted }}">{{ __('Mobile number from your EMD record') }}</span>
                             <x-filament::input.wrapper class="mt-1">
                                 <x-filament::input.select wire:model="smsNumber">
-                                    @foreach ($this->smsOptions() as $number => $masked)
-                                        <option value="{{ $number }}">{{ $masked }}</option>
+                                    @foreach ($this->smsOptions() as $choice => $masked)
+                                        <option value="{{ $choice }}">{{ $masked }}</option>
                                     @endforeach
                                 </x-filament::input.select>
                             </x-filament::input.wrapper>

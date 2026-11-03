@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Support\HuDate;
+use App\System\Installation;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
@@ -81,13 +82,14 @@ class QaRetryLimit
      */
     public function lockedUntil(Client $client): ?CarbonInterface
     {
-        $times = $this->counted($client)->pluck('decided_at')->sort()->values();
+        $times = $this->counted($client)->map(fn (IdSession $session): CarbonInterface => $session->decided_at)
+            ->sortBy(fn (CarbonInterface $at): int => $at->getTimestamp())->values();
 
         if ($times->count() < $this->limit()) {
             return null;
         }
 
-        return CarbonImmutable::parse($times[$times->count() - $this->limit()])->addHours($this->windowHours());
+        return CarbonImmutable::instance($times[$times->count() - $this->limit()])->addHours($this->windowHours());
     }
 
     /**
@@ -146,7 +148,7 @@ class QaRetryLimit
     {
         $count = $this->unsuccessfulCount($client);
 
-        Cache::put(self::UNLOCK_PREFIX.$client->id, now()->getTimestamp(), now()->addHours(self::MAX_WINDOW_HOURS));
+        Cache::put(Installation::key(self::UNLOCK_PREFIX.$client->id), now()->getTimestamp(), now()->addHours(self::MAX_WINDOW_HOURS));
 
         $lifted = $this->lockedUntil($client) === null;
 
@@ -165,7 +167,7 @@ class QaRetryLimit
         return IdSession::query()
             ->where('client_id', $client->id)
             ->where(fn (Builder $query) => $this->whereUnsuccessful($query))
-            ->where('decided_at', '>', now()->subHours($this->windowHours()))
+            ->decidedWithin('>', now()->subHours($this->windowHours()))
             ->count();
     }
 
@@ -209,7 +211,7 @@ class QaRetryLimit
     {
         $since = now()->subHours($this->windowHours());
         // Redis hands a stored number back as text, the array store as an integer.
-        $mark = Cache::get(self::UNLOCK_PREFIX.$client->id);
+        $mark = Cache::get(Installation::key(self::UNLOCK_PREFIX.$client->id));
         $unlocked = is_int($mark) || (is_string($mark) && ctype_digit($mark)) ? (int) $mark : null;
 
         if ($unlocked !== null && $unlocked > $since->getTimestamp()) {
@@ -221,7 +223,9 @@ class QaRetryLimit
             ->where('method', IdMethod::QuestionAnswer)
             ->where(fn (Builder $query) => $this->whereUnsuccessful($query))
             ->where(fn (Builder $query) => $query->whereNull('outcome_reason')->orWhereNotIn('outcome_reason', self::NOT_COUNTED_REASONS))
-            ->where('decided_at', '>', $since)
-            ->get(['id', 'decided_at']);
+            // Strictly after: the unlock mark is in whole seconds, and a
+            // session decided in the second of the unlock must not count.
+            ->decidedWithin('>', $since)
+            ->get(['id', 'decided_at', 'decided_unix']);
     }
 }

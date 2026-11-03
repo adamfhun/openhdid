@@ -5,6 +5,7 @@ namespace App\Filament\Pages\Auth;
 use App\Auth\Mfa\MfaException;
 use App\Auth\Mfa\StaffMfa;
 use App\Enums\MfaMethod;
+use App\Filament\NotificationText;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
@@ -99,9 +100,7 @@ class MfaSetup extends SimplePage
      */
     public function smsOptions(): array
     {
-        $numbers = app(StaffMfa::class)->smsNumbers($this->user());
-
-        return array_combine($numbers, array_map(fn (string $number): string => StaffMfa::mask($number), $numbers));
+        return app(StaffMfa::class)->smsChoices($this->user());
     }
 
     public function smsNumberLabel(): ?string
@@ -135,7 +134,8 @@ class MfaSetup extends SimplePage
                 ['secret' => $this->secret, 'qr' => $this->qr] = app(StaffMfa::class)->beginAppSetup($this->user());
             }
             $this->setting = $chosen->value;
-            $this->smsNumber = array_key_first($this->smsOptions());
+            // The choice only for SMS, and only as an opaque choice (smsChoices).
+            $this->smsNumber = $chosen === MfaMethod::Sms ? array_key_first($this->smsOptions()) : null;
         } catch (MfaException $e) {
             $this->addError('code', $e->getMessage());
         }
@@ -150,7 +150,8 @@ class MfaSetup extends SimplePage
         }
 
         try {
-            $this->sentTo = app(StaffMfa::class)->sendCode($this->user(), $method, StaffMfa::PURPOSE_SETUP, $method === MfaMethod::Sms ? $this->smsNumber : null);
+            $mfa = app(StaffMfa::class);
+            $this->sentTo = $mfa->sendCode($this->user(), $method, StaffMfa::PURPOSE_SETUP, $method === MfaMethod::Sms ? $mfa->numberForChoice($this->user(), $this->smsNumber) : null);
             $this->resetErrorBag();
         } catch (MfaException $e) {
             $this->addError('code', $e->getMessage());
@@ -197,7 +198,7 @@ class MfaSetup extends SimplePage
         }
 
         $this->cancel();
-        Notification::make()->title(__(':method set up', ['method' => $method->label()]))->success()->send();
+        Notification::make()->title(NotificationText::of(__(':method set up', ['method' => $method->label()])))->success()->send();
     }
 
     public function remove(string $method): void
@@ -211,12 +212,12 @@ class MfaSetup extends SimplePage
         try {
             app(StaffMfa::class)->removeFactor($this->user(), $chosen);
         } catch (MfaException $e) {
-            Notification::make()->title($e->getMessage())->danger()->send();
+            Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
 
             return;
         }
 
-        Notification::make()->title(__(':method removed', ['method' => $chosen->label()]))->success()->send();
+        Notification::make()->title(NotificationText::of(__(':method removed', ['method' => $chosen->label()])))->success()->send();
     }
 
     public function cancel(): void
@@ -226,6 +227,7 @@ class MfaSetup extends SimplePage
         $this->secret = null;
         $this->sentTo = null;
         $this->bootstrapSentTo = null;
+        $this->smsNumber = null;
         $this->code = '';
         $this->emailCode = '';
         $this->resetErrorBag();

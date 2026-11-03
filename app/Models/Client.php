@@ -108,13 +108,16 @@ class Client extends Authenticatable implements Principal
     /**
      * Sponsoring depends on the implicit package alone: a sponsor that loses
      * its implicit premium (directory sync or an admin edit) stops sponsoring
-     * the moment the change is saved, and its links end (ClientLinks).
+     * the moment the change is saved, and its links end; a linked client
+     * that gets an implicit premium of its own no longer needs its sponsor,
+     * and its link ends too (ClientLinks).
      */
     protected static function booted(): void
     {
         static::updated(function (Client $client): void {
             if ($client->wasChanged('implicit_package')) {
                 app(ClientLinks::class)->endLinksOfIneligibleSponsor($client);
+                app(ClientLinks::class)->endLinkOfSelfSponsored($client);
             }
         });
     }

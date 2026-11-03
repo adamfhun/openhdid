@@ -14,6 +14,7 @@ use App\Auth\Oidc\SsoAccess;
 use App\Auth\Oidc\SsoAccountResolver;
 use App\Auth\Oidc\SsoClaimMissingException;
 use App\Enums\PrincipalType;
+use App\Filament\NotificationText;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use Filament\Notifications\Notification;
@@ -140,7 +141,7 @@ class SsoController extends Controller
             // a notification is the one place the reason is sure to show.
             Notification::make()->danger()->persistent()
                 ->title(__('Login failed.'))
-                ->body(__($reason->message()))
+                ->body(NotificationText::of(__($reason->message())))
                 ->send();
 
             return redirect()->route('filament.admin.auth.login');

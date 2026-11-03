@@ -11,6 +11,7 @@ use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Action;
 use Filament\Actions\Testing\TestAction;
 use Filament\Facades\Filament;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role as RoleModel;
@@ -138,4 +139,40 @@ it('lets a super-admin manage an admin account', function (): void {
 
     expect($this->admin->fresh()->mfa_email_enabled_at)->toBeNull()
         ->and(app(RoleAssignment::class)->manageRefusal($super, $this->admin))->toBeNull();
+});
+
+it('refuses an admin the unlock of a super-admin\'s password and second-factor lock, and lets a super-admin lift it', function (): void {
+    $super = User::factory()->withRole(Role::SuperAdmin)->create(['locked_until' => now()->addHour(), 'mfa_locked_until' => now()->addHour()]);
+    $this->actingAs($this->admin);
+
+    Livewire::test(ListUsers::class)
+        ->assertActionDisabled(TestAction::make('unlockLogin')->table($super))
+        ->call('mountAction', 'unlockLogin', [], ['table' => true, 'recordKey' => $super->id])
+        ->call('callMountedAction');
+
+    expect($super->fresh()->isLoginLocked())->toBeTrue()
+        ->and($super->fresh()->mfa_locked_until)->not->toBeNull();
+
+    $this->actingAs(User::factory()->withRole(Role::SuperAdmin)->create());
+    Livewire::test(ListUsers::class)->callAction(TestAction::make('unlockLogin')->table($super));
+
+    expect(AuditLog::query()->where('event', 'account.unlocked')->where('subject_id', $super->id)->exists())->toBeTrue()
+        ->and(AuditLog::query()->where('event', 'account.mfa_unlocked')->where('subject_id', $super->id)->exists())->toBeTrue();
+});
+
+it('decides the account buttons of a full Users page with a fixed number of role queries, not one per row', function (): void {
+    $this->actingAs($this->keeper);
+    $permissionQueries = function (int $more): int {
+        User::factory()->count($more)->withRole(Role::Agent)->create();
+        $page = Livewire::test(ListUsers::class);
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $page->set('tableRecordsPerPage', 50);
+        $count = collect(DB::getQueryLog())->filter(fn (array $query): bool => str_contains($query['query'], 'role_has_permissions'))->count();
+        DB::disableQueryLog();
+
+        return $count;
+    };
+
+    expect($permissionQueries(10))->toBe($permissionQueries(20));
 });

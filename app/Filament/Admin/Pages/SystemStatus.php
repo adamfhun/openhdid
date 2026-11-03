@@ -9,6 +9,8 @@ use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Admin\Resources\OutboundMessages\OutboundMessageResource;
 use App\Filament\Admin\Resources\SyncRuns\SyncRunResource;
 use App\Filament\Admin\Resources\Users\UserResource;
+use App\Settings\SettingKey;
+use App\Settings\Settings;
 use App\System\Check;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
@@ -96,7 +98,9 @@ class SystemStatus extends Page
             'audit' => ['url' => AuditArchives::getUrl(), 'label' => AuditArchives::getNavigationLabel()],
             'package_overrides' => ['url' => ClientResource::getUrl(), 'label' => ClientResource::getNavigationLabel()],
             'shared_numbers' => ['url' => SharedPhoneNumbers::getUrl(), 'label' => SharedPhoneNumbers::getNavigationLabel()],
-            'premium_only', 'login_link_preview', 'retention' => ['url' => ManageSettings::getUrl(), 'label' => ManageSettings::getNavigationLabel()],
+            'premium_only', 'retention' => ['url' => ManageSettings::getUrl(), 'label' => ManageSettings::getNavigationLabel()],
+            // Debug mode alone reveals the links too; the settings are no remedy for that.
+            'login_link_preview' => app(Settings::class)->bool(SettingKey::ClientLoginMagicLinkPreviewInPanel) ? ['url' => ManageSettings::getUrl(), 'label' => ManageSettings::getNavigationLabel()] : null,
             default => null,
         };
     }

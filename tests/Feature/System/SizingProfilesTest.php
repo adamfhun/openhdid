@@ -18,6 +18,9 @@ const SIZING_PHP_OVERHEAD = 22;
 const SIZING_OPCACHE = 208;
 /** One nginx worker with full connection buffers, MB. */
 const SIZING_NGINX_WORKER = 80;
+
+/** MB the web container keeps free beyond PHP-FPM, nginx and /tmp (runtime.php, RuntimeLimits). */
+const SIZING_WEB_SPARE = 64;
 /** memory_limit of the CLI (worker, scheduler, migrate) in docker/php.ini, MB. */
 const SIZING_CLI_MEMORY_LIMIT = 256;
 /** MariaDB memory besides the buffer pool and the connections, MB. */
@@ -159,8 +162,9 @@ function sizingCheckComposeHost(array $files, array $webEnvironment, int $cpus, 
     $nginx = sizingComposeValue($files, 'services', 'web', '/OPENHDID_NGINX_WORKERS: (\S+)$/m');
     expect($nginx)->toMatch('/^\d+$/', 'web: OPENHDID_NGINX_WORKERS has a numeric default')
         ->and((int) $nginx)->toBeLessThanOrEqual($cpus, 'web: no more nginx workers than the host has CPUs');
-    $web = $children * ($perRequest + SIZING_PHP_OVERHEAD) + SIZING_OPCACHE + (int) $nginx * SIZING_NGINX_WORKER + sizingComposeTmp($files, 'web');
-    expect($ceilings['web'])->toBeGreaterThanOrEqual($web, "web: {$children} × ({$perRequest} + ".SIZING_PHP_OVERHEAD.") + opcache + {$nginx} nginx workers + /tmp");
+    // The same sum the start check and the Capacity card make, with their 64 MB spare.
+    $web = $children * ($perRequest + SIZING_PHP_OVERHEAD) + SIZING_OPCACHE + (int) $nginx * SIZING_NGINX_WORKER + sizingComposeTmp($files, 'web') + SIZING_WEB_SPARE;
+    expect($ceilings['web'])->toBeGreaterThanOrEqual($web, "web: {$children} × ({$perRequest} + ".SIZING_PHP_OVERHEAD.") + opcache + {$nginx} nginx workers + /tmp + spare");
 
     // One CLI process each, the scheduler with two background tasks.
     $cli = SIZING_CLI_MEMORY_LIMIT + SIZING_PHP_OVERHEAD;

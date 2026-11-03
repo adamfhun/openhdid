@@ -4,6 +4,7 @@ use App\Support\RateLimitExemptions;
 use Illuminate\Contracts\Process\ProcessResult;
 use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Symfony\Component\HttpFoundation\IpUtils;
 
@@ -324,8 +325,11 @@ it('limits the requests one client address has in the application at once, 0 swi
     expect(nginxLocationBlock($custom->output(), '= /index.php'))->toContain('limit_conn openhdid_conn 64;')
         ->and($custom->errorOutput())->toContain('OPENHDID_NGINX_CONN_LIMIT');
 
+    // 0 switches the per-address limit off; the cap on uploads, which guards the memory-backed /tmp, stays.
     $off = renderContainerNginx(['OPENHDID_NGINX_CONN_LIMIT' => '0'])->throw();
-    expect($off->output())->not->toContain('limit_conn')
+    expect($off->output())->not->toContain('limit_conn openhdid_conn')
+        ->and($off->output())->not->toContain('zone=openhdid_conn')
+        ->and(nginxLocationBlock($off->output(), '~ ^/livewire-[a-f0-9]+/upload-file'))->toContain('limit_conn openhdid_upload')
         ->and($off->errorOutput())->toContain('OPENHDID_NGINX_CONN_LIMIT=0');
 
     expect(renderContainerNginx(['OPENHDID_NGINX_CONN_LIMIT' => 'many'])->exitCode())->toBe(64);
@@ -510,4 +514,93 @@ it('offers check-env in the container entrypoint for install.sh check', function
     expect($check->exitCode())->toBe(64)
         ->and($check->errorOutput())->toMatch('/ openhdid: ERROR: \'10\.0\.0\.0\/7\' in HDID_RATE_LIMIT_EXEMPT_NETWORKS is too wide/')
         ->and($check->errorOutput())->toMatch('/ openhdid: warning: the sessions share the main Valkey/');
+});
+
+it('refuses to start in production while the EWS certificate check is off, naming the ca folder', function (string $mailer): void {
+    $result = runContainerCheckEnv(['MAIL_MAILER' => $mailer, 'EWS_VERIFY_TLS' => 'false']);
+
+    expect($result->exitCode())->toBe(64)
+        ->and($result->errorOutput())->toContain('EWS_VERIFY_TLS')
+        ->and($result->errorOutput())->toContain('ca');
+
+    expect(runContainerCheckEnv(['MAIL_MAILER' => $mailer, 'EWS_VERIFY_TLS' => ''])->exitCode())->toBe(0, 'an empty value keeps the check on');
+})->with(['ews', 'failover', 'roundrobin']);
+
+it('reads EWS_VERIFY_TLS the same way in the application and in the container start check', function (string $value): void {
+    $app = ewsConfigWithEnv(['EWS_VERIFY_TLS' => $value])['verify_tls'];
+    $container = runContainerCheckEnv(['MAIL_MAILER' => 'ews', 'EWS_VERIFY_TLS' => $value])->exitCode() === 0;
+
+    expect($container)->toBe($app);
+})->with(['', 'empty', 'garbage', 'true', 'false', '0', 'off', 'no']);
+
+it('counts the memory-backed /tmp and the spare in the web container memory check at start', function (): void {
+    $source = (string) file_get_contents(openhdidRuntimeHelper());
+    $dir = sys_get_temp_dir().'/hdid-fpm-'.bin2hex(random_bytes(4));
+    mkdir($dir);
+    file_put_contents($dir.'/memory.max', (string) (1700 * 1_048_576));
+    file_put_contents($dir.'/mounts', "overlay / overlay rw 0 0\ntmpfs /tmp tmpfs rw,nosuid,nodev,size=262144k,mode=1777 0 0\n");
+    $patched = str_replace(
+        ["const CGROUP_MEMORY_FILES = ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'];", "const MOUNTS_FILE = '/proc/self/mounts';"],
+        ['const CGROUP_MEMORY_FILES = ['.var_export($dir.'/memory.max', true).'];', 'const MOUNTS_FILE = '.var_export($dir.'/mounts', true).';'],
+        $source,
+        $count,
+    );
+    expect($count)->toBe(2, 'runtime.php declares CGROUP_MEMORY_FILES and MOUNTS_FILE as expected');
+    file_put_contents($dir.'/runtime.php', $patched);
+
+    try {
+        // 8 × (128 + 22) + 208 + 2 × 80 = 1568 MB would fit 1700 MB; with /tmp (256) and the spare (64) it does not.
+        $result = Process::env([
+            'APP_ENV' => 'production', 'APP_DEBUG' => 'false', 'APP_KEY' => 'base64:'.base64_encode(str_repeat('k', 32)),
+            'APP_URL' => 'https://hdid.example.org', 'DB_CONNECTION' => 'mariadb', 'DB_HOST' => 'mariadb', 'DB_DATABASE' => 'openhdid',
+            'DB_USERNAME' => 'openhdid', 'DB_PASSWORD' => 'secret', 'SESSION_SECURE_COOKIE' => 'true', 'TRUSTED_PROXIES' => '', 'HDID_HTTP_PROXY' => '',
+            'OPENHDID_TLS' => 'on', 'MAIL_MAILER' => 'smtp', 'SMS_DRIVER' => 'ozeki', 'SESSION_DRIVER' => 'redis', 'CACHE_STORE' => 'redis', 'QUEUE_CONNECTION' => 'redis',
+            'REDIS_PASSWORD' => 'secret', 'OPENHDID_FPM_MEMORY_LIMIT' => '128M', 'OPENHDID_FPM_MAX_CHILDREN' => '8', 'OPENHDID_NGINX_WORKERS' => '2',
+        ])->run([PHP_BINARY, $dir.'/runtime.php', 'check-env', 'web']);
+
+        expect($result->errorOutput())->toContain('PHP-FPM and nginx may take 1888 MB')
+            ->and($result->errorOutput())->toContain('/tmp');
+    } finally {
+        File::deleteDirectory($dir);
+    }
+});
+
+it('caps the concurrent uploads of every client so the request bodies cannot fill /tmp', function (): void {
+    $config = renderContainerNginx()->output();
+    $upload = nginxLocationBlock($config, '~ ^/livewire-[a-f0-9]+/upload-file');
+
+    expect($config)->toContain('limit_conn_zone $server_name zone=openhdid_upload:1m;')
+        ->and($upload)->toMatch('/limit_conn openhdid_upload (\\d+);/');
+
+    preg_match('/limit_conn openhdid_upload (\\d+);/', $upload, $cap);
+    expect((int) $cap[1] * 11)->toBeLessThan(256, 'the capped bodies of 11 MB fit the 256 MB /tmp');
+});
+
+it('writes the TLS check and every other runtime output to standard output through one writer', function (): void {
+    $source = (string) file_get_contents(openhdidRuntimeHelper());
+    $dir = sys_get_temp_dir().'/hdid-tls-'.bin2hex(random_bytes(4));
+    mkdir($dir);
+    $config = $dir.'/openssl.cnf';
+    file_put_contents($config, "[req]\ndistinguished_name = dn\n[dn]\n[ext]\nsubjectAltName = DNS:hdid.example.org\nbasicConstraints = critical,CA:FALSE\n");
+    $options = ['config' => $config, 'digest_alg' => 'sha256', 'x509_extensions' => 'ext', 'req_extensions' => 'ext'];
+    $key = openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_EC, 'curve_name' => 'prime256v1', 'config' => $config]);
+    $signed = openssl_csr_sign(openssl_csr_new(['commonName' => 'hdid.example.org'], $key, $options), null, $key, 365, $options, 1);
+    openssl_x509_export_to_file($signed, $dir.'/fullchain.pem');
+    openssl_pkey_export_to_file($key, $dir.'/privkey.pem', null, ['config' => $config]);
+    chmod($dir.'/privkey.pem', 0o600);
+
+    try {
+        $result = Process::env([
+            'APP_URL' => 'https://hdid.example.org', 'OPENHDID_TLS_CERT' => $dir.'/fullchain.pem', 'OPENHDID_TLS_KEY' => $dir.'/privkey.pem',
+        ])->run([PHP_BINARY, openhdidRuntimeHelper(), 'tls-check']);
+
+        expect($result->exitCode())->toBe(0)
+            ->and($result->errorOutput())->toBe('')
+            ->and($result->output())->toStartWith("subject: hdid.example.org; issuer: hdid.example.org\n")
+            ->and($result->output())->toContain("; ECDSA prime256v1; chain: 1 certificate(s)\nnames: hdid.example.org\n")
+            ->and($result->output())->toEndWith("TLS files are usable.\n")
+            ->and($source)->not->toMatch('/^\s*(echo|print)\b/m', 'runtime.php writes through out(), never echo or print');
+    } finally {
+        File::deleteDirectory($dir);
+    }
 });

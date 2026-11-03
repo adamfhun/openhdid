@@ -3,12 +3,15 @@
 namespace App\System;
 
 use App\Audit\Auditor;
+use App\Enums\SyncRunStatus;
 use App\Jobs\QueueHeartbeat;
 use App\Jobs\RunDirectorySync;
 use App\Jobs\SendOutboundMessage;
 use App\Messaging\Messenger;
 use App\Models\FailedJob;
 use App\Models\QueuedJob;
+use App\Models\SyncRun;
+use App\Sync\QueuedSyncs;
 use Illuminate\Bus\UniqueLock;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Contracts\Queue\Factory as QueueFactory;
@@ -209,6 +212,8 @@ class QueueMaintenance
     /**
      * Drop one waiting job. A reserved job belongs to a worker right now
      * and is left alone: the queue releases it by itself after retry_after.
+     * A waiting EMD sync is failed with it and its upload deleted
+     * (QueuedSyncs::abandon), so neither stays behind.
      */
     public function deleteWaiting(QueuedJob $job): bool
     {
@@ -216,6 +221,11 @@ class QueueMaintenance
 
         if ($deleted) {
             $this->auditor->record('queue.job_deleted', context: $this->jobContext($job));
+            $runId = $this->describe(is_array($job->payload) ? $job->payload : [])['run_id'];
+
+            if ($runId !== null) {
+                app(QueuedSyncs::class)->abandon($runId, __('its waiting job was deleted on the Queues page'));
+            }
         }
 
         return $deleted;
@@ -223,6 +233,8 @@ class QueueMaintenance
 
     /**
      * Remove every job of one queue, waiting and reserved alike (queue:clear).
+     * The EMD syncs that were waiting in it are failed and their uploads
+     * deleted; one a worker already started is left to the worker.
      */
     public function clearQueue(string $queue): int
     {
@@ -234,8 +246,13 @@ class QueueMaintenance
         $count = $this->usesDatabase()
             ? QueuedJob::query()->where('queue', $queue)->count()
             : $this->queue->connection($connection)->size($queue);
+        $runIds = $this->syncRunsIn($queue);
 
         Artisan::call('queue:clear', ['connection' => $connection, '--queue' => $queue, '--force' => true]);
+
+        foreach ($runIds as $runId) {
+            app(QueuedSyncs::class)->abandon($runId, __('its queue was cleared on the Queues page'));
+        }
 
         // A heartbeat deleted with the queue would keep its unique lock for ten
         // minutes and leave the queue without a pulse; let the next one through.
@@ -247,11 +264,31 @@ class QueueMaintenance
     }
 
     /**
+     * The EMD sync runs whose jobs wait in the queue: read from the payloads
+     * on the database driver; on the others, which cannot list their jobs,
+     * every waiting run when this is the sync queue.
+     *
+     * @return list<string>
+     */
+    private function syncRunsIn(string $queue): array
+    {
+        if ($this->usesDatabase()) {
+            return QueuedJob::query()->where('queue', $queue)->get()
+                ->map(fn (QueuedJob $job): ?string => $this->describe(is_array($job->payload) ? $job->payload : [])['run_id'])
+                ->filter()->values()->all();
+        }
+
+        return $queue === (string) config('hdid.sync.queue', 'default')
+            ? SyncRun::query()->where('status', SyncRunStatus::Queued)->pluck('id')->all()
+            : [];
+    }
+
+    /**
      * What a queue payload is, in words: a label for the job class and, for
-     * a message delivery, the message it carries.
+     * a message delivery, the message it carries; for an EMD sync, its run.
      *
      * @param  array<string, mixed>  $payload
-     * @return array{class: string, label: string, message_id: ?string}
+     * @return array{class: string, label: string, message_id: ?string, run_id: ?string}
      */
     public function describe(array $payload): array
     {
@@ -270,7 +307,13 @@ class QueueMaintenance
             $messageId = $match[1];
         }
 
-        return ['class' => $class, 'label' => $label, 'message_id' => $messageId];
+        $runId = null;
+
+        if ($class === RunDirectorySync::class && preg_match('/"runId";s:\d+:"([0-9a-f-]{36})"/', (string) ($payload['data']['command'] ?? ''), $match)) {
+            $runId = $match[1];
+        }
+
+        return ['class' => $class, 'label' => $label, 'message_id' => $messageId, 'run_id' => $runId];
     }
 
     /**

@@ -141,6 +141,19 @@ class AuditArchive
     }
 
     /**
+     * The first day the audit log table still holds in full: the day after
+     * the newest archived day, or null while nothing is archived. Read from
+     * the files, so it is right even when the nightly run is late or the hot
+     * window changed meanwhile.
+     */
+    public function heldSince(): ?CarbonImmutable
+    {
+        $newest = $this->files()[0]['day'] ?? null;
+
+        return $newest === null ? null : CarbonImmutable::parse($newest)->startOfDay()->addDay();
+    }
+
+    /**
      * @return ArchiveFile|null
      */
     public function file(string $name): ?array
@@ -194,24 +207,35 @@ class AuditArchive
         }
 
         $count = 0;
-        try {
-            foreach ((clone $rows)->orderBy('id')->lazyById(self::BATCH) as $entry) {
-                gzwrite($gz, json_encode($entry->toArray(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
-                $count++;
-            }
-        } finally {
-            gzclose($gz);
-        }
-
         $disk = $this->disk();
-        $stream = fopen($tmp, 'rb');
-        if ($stream === false || ! $disk->put($path, $stream)) {
-            throw new RuntimeException('Cannot write the audit archive file '.$path.'.');
-        }
-        fclose($stream);
 
-        $sum = hash_file('sha256', $tmp);
-        @unlink($tmp);
+        // The temporary file holds audit entries: removed on every path, a failed write too.
+        try {
+            try {
+                foreach ((clone $rows)->orderBy('id')->lazyById(self::BATCH) as $entry) {
+                    gzwrite($gz, json_encode($entry->toArray(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
+                    $count++;
+                }
+            } finally {
+                gzclose($gz);
+            }
+
+            $stream = fopen($tmp, 'rb');
+            try {
+                if ($stream === false || ! $disk->put($path, $stream)) {
+                    throw new RuntimeException('Cannot write the audit archive file '.$path.'.');
+                }
+            } finally {
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+            }
+
+            $sum = hash_file('sha256', $tmp);
+        } finally {
+            @unlink($tmp);
+        }
+
         $disk->put($path.'.sha256', $sum.'  '.basename($path)."\n");
 
         // The file is on disk: the rows may go. Batches keep the lock short.

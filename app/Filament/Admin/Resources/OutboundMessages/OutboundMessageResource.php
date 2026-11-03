@@ -9,6 +9,7 @@ use App\Enums\SmsDeliveryStatus;
 use App\Filament\Admin\Clusters\Content;
 use App\Filament\Admin\Resources\BaseResource;
 use App\Filament\Admin\Resources\OutboundMessages\Pages\ManageOutboundMessages;
+use App\Filament\NotificationText;
 use App\Messaging\Channel;
 use App\Messaging\MessageKey;
 use App\Messaging\MessageNotRetryableException;
@@ -188,7 +189,7 @@ class OutboundMessageResource extends BaseResource
                         try {
                             app(Messenger::class)->retry($record);
                         } catch (MessageNotRetryableException $e) {
-                            Notification::make()->title($e->getMessage())->danger()->send();
+                            Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
                         }
                     }),
                 Action::make('cancel')->label(__('Cancel'))->icon('heroicon-o-x-mark')->color('gray')
@@ -209,7 +210,7 @@ class OutboundMessageResource extends BaseResource
                     ->modalSubmitActionLabel(__('Retry all failed'))
                     ->action(function (): void {
                         $retried = app(Messenger::class)->retryAllFailed();
-                        Notification::make()->title(__(':n message(s) queued again', ['n' => $retried]))->success()->send();
+                        Notification::make()->title(NotificationText::of(__(':n message(s) queued again', ['n' => $retried])))->success()->send();
                     }),
                 Action::make('sendQueuedNow')->label(__('Send queued now'))->icon('heroicon-o-paper-airplane')->color('gray')
                     ->authorize(fn (): bool => static::canManage())
@@ -217,7 +218,7 @@ class OutboundMessageResource extends BaseResource
                     ->action(function (): void {
                         $result = app(Messenger::class)->sendQueuedNow();
                         Notification::make()
-                            ->title(__(':sent sent, :failed failed, :retrying to retry, :remaining still queued', $result))
+                            ->title(NotificationText::of(__(':sent sent, :failed failed, :retrying to retry, :remaining still queued', $result)))
                             ->status($result['failed'] > 0 ? 'warning' : 'success')
                             ->send();
                     }),
@@ -232,7 +233,7 @@ class OutboundMessageResource extends BaseResource
                     ->deselectRecordsAfterCompletion()
                     ->action(function (Collection $records): void {
                         $retried = app(Messenger::class)->retryMany($records->reject(fn (OutboundMessage $record): bool => static::hiddenClient($record)));
-                        Notification::make()->title(__(':n message(s) queued again', ['n' => $retried]))->success()->send();
+                        Notification::make()->title(NotificationText::of(__(':n message(s) queued again', ['n' => $retried])))->success()->send();
                     }),
                 BulkAction::make('cancel')->label(__('Cancel selected'))->icon('heroicon-o-x-mark')->color('gray')
                     ->authorize(fn (): bool => static::canManage())
@@ -243,7 +244,7 @@ class OutboundMessageResource extends BaseResource
                     ->deselectRecordsAfterCompletion()
                     ->action(function (Collection $records): void {
                         $cancelled = app(Messenger::class)->cancelMany($records);
-                        Notification::make()->title(__(':n message(s) cancelled', ['n' => $cancelled]))->success()->send();
+                        Notification::make()->title(NotificationText::of(__(':n message(s) cancelled', ['n' => $cancelled])))->success()->send();
                     }),
             ])
             ->defaultSort('created_at', 'desc')

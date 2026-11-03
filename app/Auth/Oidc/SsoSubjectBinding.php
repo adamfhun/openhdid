@@ -27,7 +27,8 @@ use Illuminate\Database\UniqueConstraintViolationException;
  * binding (panel action or hdid:sso-unbind) once the identity change is
  * legitimate. Sync, closure, MFA reset and access revocation leave the
  * binding alone; only a sign-in of another account takes the subject over
- * from a closed or deleted account (see release()).
+ * from a closed or deleted account, leaving a marker there (see release()).
+ * A token without a subject signs in only an account never bound.
  */
 class SsoSubjectBinding
 {
@@ -56,7 +57,18 @@ class SsoSubjectBinding
     {
         if ($subject === null) {
             if (! $config->requireSubject) {
-                return null;
+                // Unbound sign-in is for accounts never bound: a token
+                // without a subject cannot show that it is the bound
+                // identity (nor renew a stale binding or a released marker),
+                // so a bound account is refused. Fails closed.
+                $current = $account->ssoIdentities()->where('provider', $config->provider->value)->first();
+
+                if ($current === null) {
+                    return null;
+                }
+
+                $this->markMismatch($current);
+                $this->reject($account, $method, LoginRejection::NoSubjectClaim, $context + ['detail' => 'bound_account', 'subject_claim' => SsoSubject::claimOf($config->provider)]);
             }
 
             $this->reject($account, $method, LoginRejection::NoSubjectClaim, $context + ['subject_claim' => SsoSubject::claimOf($config->provider)]);
@@ -91,6 +103,20 @@ class SsoSubjectBinding
 
         /** @var SsoIdentity|null $current */
         $current = $account->ssoIdentities()->where('provider', $config->provider->value)->first();
+
+        // The account yielded its binding to another account while it was
+        // closed or deleted: no identity, the old one or a new one, signs it
+        // in until an administrator clears the marker.
+        if ($current !== null && $current->isReleased()) {
+            $this->markMismatch($current);
+            $this->reject($account, $method, LoginRejection::SsoSubjectTaken, $context + [
+                'provider' => $config->provider->value,
+                'subject_claim' => $subject->claim,
+                'detail' => 'released',
+                'bound_principal_type' => $current->released_to_type?->value,
+                'bound_principal_id' => $current->released_to_id,
+            ]);
+        }
 
         if ($current !== null && $current->isForRegistration($subject)) {
             if (hash_equals($current->subject, $subject->subject)) {
@@ -213,9 +239,10 @@ class SsoSubjectBinding
         return SsoIdentity::query()->where('last_mismatch_at', '>=', $since)->count();
     }
 
+    /** Accounts bound to an identity (released markers are not bindings). */
     public function boundCount(): int
     {
-        return SsoIdentity::query()->count();
+        return SsoIdentity::query()->whereNull('released_at')->count();
     }
 
     /**
@@ -255,9 +282,10 @@ class SsoSubjectBinding
      * A binding held by an account that can no longer sign in (closed, or
      * deleted) yields its subject to the account now signing in: a person
      * who left and came back with a new EMD record would otherwise wait for
-     * an administrator. The release is audited on the old account; should
-     * it be reopened later, its next sign-in finds the subject taken and an
-     * administrator decides.
+     * an administrator. The release is audited on the old account, and the
+     * row stays there as a marker while the account exists: should it be
+     * reopened or restored, every company sign-in of it is refused until
+     * an administrator clears the binding (an orphaned row is deleted).
      */
     private function release(SsoIdentity $holder, Principal&Model $to): bool
     {
@@ -272,7 +300,17 @@ class SsoSubjectBinding
             return false;
         }
 
-        $holder->delete();
+        if ($owner === null) {
+            $holder->delete();
+        } else {
+            $holder->forceFill([
+                'lookup' => null,
+                'released_at' => now(),
+                'released_to_type' => $to->principalType(),
+                'released_to_id' => $to->getKey(),
+            ])->save();
+        }
+
         $this->auditor->record(self::EVENT_UNBOUND, $owner, [
             'reason' => $reason,
             'provider' => $holder->provider->value,

@@ -15,6 +15,7 @@ use App\Filament\Actions\UnbindSsoAction;
 use App\Filament\Actions\UnlockLoginAction;
 use App\Filament\Admin\Clusters\Accounts;
 use App\Filament\Admin\Resources\BaseResource;
+use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Admin\Resources\Users\Pages\CreateUser;
 use App\Filament\Admin\Resources\Users\Pages\EditUser;
 use App\Filament\Admin\Resources\Users\Pages\ListUsers;
@@ -22,6 +23,7 @@ use App\Models\User;
 use App\Support\EmailAddressRule;
 use App\Support\HuDate;
 use App\System\NotDemoAddressRule;
+use App\System\Retention;
 use BackedEnum;
 use Closure;
 use Filament\Actions\Action;
@@ -76,6 +78,13 @@ class UserResource extends BaseResource
 
     public static function form(Schema $schema): Schema
     {
+        // The roles the editor may not touch, read once per render for the greyed-out
+        // options and the help line; every authorization decision asks afresh.
+        $locked = null;
+        $lockedRoles = function () use (&$locked): array {
+            return $locked ??= app(RoleAssignment::class)->lockedRoles(auth()->user());
+        };
+
         return $schema->components([
             Section::make(__('Account'))->columns(2)->schema([
                 TextInput::make('name')->label(__('Name'))->required()->maxLength(255),
@@ -97,10 +106,10 @@ class UserResource extends BaseResource
                         : __('Only needed for password login; leave empty for SSO-only accounts.')),
                 Select::make('roles')->label(__('Roles'))->relationship('roles', 'name')->multiple()->preload()->required()
                     // Greyed out: a role the editor may neither grant nor take away (RoleAssignment::canGrant).
-                    ->disableOptionWhen(fn (int|string $value): bool => array_key_exists($value, app(RoleAssignment::class)->lockedRoles(auth()->user())))
+                    ->disableOptionWhen(fn (int|string $value): bool => array_key_exists($value, $lockedRoles()))
                     // A held role that is greyed out stays in the state, so it must pass the options check.
                     ->in(fn (Select $component): array => array_keys($component->getOptions()))
-                    ->helperText(fn (?User $record): ?string => static::roleGrantHelp($record))
+                    ->helperText(fn (?User $record): ?string => static::roleGrantHelp($record, $lockedRoles()))
                     ->rule(fn (?User $record): Closure => function (string $attribute, mixed $value, Closure $fail) use ($record): void {
                         $names = RoleModel::query()->whereKey((array) $value)->pluck('name');
 
@@ -164,7 +173,10 @@ class UserResource extends BaseResource
      * account keeps whatever the editor sends. Nothing for a SuperAdmin, who
      * may grant every role.
      */
-    public static function roleGrantHelp(?User $record): ?string
+    /**
+     * @param  array<int|string, array{name: string, missing: list<string>}>|null  $locked  the editor's locked roles when read already
+     */
+    public static function roleGrantHelp(?User $record, ?array $locked = null): ?string
     {
         $roles = app(RoleAssignment::class);
         $actor = auth()->user();
@@ -173,7 +185,7 @@ class UserResource extends BaseResource
             return null;
         }
 
-        $locked = collect($roles->lockedRoles($actor));
+        $locked = collect($locked ?? $roles->lockedRoles($actor));
         $lacking = $locked
             ->reject(fn (array $role): bool => $role['name'] === Role::SuperAdmin->value)
             ->map(fn (array $role): string => __(':role (missing permissions: :count)', ['role' => $role['name'], 'count' => count($role['missing'])]))
@@ -200,7 +212,9 @@ class UserResource extends BaseResource
     public static function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn (Builder $query) => $query->with(['roles', 'externalRecord', 'ssoIdentities']))
+            // roles.permissions: the account buttons ask per row whether the editor could
+            // grant every role of the account (RoleAssignment::rolesBeyond).
+            ->modifyQueryUsing(fn (Builder $query) => $query->with(['roles.permissions', 'externalRecord', 'ssoIdentities']))
             // One search over everything the list shows; the words are split below.
             ->splitSearchTerms(false)
             ->columns([
@@ -225,6 +239,7 @@ class UserResource extends BaseResource
                     ->state(fn (User $record): string => UnbindSsoAction::summary($record))
                     ->color(fn (User $record): string => $record->ssoIdentities->isNotEmpty() ? 'success' : 'gray'),
                 TextColumn::make('closed_at')->label(__('Closed'))->since()->placeholder(__('open'))->badge()->color('danger'),
+                ClientResource::deletedColumn(),
                 TextColumn::make('last_login_at')->label(__('Last login'))->since()->placeholder('-'),
             ])
             ->filters([
@@ -263,8 +278,8 @@ class UserResource extends BaseResource
                         })),
                     UnlockLoginAction::make(),
                     UnbindSsoAction::make(),
-                    static::guarded(DeleteAction::make()),
-                    static::guarded(RestoreAction::make()),
+                    static::deleteAction(),
+                    static::restoreAction(),
                 ])->icon('heroicon-m-ellipsis-vertical')->color('gray')->tooltip(__('More')),
             ]);
     }
@@ -274,6 +289,26 @@ class UserResource extends BaseResource
      * change the account (it holds a role they could not grant); hidden
      * stays only for the lack of the permission itself.
      */
+    /**
+     * Deleting a staff account closes it by an administrator and signs it
+     * out everywhere first (the model's deleting hook does it on any path);
+     * the confirmation names the account.
+     */
+    public static function deleteAction(): DeleteAction
+    {
+        return static::guarded(DeleteAction::make()
+            ->modalHeading(fn (User $record): string => __('Delete the account of :name (:email)?', ['name' => $record->name, 'email' => $record->email]))
+            ->modalDescription(fn (): string => __('The staff member is signed out of every browser and device and the account is closed by an administrator; a returning EMD record does not reopen it. A restore brings the row back closed.')
+                .' '.__('It can be restored until :date; after that the daily prune deletes it for good with everything it carried.', ['date' => app(Retention::class)->purgeDateOf()->format(HuDate::DATE)])));
+    }
+
+    public static function restoreAction(): RestoreAction
+    {
+        return static::guarded(RestoreAction::make()
+            ->modalHeading(fn (User $record): string => __('Restore the account of :name (:email)?', ['name' => $record->name, 'email' => $record->email]))
+            ->modalDescription(__('The row comes back closed, with its password, second factors, roles, handled levels and company sign-in binding; reopen it separately. A sign-in binding it yielded to another account must be cleared before company sign-in works.')));
+    }
+
     public static function guarded(Action $action): Action
     {
         return $action

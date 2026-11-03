@@ -2,6 +2,7 @@
 
 namespace App\Auth\Oidc;
 
+use App\System\Installation;
 use Firebase\JWT\JWK;
 use Firebase\JWT\JWT;
 use Illuminate\Contracts\Cache\Repository as Cache;
@@ -9,6 +10,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Cache as CacheFacade;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Throwable;
@@ -20,7 +22,18 @@ use Throwable;
  */
 class OidcClient
 {
-    private const DISCOVERY_TTL = 3600;
+    /** A discovery document or key set younger than this is used without asking the provider. */
+    private const FRESH_SECONDS = 3600;
+
+    /**
+     * The last good copy is kept this long: while the provider cannot be
+     * reached, sign-ins go on with it (a key the provider revoked meanwhile
+     * may stay accepted that long; the status page says when this happens).
+     */
+    public const KEEP_SECONDS = 86400;
+
+    /** After a failed download, the provider is not asked again for this long. */
+    private const FAILURE_BACKOFF_SECONDS = 30;
 
     /** Tolerated clock difference to the provider for exp, nbf and iat. */
     public const CLOCK_SKEW_SECONDS = 60;
@@ -104,7 +117,7 @@ class OidcClient
 
         $claims = $this->validateIdToken($config, $response->json('id_token'), $config->clientId);
 
-        if (($claims['nonce'] ?? null) !== $nonce) {
+        if (! is_string($claims['nonce'] ?? null) || ! hash_equals($nonce, $claims['nonce'])) {
             throw new OidcException('ID token nonce mismatch.');
         }
 
@@ -311,9 +324,10 @@ class OidcClient
             return (array) JWT::decode($token, JWK::parseKeySet($jwks, 'RS256'));
         } catch (Throwable $first) {
             // A rotated key may not be in the cached set yet: refresh once, but only
-            // for a key id the cached set does not have, and at most once a minute, so
-            // a stream of invalid tokens does not turn into a stream of JWKS requests.
-            if (! $this->mayRefreshFor($jwksUri, $jwks, $token)) {
+            // for a key id the cached set does not have, at most once a minute, and
+            // not within 30 seconds of a failed download, so a stream of invalid
+            // tokens does not turn into a stream of JWKS requests.
+            if ($this->cache->has($this->failureKey('jwks', $jwksUri)) || ! $this->mayRefreshFor($jwksUri, $jwks, $token)) {
                 throw new OidcException($first->getMessage(), previous: $first);
             }
 
@@ -335,15 +349,48 @@ class OidcClient
      */
     private function mayRefreshFor(string $jwksUri, array $jwks, string $token): bool
     {
-        $header = json_decode((string) base64_decode(strtr(explode('.', $token, 2)[0], '-_', '+/'), true), true);
-        $kid = is_array($header) && is_string($header['kid'] ?? null) ? $header['kid'] : null;
-        $known = array_filter(array_map(fn (mixed $key): mixed => is_array($key) ? ($key['kid'] ?? null) : null, (array) ($jwks['keys'] ?? [])), 'is_string');
+        $segments = explode('.', $token);
 
-        if ($kid === null || in_array($kid, $known, true)) {
+        if (count($segments) !== 3) {
             return false;
         }
 
-        return $this->cache->add('oidc.jwks.refresh.'.md5($jwksUri), true, 60);
+        $header = json_decode((string) base64_decode(strtr($segments[0], '-_', '+/'), true), true);
+        $kid = is_array($header) && is_string($header['kid'] ?? null) ? $header['kid'] : null;
+        $known = array_filter(array_map(fn (mixed $key): mixed => is_array($key) ? ($key['kid'] ?? null) : null, (array) ($jwks['keys'] ?? [])), 'is_string');
+
+        // Only a token that could be signed with a published key is worth a
+        // download: RS256, under a key id the cached set lacks.
+        if ($kid === null || ($header['alg'] ?? null) !== 'RS256' || in_array($kid, $known, true)) {
+            return false;
+        }
+
+        return $this->cache->add(Installation::key('oidc.jwks.refresh.'.md5($jwksUri)), true, 60);
+    }
+
+    /**
+     * What the status page tells about a provider's key set, read from the
+     * cache only (no request): when the last good copy was fetched, and
+     * whether a download failed in the last moments. Null before any
+     * sign-in fetched one.
+     *
+     * @return array{fetched_at: int, stale: bool, failed: bool}|null
+     */
+    public function keySetState(OidcProviderConfig $config): ?array
+    {
+        $discovery = $this->cache->get($this->envelopeKey('discovery', $config->discoveryUrl));
+        $uri = is_array($discovery) ? ($discovery['document']['jwks_uri'] ?? null) : null;
+        $envelope = is_string($uri) ? $this->cache->get($this->envelopeKey('jwks', $uri)) : null;
+
+        if (! is_array($envelope)) {
+            return null;
+        }
+
+        return [
+            'fetched_at' => (int) $envelope['fetched_at'],
+            'stale' => now()->getTimestamp() - (int) $envelope['fetched_at'] >= self::FRESH_SECONDS,
+            'failed' => $this->cache->has($this->failureKey('jwks', $uri)) || $this->cache->has($this->failureKey('discovery', $config->discoveryUrl)),
+        ];
     }
 
     /**
@@ -351,8 +398,9 @@ class OidcClient
      */
     public function discovery(OidcProviderConfig $config): array
     {
-        return $this->cache->remember('oidc.discovery.'.md5($config->discoveryUrl), self::DISCOVERY_TTL, function () use ($config): array {
-            $document = $this->reach(fn (): Response => $this->http->timeout(10)->retry(2, 200)->get($config->discoveryUrl)->throw())->json();
+        /** @var array{authorization_endpoint: string, token_endpoint: string, jwks_uri: string, issuer: string} $document */
+        $document = $this->lastGood('discovery', $config->discoveryUrl, false, function () use ($config): array {
+            $document = (array) $this->reach(fn (): Response => $this->http->timeout(10)->retry(2, 200)->get($config->discoveryUrl)->throw())->json();
 
             foreach (['authorization_endpoint', 'token_endpoint', 'jwks_uri', 'issuer'] as $key) {
                 if (! is_string($document[$key] ?? null)) {
@@ -361,24 +409,134 @@ class OidcClient
             }
 
             return $document;
-        });
+        }, fn (array $document): bool => true);
+
+        return $document;
     }
 
     /**
-     * The provider's raw JWKS document. Only reaching the endpoint can fail
-     * here; whether the document holds a usable key is the caller's concern.
+     * The provider's JWKS document. A downloaded document that holds no
+     * usable RS256 key is handed to the caller (the token then fails as
+     * invalid) but never replaces a good one.
      *
      * @return array<string, mixed>
      */
     private function jwks(string $jwksUri, bool $refresh = false): array
     {
-        $cacheKey = 'oidc.jwks.'.md5($jwksUri);
+        return $this->lastGood('jwks', $jwksUri, $refresh, fn (): array => (array) $this->reach(fn (): Response => $this->http->timeout(10)->get($jwksUri)->throw())->json(), function (array $document): bool {
+            if (! is_array($document['keys'] ?? null) || $document['keys'] === []) {
+                return false;
+            }
 
-        if ($refresh) {
-            $this->cache->forget($cacheKey);
+            try {
+                JWK::parseKeySet($document, 'RS256');
+
+                return true;
+            } catch (Throwable) {
+                return false;
+            }
+        });
+    }
+
+    /**
+     * A provider document with its last good copy (discovery, key set):
+     * fresh for an hour, kept for a day. A stale copy is refreshed by one
+     * request (a lock nobody waits for); the others, and every request while
+     * the provider is down, go on with the copy. Without a copy (or when a
+     * refresh is forced for an unknown key id) the download runs directly
+     * and its failure is an outage. A failed or unusable download is not
+     * repeated for 30 seconds, and never replaces the copy.
+     *
+     * @param  callable(): array<string, mixed>  $download
+     * @param  callable(array<string, mixed>): bool  $usable
+     * @return array<string, mixed>
+     */
+    private function lastGood(string $kind, string $uri, bool $force, callable $download, callable $usable): array
+    {
+        $envelope = $this->cache->get($this->envelopeKey($kind, $uri));
+        $copy = is_array($envelope) ? $envelope : null;
+
+        if ($copy !== null && ! $force && now()->getTimestamp() - (int) $copy['fetched_at'] < self::FRESH_SECONDS) {
+            return $copy['document'];
         }
 
-        return $this->cache->remember($cacheKey, self::DISCOVERY_TTL, fn (): array => (array) $this->reach(fn (): Response => $this->http->timeout(10)->get($jwksUri)->throw())->json());
+        if ($copy !== null && ! $force) {
+            if ($this->cache->has($this->failureKey($kind, $uri))) {
+                return $copy['document'];
+            }
+
+            $lock = CacheFacade::lock(Installation::lockName('oidc-'.$kind.':'.md5($uri)), 30);
+
+            if (! $lock->get()) {
+                return $copy['document'];
+            }
+
+            try {
+                return $this->download($kind, $uri, $download, $usable, $copy);
+            } finally {
+                $lock->release();
+            }
+        }
+
+        if ($this->cache->has($this->failureKey($kind, $uri))) {
+            throw new OidcUnavailableException('Identity provider unreachable (retried shortly).');
+        }
+
+        return $this->download($kind, $uri, $download, $usable, $force ? null : $copy);
+    }
+
+    /**
+     * @param  callable(): array<string, mixed>  $download
+     * @param  callable(array<string, mixed>): bool  $usable
+     * @param  array{document: array<string, mixed>, fetched_at: int}|null  $fallback  served when the download fails
+     * @return array<string, mixed>
+     */
+    private function download(string $kind, string $uri, callable $download, callable $usable, ?array $fallback): array
+    {
+        try {
+            $document = $download();
+        } catch (OidcUnavailableException|OidcException $e) {
+            $this->noteFailure($kind, $uri, $fallback);
+
+            if ($fallback !== null) {
+                return $fallback['document'];
+            }
+
+            throw $e;
+        }
+
+        if (! $usable($document)) {
+            $this->noteFailure($kind, $uri, $fallback);
+
+            return $fallback['document'] ?? $document;
+        }
+
+        $this->cache->put($this->envelopeKey($kind, $uri), ['document' => $document, 'fetched_at' => now()->getTimestamp()], self::KEEP_SECONDS);
+
+        return $document;
+    }
+
+    /**
+     * Marks the failure for the back-off; the first one of a window is
+     * logged when a last good copy is served instead.
+     *
+     * @param  array{document: array<string, mixed>, fetched_at: int}|null  $fallback
+     */
+    private function noteFailure(string $kind, string $uri, ?array $fallback): void
+    {
+        if ($this->cache->add($this->failureKey($kind, $uri), now()->getTimestamp(), self::FAILURE_BACKOFF_SECONDS) && $fallback !== null) {
+            Log::warning('OIDC '.$kind.' refresh failed; using the last good copy', ['uri' => $uri, 'fetched_at' => date(DATE_ATOM, (int) $fallback['fetched_at'])]);
+        }
+    }
+
+    private function envelopeKey(string $kind, string $uri): string
+    {
+        return Installation::key('oidc.'.$kind.'.v2.'.md5($uri));
+    }
+
+    private function failureKey(string $kind, string $uri): string
+    {
+        return Installation::key('oidc.'.$kind.'.failed.'.md5($uri));
     }
 
     /**

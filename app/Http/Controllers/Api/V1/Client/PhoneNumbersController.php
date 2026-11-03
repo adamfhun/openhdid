@@ -14,7 +14,6 @@ use App\Messaging\MessageKey;
 use App\Messaging\Messenger;
 use App\Models\Client;
 use App\Models\ClientPhoneNumber;
-use App\Models\OneTimeCode;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Sms\SmsDestinations;
@@ -83,32 +82,7 @@ class PhoneNumbersController extends Controller
 
         $this->refuseOutsideAcceptedCountries($e164);
 
-        $max = $this->settings->int(SettingKey::PortalMaxPhoneNumbersPerClient);
-
-        if ($max > 0 && $client->phoneNumbers()->count() >= $max) {
-            throw ValidationException::withMessages(['number' => __('You can keep at most :n phone numbers. Remove one first.', ['n' => $max])]);
-        }
-
-        $isFirst = ! $client->phoneNumbers()->exists();
-
-        if ($existing !== null) {
-            // The same number was removed earlier: bring the row back instead
-            // of colliding with the unique index. Ownership must be proven again.
-            $existing->restore();
-            $existing->forceFill([
-                'label' => $data['label'] ?? null,
-                'source' => PhoneNumberSource::ClientSelf,
-                'is_primary' => $isFirst,
-                'verified_at' => null,
-            ])->save();
-        } else {
-            $client->phoneNumbers()->create([
-                'number_e164' => $e164,
-                'label' => $data['label'] ?? null,
-                'source' => PhoneNumberSource::ClientSelf,
-                'is_primary' => $isFirst,
-            ]);
-        }
+        app(ClientPhones::class)->addOwnNumber($client, $e164, $data['label'] ?? null);
 
         return new ClientResource($client->load('phoneNumbers'));
     }
@@ -185,15 +159,8 @@ class PhoneNumbersController extends Controller
             return new ClientResource($client->load('phoneNumbers'));
         }
 
-        // The pending code must have been sent to this very number.
-        $pending = OneTimeCode::query()
-            ->where('client_id', $client->id)
-            ->where('purpose', OneTimeCodePurpose::PhoneVerify)
-            ->usable()
-            ->latest('id')
-            ->value('destination');
-
-        if ($pending !== $phoneNumber->number_e164 || ! $this->codes->verify($client, OneTimeCodePurpose::PhoneVerify, $data['code'])) {
+        // Only a code sent to this very number confirms it.
+        if (! $this->codes->verify($client, OneTimeCodePurpose::PhoneVerify, $data['code'], $phoneNumber->number_e164)) {
             $this->auditor->record('client_phone.verification_failed', $phoneNumber, ['number' => $phoneNumber->number_e164]);
 
             throw ValidationException::withMessages(['code' => __('The code is not valid or has expired.')]);

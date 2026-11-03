@@ -118,7 +118,7 @@ The image contains only what runs the application: Alpine Linux, PHP-FPM with th
 Every image is signed and carries a build provenance and an SBOM attestation. Set `v` to the version you install (the `OPENHDID_VERSION` of your `.env`):
 
 ```sh
-v=1.15.0
+v=1.15.1
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -155,7 +155,7 @@ In the repository root and attached to every release, in Hungarian and English: 
 
 ## Security
 
-The defaults follow OWASP ASVS 5.0 and the OWASP Docker Security Cheat Sheet; the installation guide lists the controls and the open items. Please report vulnerabilities privately through GitHub (**Security › Report a vulnerability**), not in a public issue. Security fixes are made for the newest minor release.
+The defaults follow OWASP ASVS 5.0 and the OWASP Docker Security Cheat Sheet; the installation guide lists the controls and the open items. Please report vulnerabilities privately through GitHub (**Security › Report a vulnerability**), not in a public issue. **Supported version:** only the latest release. Fixes, security fixes included, come as a new release; earlier releases get none, so upgrade to the latest (UPGRADE.md). Published releases stay available unchanged.
 
 ## Building from source
 
@@ -173,6 +173,6 @@ Copyright © 2026 the OpenHDID authors.
 
 OpenHDID is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the [LICENSE](LICENSE) file.
 
-If you run a modified version for users over a network, the license requires you to offer them its source code; set `HDID_SOURCE_URL` to your published source, and the portal and panel link to it.
+If you run a modified version for users over a network, the license requires you to offer them its source code; set `HDID_SOURCE_URL` to your published source, and the portal and panel link to it. The image points this “Source code” link at the exact source of the running release (`…/tree/v<version>`), so the link names the running version in public. Set `SHOW_SC=false` to hide it (then offer the source another way), or set `HDID_SOURCE_URL` to the repository root.
 
 OpenHDID builds on Laravel, Filament, Livewire, Vue, Tailwind CSS, nginx, headers-more, PHP and Alpine Linux, each under its own license; the SBOM attached to every image lists all components.

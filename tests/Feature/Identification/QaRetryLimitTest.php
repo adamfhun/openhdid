@@ -22,6 +22,7 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\Support\HuDate;
+use App\System\Installation;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Cache;
@@ -173,7 +174,7 @@ it('counts the unsuccessful sessions inside the client lock that guards the star
             return;
         }
 
-        $lock = Cache::lock('hdid:qa:'.$this->client->id, 10);
+        $lock = Cache::lock(Installation::lockName('hdid:qa:'.$this->client->id), 10);
         $lockWasFree = $lock->get();
 
         if ($lockWasFree) {
@@ -387,7 +388,7 @@ it('lifts the lock when the cache hands the unlock mark back as text, as Redis d
 
     $this->travel(1)->seconds();
     // The Redis store keeps a number as a raw value and returns it as a string.
-    Cache::put('hdid:qa-unlocked:'.$this->client->id, (string) now()->getTimestamp(), now()->addDay());
+    Cache::put(Installation::key('hdid:qa-unlocked:'.$this->client->id), (string) now()->getTimestamp(), now()->addDay());
 
     expect($limit->lockedUntil($this->client))->toBeNull()
         ->and($limit->unsuccessfulCount($this->client))->toBe(0);

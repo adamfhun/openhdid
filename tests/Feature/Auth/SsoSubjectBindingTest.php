@@ -8,6 +8,7 @@ use App\Auth\Oidc\SsoSubject;
 use App\Auth\Oidc\SsoSubjectBinding;
 use App\Auth\Role;
 use App\Enums\PrincipalType;
+use App\Filament\Actions\UnbindSsoAction;
 use App\Filament\Admin\Pages\SystemStatus;
 use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
 use App\Filament\Admin\Resources\Users\Pages\EditUser;
@@ -18,6 +19,7 @@ use App\Models\ExternalRecord;
 use App\Models\SsoIdentity;
 use App\Models\User;
 use App\Settings\Settings;
+use App\Support\HuDate;
 use App\System\CheckStatus;
 use App\System\HealthChecks;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -172,7 +174,7 @@ it('takes the subject over from a closed or deleted account and lets the reopene
     signInWith(PrincipalType::Client, OidcProvider::Entra, ['email' => 'new@x.hu', 'oid' => 'oid-person'])->assertRedirect('/');
     $this->assertAuthenticatedAs($new, 'client');
     expect($new->ssoIdentities()->sole()->subject)->toBe('oid-person')
-        ->and($old->ssoIdentities()->count())->toBe(0)
+        ->and($old->ssoIdentities()->sole()->released_at)->not->toBeNull()
         ->and(lastAudit('login.succeeded'))->toMatchArray(['sso_subject' => 'bound']);
     $released = AuditLog::query()->where('event', SsoSubjectBinding::EVENT_UNBOUND)->sole();
     expect($released->subject_id)->toBe($old->id)->and($released->actor_id)->toBe($new->id)
@@ -512,4 +514,97 @@ it('shows the refused sign-ins on the status page with a link to the accounts', 
 
     SsoIdentity::query()->update(['last_mismatch_at' => now()->subDays(HealthChecks::SSO_MISMATCH_WINDOW_DAYS + 1)]);
     expect($checks->ssoBindings()->status)->toBe(CheckStatus::Ok);
+});
+
+it('refuses a token without a subject for an account that is already bound, even while signing in unbound is allowed', function (): void {
+    $client = portalClient();
+    signInWith(PrincipalType::Client, OidcProvider::Entra, ['email' => 'c@x.hu', 'oid' => 'oid-client'])->assertRedirect('/');
+    $this->post('/api/v1/client/logout');
+    $this->flushSession();
+
+    config()->set('hdid.oidc.require_subject', false);
+    FakeOidc::$withoutSubject = true;
+    signInWith(PrincipalType::Client, OidcProvider::Entra, ['email' => 'c@x.hu'])->assertRedirect('/login?error=no_subject_claim');
+
+    $this->assertGuest('client');
+    expect(lastRejection())->toMatchArray(['reason' => 'no_subject_claim', 'detail' => 'bound_account', 'subject_claim' => 'oid'])
+        ->and($client->ssoIdentities()->sole()->mismatch_count)->toBe(1)
+        ->and(SsoIdentity::query()->count())->toBe(1);
+});
+
+it('refuses a mobile token without a subject for a bound client even while signing in unbound is allowed', function (): void {
+    $client = portalClient();
+    FakeOidc::fake([], BINDING_ENTRA_ISSUER, BINDING_ENTRA_DISCOVERY);
+    $bound = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => '11111111-1111-4111-8111-111111111111', 'preferred_username' => 'c@x.hu', 'oid' => 'oid-phone'], BINDING_ENTRA_ISSUER);
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $bound, 'device_name' => 'iPhone'])->assertOk();
+    $tokens = $client->tokens()->count();
+
+    config()->set('hdid.oidc.require_subject', false);
+    FakeOidc::$withoutSubject = true;
+    $unbound = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => '11111111-1111-4111-8111-111111111111', 'preferred_username' => 'c@x.hu', 'iat' => time() + 1], BINDING_ENTRA_ISSUER);
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $unbound, 'device_name' => 'x'])
+        ->assertForbidden()->assertJsonPath('reason', 'no_subject_claim');
+
+    expect($client->tokens()->count())->toBe($tokens)
+        ->and($client->ssoIdentities()->sole()->mismatch_count)->toBe(1);
+});
+
+it('treats the binding of a replaced ADFS registration as a binding when the token has no subject', function (): void {
+    $user = staffMember();
+    SsoIdentity::factory()->forAccount($user, OidcProvider::Adfs, FakeOidc::ISSUER, 'user-app-old', 'sub-old')->create();
+    config()->set('hdid.oidc.require_subject', false);
+    FakeOidc::$withoutSubject = true;
+
+    signInWith(PrincipalType::User, OidcProvider::Adfs, ['email' => 'agent@corp.hu'])->assertRedirect(route('filament.admin.auth.login'));
+    $this->assertGuest('web');
+    expect(lastRejection())->toMatchArray(['reason' => 'no_subject_claim', 'detail' => 'bound_account']);
+
+    app(SsoSubjectBinding::class)->unbind($user);
+    signInWith(PrincipalType::User, OidcProvider::Adfs, ['email' => 'agent@corp.hu'])->assertRedirect('/admin');
+    expect(lastAudit('login.succeeded'))->toMatchArray(['sso_subject' => 'missing']);
+});
+
+it('keeps a marker when a closed account yields its subject, so the reopened account lets no other identity in until an administrator clears it', function (): void {
+    $old = portalClient('old@x.hu');
+    signInWith(PrincipalType::Client, OidcProvider::Entra, ['email' => 'old@x.hu', 'oid' => 'oid-p'])->assertRedirect('/');
+    $this->post('/api/v1/client/logout');
+    $this->flushSession();
+    $old->close('sync.missing');
+    $new = portalClient('new@x.hu');
+    signInWith(PrincipalType::Client, OidcProvider::Entra, ['email' => 'new@x.hu', 'oid' => 'oid-p'])->assertRedirect('/');
+    $this->post('/api/v1/client/logout');
+    $this->flushSession();
+    $old->reopen();
+
+    foreach (['oid-q', 'oid-p'] as $oid) {
+        signInWith(PrincipalType::Client, OidcProvider::Entra, ['email' => 'old@x.hu', 'oid' => $oid])->assertRedirect('/login?error=sso_subject_taken');
+        $this->assertGuest('client');
+        expect(lastRejection())->toMatchArray(['reason' => 'sso_subject_taken', 'detail' => 'released', 'bound_principal_type' => 'client', 'bound_principal_id' => $new->id]);
+    }
+    expect(SsoIdentity::query()->where('subject', 'oid-q')->exists())->toBeFalse();
+
+    app(SsoSubjectBinding::class)->unbind($old);
+    signInWith(PrincipalType::Client, OidcProvider::Entra, ['email' => 'old@x.hu', 'oid' => 'oid-q'])->assertRedirect('/');
+    expect($old->ssoIdentities()->sole()->subject)->toBe('oid-q');
+});
+
+it('shows a released binding on the account pages and does not count it as bound on the status page', function (): void {
+    // Without an EMD record, so the binding is what locks the e-mail.
+    $old = Client::factory()->create(['email' => 'old@x.hu']);
+    $new = portalClient('new@x.hu');
+    SsoIdentity::factory()->forAccount($old, OidcProvider::Entra, BINDING_ENTRA_ISSUER, 'client-app')->released($new)->create();
+
+    expect(implode(' ', UnbindSsoAction::lines($old->fresh())))->toContain(__('released to :account at :at: every company sign-in of this account is refused until the binding is cleared', ['account' => 'new@x.hu', 'at' => now()->format(HuDate::DATETIME)]))
+        ->and(UnbindSsoAction::summary($old->fresh()))->toContain(__('released'))
+        ->and(app(SsoSubjectBinding::class)->boundCount())->toBe(0)
+        ->and($old->fresh()->manualEmailLock())->toBe(Client::EMAIL_LOCK_SSO_BINDING);
+});
+
+it('says on the status page while tokens without a subject may sign in unbound', function (): void {
+    config()->set('hdid.oidc.require_subject', false);
+
+    $check = app(HealthChecks::class)->ssoBindings();
+
+    expect($check->status)->toBe(CheckStatus::Info)
+        ->and($check->detail)->toContain('HDID_SSO_REQUIRE_SUBJECT');
 });

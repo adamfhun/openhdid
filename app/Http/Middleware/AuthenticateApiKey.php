@@ -6,6 +6,7 @@ use App\Audit\Auditor;
 use App\Enums\ApiKeyScope;
 use App\Models\ApiKey;
 use App\Support\ClientAddress;
+use App\System\Installation;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -43,6 +44,13 @@ class AuthenticateApiKey
      */
     public const MAX_KEY_LENGTH = 255;
 
+    /**
+     * The cache key prefix of the one-request-per-signature guard. A sign-out
+     * of everyone (SignOutEveryone) keeps these keys, so a signed request
+     * seen before a restore cannot be replayed after it.
+     */
+    public const SIGNATURE_REPLAY_PREFIX = 'api-sig:';
+
     public function __construct(private readonly Auditor $auditor) {}
 
     public function handle(Request $request, Closure $next, string $scope): Response
@@ -79,7 +87,7 @@ class AuthenticateApiKey
             $request->attributes->set(self::REQUEST_ATTRIBUTE, null);
             $request->attributes->set(self::LEGACY_ATTRIBUTE, true);
             // Once a minute is enough to see that the static key is still in use.
-            if (Cache::add('audit:api-key-legacy-used', 1, 60)) {
+            if (Cache::add(Installation::key('audit:api-key-legacy-used'), 1, 60)) {
                 $this->auditor->record('api_key.legacy_used', null, ['scope' => $scope->value, 'path' => $request->path()]);
             }
 
@@ -189,8 +197,20 @@ class AuthenticateApiKey
             $this->reject($request, $scope, 'bad_signature', 'Invalid signature.', $key);
         }
 
+        // The signature covers the raw body. A multipart body is parsed into
+        // fields while the raw body stays empty, so its fields would ride
+        // along unsigned. Checked after the signature (only its holder
+        // learns the reason) and before the replay mark (a refused attempt
+        // does not use up a captured signature). The empty-body guard: for
+        // JSON the framework swaps the request bag for the JSON bag, so
+        // fields alone do not mean an unsigned body.
+        if (str_starts_with(strtolower((string) $request->header('Content-Type')), 'multipart/')
+            || ($request->getContent() === '' && ($request->request->count() > 0 || $request->files->count() > 0))) {
+            $this->reject($request, $scope, 'unsigned_body', 'Signed requests need a raw body: send JSON or form-urlencoded, not multipart/form-data.', $key);
+        }
+
         // A signature is good for exactly one request within the window.
-        if (! Cache::add('api-sig:'.hash('sha256', $given), 1, 2 * $ttl)) {
+        if (! Cache::add(self::SIGNATURE_REPLAY_PREFIX.hash('sha256', $given), 1, 2 * $ttl)) {
             $this->reject($request, $scope, 'replayed', 'Replayed request.', $key);
         }
     }
@@ -208,7 +228,7 @@ class AuthenticateApiKey
     {
         // A scanner may send a thousand bad keys a minute from one address;
         // one audit row a minute per address and reason keeps the signal.
-        if (Cache::add('audit:api-key-rejected:'.$scope->value.':'.$reason.':'.$request->ip(), 1, 60)) {
+        if (Cache::add(Installation::key('audit:api-key-rejected:'.$scope->value.':'.$reason.':'.$request->ip()), 1, 60)) {
             $this->auditor->record('api_key.rejected', $key, ['scope' => $scope->value, 'reason' => $reason, 'path' => $request->path(), 'ip' => $request->ip()]);
         }
 

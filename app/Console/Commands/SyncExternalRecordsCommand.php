@@ -55,6 +55,10 @@ class SyncExternalRecordsCommand extends Command
             $this->components->warn('E-mail conflict: external id '.$conflict['external_id'].' wants '.$conflict['email'].', kept '.$conflict['kept'].' ('.$case.')');
         }
 
+        foreach ($run->stats['deleted_returned_samples'] ?? [] as $return) {
+            $this->components->warn('Deleted client: external id '.$return['external_id'].' ('.$return['email'].') came back; the client stays deleted, restore it in the panel if needed');
+        }
+
         foreach ($run->stats['holder_data_removed_samples'] ?? [] as $removal) {
             $why = $removal['reason'] === AccountProvisioner::REASON_SYNC_REBOUND
                 ? 'the address moved over from another record still in the source'
@@ -64,6 +68,10 @@ class SyncExternalRecordsCommand extends Command
 
         foreach ($run->stats['reissued_samples'] ?? [] as $reissue) {
             $this->line('  Reissued to the same person: external id '.($reissue['from_external_id'] ?? '?').' -> '.$reissue['external_id'].' ('.$reissue['email'].'); PIN, answers and numbers kept, sign-ins ended');
+        }
+
+        foreach ($run->stats['linked_reopened_samples'] ?? [] as $reopened) {
+            $this->line('  Linked client reopened: '.$reopened['name'].' ('.($reopened['email'] ?? '-').'); its link to the closed sponsor '.($reopened['sponsor'] ?? '?').' (external id '.($reopened['sponsor_external_id'] ?? '-').') ended');
         }
 
         foreach (array_slice($run->skipped_rows ?? [], 0, 10) as $row) {

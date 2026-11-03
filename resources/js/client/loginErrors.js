@@ -12,7 +12,7 @@ export const loginErrorMessages = {
     external_record_mismatch: 'This account does not match its Enterprise Master Data record.',
     no_permission: 'This account has no access.',
     not_entitled: 'Your package does not include access to the client portal.',
-    invalid_credentials: 'The login link or code is not valid or has expired.',
+    invalid_credentials: 'The login link or code is not valid, has expired, or a newer one replaced it.',
     provider_unavailable: 'The sign-in service is not available right now. Please try again later.',
     no_email_claim: 'The sign-in service did not send a usable e-mail address, so the account cannot be identified. Please report this to the operator of the system.',
     no_employee_id_claim: 'The sign-in service did not send a usable employee id, so the account cannot be identified. Please report this to the operator of the system.',
@@ -23,3 +23,10 @@ export const loginErrorMessages = {
     demo_account: 'This is a demo account. Demo accounts cannot sign in to a production installation.',
     session_expired: 'Your session has expired. Please sign in again.',
 };
+
+/**
+ * The reasons a 403 signs the client out with (the per-request check,
+ * EnsureClientEntitled): the login rule's own refusals of an account that
+ * was signed in. The login page shows the matching message above.
+ */
+export const revokingReasons = ['not_entitled', 'account_closed', 'demo_account', 'no_external_record', 'external_record_missing', 'external_record_mismatch'];

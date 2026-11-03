@@ -101,6 +101,14 @@ class AccountProvisioner
      */
     private array $reissues = [];
 
+    /**
+     * EMD records whose client is in the trash, met in this run: the client
+     * stays deleted (only an administrator restores it), the run reports them.
+     *
+     * @var list<array{external_id: int, email: string, client_id: string, deleted_at: ?string}>
+     */
+    private array $deletedReturns = [];
+
     public function __construct(
         private readonly PhoneNormalizer $phones,
         private readonly Auditor $auditor,
@@ -169,11 +177,12 @@ class AccountProvisioner
             return null;
         }
 
-        ['records' => $records, 'of_kind' => $ofKind, 'present' => $present, 'free' => $free] = $this->linkCandidates($account, $account->email);
+        ['records' => $records, 'of_kind' => $ofKind, 'present' => $present, 'free' => $free, 'deleted_held' => $deletedHeld] = $this->linkCandidates($account, $account->email);
 
         $outcome = match (true) {
             $free->count() > 1 => DirectoryLinkOutcome::Ambiguous,
             $free->count() === 1 => DirectoryLinkOutcome::Linked,
+            $deletedHeld->isNotEmpty() => DirectoryLinkOutcome::DeletedHolder,
             $present->isNotEmpty() => DirectoryLinkOutcome::Taken,
             $ofKind->isNotEmpty() => DirectoryLinkOutcome::Missing,
             $records->isNotEmpty() => DirectoryLinkOutcome::OtherKind,
@@ -468,6 +477,17 @@ class AccountProvisioner
     }
 
     /**
+     * @return list<array{external_id: int, email: string, client_id: string, deleted_at: ?string}>
+     */
+    public function takeDeletedReturns(): array
+    {
+        $returns = $this->deletedReturns;
+        $this->deletedReturns = [];
+
+        return $returns;
+    }
+
+    /**
      * @return list<array{external_id: int, from_external_id: ?int, kind: string, email: string}>
      */
     public function takeReissues(): array
@@ -483,7 +503,7 @@ class AccountProvisioner
      * them, those of the kind, the present ones and those without an
      * account of the kind yet.
      *
-     * @return array{records: Collection<int, ExternalRecord>, of_kind: Collection<int, ExternalRecord>, present: Collection<int, ExternalRecord>, free: Collection<int, ExternalRecord>}
+     * @return array{records: Collection<int, ExternalRecord>, of_kind: Collection<int, ExternalRecord>, present: Collection<int, ExternalRecord>, free: Collection<int, ExternalRecord>, deleted_held: Collection<int, ExternalRecord>}
      */
     private function linkCandidates(Client|User $account, string $email): array
     {
@@ -492,9 +512,15 @@ class AccountProvisioner
             ->filter(fn (ExternalRecord $record): bool => self::sameEmail($record->email, $email));
         $ofKind = $records->filter(fn (ExternalRecord $record): bool => $record->kind === $kind);
         $present = $ofKind->reject(fn (ExternalRecord $record): bool => $record->isMissing());
-        $free = $present->filter(fn (ExternalRecord $record): bool => ($kind === PrincipalType::Client ? $record->client : $record->user) === null);
+        // A record whose client is in the trash is not free: the run leaves it
+        // alone (syncClient), so a link on save to it would not hold.
+        $deletedHeld = $kind === PrincipalType::Client
+            ? $present->filter(fn (ExternalRecord $record): bool => $record->client === null && Client::onlyTrashed()->where('external_record_id', $record->id)->exists())
+            : collect();
+        $free = $present->filter(fn (ExternalRecord $record): bool => ($kind === PrincipalType::Client ? $record->client : $record->user) === null)
+            ->reject(fn (ExternalRecord $record): bool => $deletedHeld->contains($record));
 
-        return ['records' => $records, 'of_kind' => $ofKind, 'present' => $present, 'free' => $free];
+        return ['records' => $records, 'of_kind' => $ofKind, 'present' => $present, 'free' => $free, 'deleted_held' => $deletedHeld];
     }
 
     /**
@@ -590,7 +616,16 @@ class AccountProvisioner
      */
     private function syncClient(ExternalRecord $record): ?Client
     {
+        // In this order (owner decision Q11): the live client of the record;
+        // a deleted client of the record (reported, never restored); a live
+        // client by the exact address; a deleted client by the address
+        // (reported). A deleted client stays deleted, and no second account
+        // is made for its record or its address.
         $client = $record->client;
+
+        if ($client === null && ($deleted = Client::onlyTrashed()->where('external_record_id', $record->id)->first()) !== null) {
+            return $this->noteDeletedReturn($deleted, $record);
+        }
 
         if ($client === null) {
             $holder = Client::withTrashed()->where('email', $record->email)->first();
@@ -599,11 +634,11 @@ class AccountProvisioner
                 return null;
             }
 
-            $client = $holder;
-        }
+            if ($holder !== null && $holder->trashed()) {
+                return $this->noteDeletedReturn($holder, $record);
+            }
 
-        if ($client !== null && $client->trashed()) {
-            $client->restore();
+            $client = $holder;
         }
 
         $identityChange = null;
@@ -804,6 +839,18 @@ class AccountProvisioner
         $this->noteEmailConflict($holder, $record, lookAlike: true);
 
         return true;
+    }
+
+    private function noteDeletedReturn(Client $deleted, ExternalRecord $record): null
+    {
+        $this->deletedReturns[] = [
+            'external_id' => (int) $record->external_id,
+            'email' => (string) $record->email,
+            'client_id' => (string) $deleted->id,
+            'deleted_at' => $deleted->deleted_at?->toIso8601String(),
+        ];
+
+        return null;
     }
 
     /**

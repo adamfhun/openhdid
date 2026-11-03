@@ -12,6 +12,8 @@ const busy = ref(false);
 const removingId = ref(null);
 const phones = computed(() => store.user?.phone_numbers ?? []);
 const verificationEnabled = computed(() => store.user?.phone_verification === true);
+// The SMS sign-in code goes only to a number from the directory, one the helpdesk added, or a confirmed one.
+const smsSignIn = computed(() => store.loginMethods.otp_sms === true);
 const maxNumbers = computed(() => store.user?.max_phone_numbers ?? 0);
 const atCap = computed(() => maxNumbers.value > 0 && phones.value.length >= maxNumbers.value);
 
@@ -107,7 +109,9 @@ async function verify(phone) {
                         </div>
                         <div class="text-xs text-slate-500">{{ phone.label ? phone.label + ' · ' : '' }}{{ t(sourceLabel[phone.source]) }}<span v-if="phone.is_primary" class="font-semibold text-brand-deep"> · {{ t('primary') }}</span></div>
                         <p v-if="noSms(phone)" class="mt-1 text-xs text-amber-800">{{ t('Cannot be used for text messages (confirmation, sign-in).') }}</p>
-                        <p v-if="phone.sms_target && !phone.is_primary" class="mt-1 text-xs text-ink-muted">{{ t('Text messages to you (the sign-in code, the PIN) go to this number, because the primary one cannot receive them.') }}</p>
+                        <p v-if="phone.sms_target && !phone.is_primary" class="mt-1 text-xs text-ink-muted">{{ t('The PIN by text message goes to this number, because the primary one cannot receive text messages.') }}</p>
+                        <p v-if="smsSignIn && phone.sign_in_target" class="mt-1 text-xs text-ink-muted">{{ t('The SMS sign-in code goes to this number.') }}</p>
+                        <p v-if="smsSignIn && !noSms(phone) && !phone.sign_in_capable" class="mt-1 text-xs text-amber-800">{{ t('No SMS sign-in code goes to this number until it is confirmed (with a code sent to it, or by the helpdesk).') }}</p>
                         <p v-if="phone.shared" class="mt-1 text-xs text-amber-800">{{ t('This number is also on file for another client, so the phone menu cannot recognise you from it. Use the one-time identification code, or contact the helpdesk.') }}</p>
                     </div>
                     <div v-if="removingId === phone.id" class="flex items-center gap-2 text-sm">

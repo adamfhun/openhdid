@@ -17,6 +17,7 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Illuminate\Support\Carbon;
+use Throwable;
 
 /**
  * Short-lived, system-wide unique identification codes. Two kinds share the
@@ -102,9 +103,9 @@ class MobileOtpService
         $session = IdSession::query()
             ->where('client_id', $client->id)
             ->where('method', IdMethod::MobileOtp)
-            ->where('status', IdSessionStatus::Passed)
-            ->where('decided_at', '>=', now()->subMinutes($withinMinutes))
-            ->latest('decided_at')
+            ->countingPass()
+            ->decidedWithin('>=', now()->subMinutes($withinMinutes))
+            ->latestDecided()
             ->first();
 
         return $session === null ? null : ['at' => $session->decided_at, 'channel' => $session->channel->value];
@@ -118,28 +119,41 @@ class MobileOtpService
      */
     public function verifyCode(string $code, IdChannel $channel, ?User $agent = null, ?Call $call = null, array $purposes = [OneTimeCodePurpose::MobileOtp]): ?IdSession
     {
-        if ($channel === IdChannel::Manual && $agent !== null) {
-            $this->agentLimiter->assertAllowed($agent);
+        // An agent's check takes its attempt before the lookup and gets it
+        // back for a live code (accepted, or refused for the account): only
+        // a code that matches nothing counts as a failed guess.
+        $limited = $channel === IdChannel::Manual && $agent !== null;
+
+        if ($limited) {
+            $this->agentLimiter->reserve($agent);
         }
 
         $code = DictationCode::normalize($code);
         $record = null;
         $purpose = null;
 
-        foreach ($code === '' ? [] : $purposes as $purpose) {
-            if (($record = $this->codes->consume($purpose, $code)) !== null) {
-                break;
+        try {
+            foreach ($code === '' ? [] : $purposes as $purpose) {
+                if (($record = $this->codes->consume($purpose, $code)) !== null) {
+                    break;
+                }
             }
+        } catch (Throwable $e) {
+            if ($limited) {
+                $this->agentLimiter->giveBack($agent);
+            }
+
+            throw $e;
         }
 
         if ($record === null || $record->client === null) {
-            if ($channel === IdChannel::Manual && $agent !== null) {
-                $this->agentLimiter->hit($agent);
-            }
-
             $this->auditor->record('id_session.code_unknown', null, ['channel' => $channel->value, 'call_id' => $call?->id], $agent);
 
             return null;
+        }
+
+        if ($limited) {
+            $this->agentLimiter->giveBack($agent);
         }
 
         // The code was live, but the account behind it is no longer allowed

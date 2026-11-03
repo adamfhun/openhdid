@@ -111,7 +111,9 @@ class PhoneNumbersRelationManager extends RelationManager
                     ->color(fn (ClientPhoneNumber $record): string => $record->isVerified() ? 'success' : 'warning')
                     ->tooltip(fn (ClientPhoneNumber $record): ?string => $record->isVerified()
                         ? trim($record->verified_at->format(HuDate::DATETIME).' '.($record->verifiedBy?->name ?? ''))
-                        : __('Ranks below verified numbers when a caller is matched. Confirm it here, or the client confirms it by SMS code when that is switched on.')),
+                        : ($record->vouchedForSignIn()
+                            ? __('Ranks below verified numbers when a caller is matched. Confirm it here, or the client confirms it by SMS code when that is switched on.')
+                            : __('Ranks below verified numbers when a caller is matched, and gets no SMS sign-in code until it is confirmed, because the client added it. Confirm it here, or the client confirms it by SMS code when that is switched on.'))),
                 TextColumn::make('shared')->label(__('Shared'))->badge()->color('warning')
                     ->state(fn (ClientPhoneNumber $record): ?string => $phones->isShared($record) ? __('shared') : null)
                     ->placeholder('-')

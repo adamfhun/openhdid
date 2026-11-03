@@ -7,6 +7,7 @@ use App\Auth\Permission;
 use App\Filament\Admin\Resources\OutboundMessages\OutboundMessageResource;
 use App\Filament\Admin\Widgets\Concerns\AuthorizesEveryRequest;
 use App\Filament\Concerns\LimitsSearchInput;
+use App\Filament\NotificationText;
 use App\Models\FailedJob;
 use App\Models\OutboundMessage;
 use App\System\QueueMaintenance;
@@ -78,7 +79,7 @@ class FailedJobsWidget extends TableWidget
                     ->action(function (FailedJob $record) use ($maintenance): void {
                         $done = $maintenance->retryFailed($record);
                         Notification::make()
-                            ->title($done ? __('The job is back on its queue') : __('The job was no longer among the failed ones'))
+                            ->title(NotificationText::of($done ? __('The job is back on its queue') : __('The job was no longer among the failed ones')))
                             ->status($done ? 'success' : 'warning')
                             ->send();
                     }),
@@ -101,7 +102,7 @@ class FailedJobsWidget extends TableWidget
                     ->deselectRecordsAfterCompletion()
                     ->action(function (Collection $records) use ($maintenance): void {
                         $retried = $records->filter(fn (FailedJob $record): bool => $maintenance->retryFailed($record))->count();
-                        Notification::make()->title(__(':n job(s) back on their queues', ['n' => $retried]))->success()->send();
+                        Notification::make()->title(NotificationText::of(__(':n job(s) back on their queues', ['n' => $retried])))->success()->send();
                     }),
                 BulkAction::make('delete')->label(__('Delete selected'))->icon('heroicon-o-trash')->color('danger')
                     ->authorize(fn (): bool => static::canView())
@@ -111,7 +112,7 @@ class FailedJobsWidget extends TableWidget
                     ->deselectRecordsAfterCompletion()
                     ->action(function (Collection $records) use ($maintenance): void {
                         $deleted = $records->filter(fn (FailedJob $record): bool => $maintenance->forgetFailed($record))->count();
-                        Notification::make()->title(__(':n failed job(s) deleted', ['n' => $deleted]))->success()->send();
+                        Notification::make()->title(NotificationText::of(__(':n failed job(s) deleted', ['n' => $deleted])))->success()->send();
                     }),
             ])
             ->headerActions([
@@ -122,7 +123,7 @@ class FailedJobsWidget extends TableWidget
                     ->modalSubmitActionLabel(__('Run all again'))
                     ->action(function () use ($maintenance): void {
                         $retried = $maintenance->retryAllFailed();
-                        Notification::make()->title(__(':n job(s) back on their queues', ['n' => $retried]))->success()->send();
+                        Notification::make()->title(NotificationText::of(__(':n job(s) back on their queues', ['n' => $retried])))->success()->send();
                     }),
                 Action::make('deleteAll')->label(__('Delete all'))->icon('heroicon-o-trash')->color('danger')
                     ->authorize(fn (): bool => static::canView())
@@ -131,7 +132,7 @@ class FailedJobsWidget extends TableWidget
                     ->modalSubmitActionLabel(__('Delete all'))
                     ->action(function () use ($maintenance): void {
                         $deleted = $maintenance->flushFailed();
-                        Notification::make()->title(__(':n failed job(s) deleted', ['n' => $deleted]))->success()->send();
+                        Notification::make()->title(NotificationText::of(__(':n failed job(s) deleted', ['n' => $deleted])))->success()->send();
                     }),
                 Action::make('pruneOld')->label(__('Delete older than…'))->icon('heroicon-o-clock')->color('gray')
                     ->authorize(fn (): bool => static::canView())
@@ -148,7 +149,7 @@ class FailedJobsWidget extends TableWidget
                             app(Auditor::class)->record('queue.failed_pruned', context: ['count' => $removed, 'days' => $days]);
                         }
 
-                        Notification::make()->title(__(':n failed job(s) deleted', ['n' => $removed]))->success()->send();
+                        Notification::make()->title(NotificationText::of(__(':n failed job(s) deleted', ['n' => $removed])))->success()->send();
                     }),
             ]);
     }

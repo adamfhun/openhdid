@@ -1,5 +1,6 @@
 <?php
 
+use App\Audit\AuditArchive;
 use App\Audit\Auditor;
 use App\Auth\Permission;
 use App\Auth\Role;
@@ -22,6 +23,7 @@ use App\Support\HuDate;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Storage;
 use Livewire\Features\SupportTesting\Testable;
 use Livewire\Livewire;
 use Spatie\SimpleExcel\SimpleExcelReader;
@@ -298,4 +300,72 @@ it('enforces the report period limit in the service, not only on the page', func
 
     // Exactly the limit is still served.
     expect(app(UserReport::class)->build($supervisor, today()->subDays(UserReport::MAX_DAYS - 1), today(), [ReportSection::Users])->tables)->not->toBeEmpty();
+});
+
+it('leaves no temporary file behind after an XLSX report', function (): void {
+    $this->actingAs(User::factory()->withRole(Role::Supervisor)->create());
+    $before = glob(sys_get_temp_dir().'/hdid-report*') ?: [];
+
+    $xlsx = Livewire::test(Reports::class)
+        ->fillForm(['from' => today()->subDays(6)->toDateString(), 'until' => today()->toDateString(), 'sections' => ['users'], 'format' => 'xlsx'])
+        ->call('download')
+        ->assertFileDownloaded();
+
+    expect(str_starts_with(downloadBody($xlsx), 'PK'))->toBeTrue('a valid XLSX (zip) file')
+        ->and(array_values(array_diff(glob(sys_get_temp_dir().'/hdid-report*') ?: [], $before)))->toBe([]);
+});
+
+it('warns in the activity part, in HTML and XLSX alike, that days before the audit log\'s hot window are not counted', function (): void {
+    Storage::fake('local');
+    app(Settings::class)->set(SettingKey::RetentionAuditHotDays, 150);
+    $anna = User::factory()->withRole(Role::Agent)->create(['name' => 'Kovács Anna']);
+    $old = app(Auditor::class)->record('login.succeeded', $anna, actor: $anna);
+    AuditLog::query()->whereKey($old->id)->update(['created_at' => now()->subDays(200)]);
+    app(Auditor::class)->record('login.succeeded', $anna, actor: $anna);
+    app(AuditArchive::class)->archive();
+    $heldSince = app(AuditArchive::class)->heldSince();
+    $warning = __('The audit log holds entries from :date; the earlier days of this period are in the audit archive (System › Audit archive) and are not counted here.', ['date' => $heldSince->format(HuDate::DATE)]);
+
+    $supervisor = User::factory()->withRole(Role::Supervisor)->create();
+    $report = app(UserReport::class)->build($supervisor, today()->subDays(399), today(), [ReportSection::Activity]);
+    expect($report->tables[0]->warning)->toBe($warning)
+        ->and($report->tables[0]->rows[0][1])->toBe(1, 'only the login inside the hot window counts');
+
+    $this->actingAs($supervisor);
+    $form = ['from' => today()->subDays(399)->toDateString(), 'until' => today()->toDateString(), 'sections' => ['activity']];
+    $html = downloadBody(Livewire::test(Reports::class)->fillForm($form + ['format' => 'html'])->call('download'));
+    expect($html)->toContain(e($warning));
+
+    $path = tempnam(sys_get_temp_dir(), 'hdid-test').'.xlsx';
+    file_put_contents($path, downloadBody(Livewire::test(Reports::class)->fillForm($form + ['format' => 'xlsx'])->call('download')));
+    $cells = collect(SimpleExcelReader::create($path)->fromSheetName(ReportSection::Activity->label())->noHeaderRow()->getRows()->all())->flatten()->all();
+    $summary = collect(SimpleExcelReader::create($path)->fromSheetName(__('Summary'))->noHeaderRow()->getRows()->all())->flatten()->all();
+    unlink($path);
+    expect($cells)->toContain($warning)->and($summary)->toContain($warning);
+});
+
+it('adds no archive warning when the period lies inside the days the audit log holds', function (): void {
+    Storage::fake('local');
+    app(Settings::class)->set(SettingKey::RetentionAuditHotDays, 150);
+    $anna = User::factory()->withRole(Role::Agent)->create();
+    $old = app(Auditor::class)->record('login.succeeded', $anna, actor: $anna);
+    AuditLog::query()->whereKey($old->id)->update(['created_at' => now()->subDays(200)]);
+    app(AuditArchive::class)->archive();
+
+    $report = app(UserReport::class)->build(User::factory()->withRole(Role::Supervisor)->create(), today()->subDays(30), today(), [ReportSection::Activity]);
+
+    expect($report->tables[0]->warning)->toBeNull()
+        ->and($report->tables[0]->note)->toContain(app(AuditArchive::class)->heldSince()->format(HuDate::DATE));
+});
+
+it('shows on the reports page from which day the activity part counts once days are archived', function (): void {
+    Storage::fake('local');
+    app(Settings::class)->set(SettingKey::RetentionAuditHotDays, 150);
+    $old = AuditLog::query()->create(['event' => 'x', 'context' => []]);
+    AuditLog::query()->whereKey($old->id)->update(['created_at' => now()->subDays(200)]);
+    app(AuditArchive::class)->archive();
+    $this->actingAs(User::factory()->withRole(Role::Supervisor)->create());
+
+    Livewire::test(Reports::class)
+        ->assertSee(__('The activity part counts the audit log from :date; earlier days are in the audit archive.', ['date' => app(AuditArchive::class)->heldSince()->format(HuDate::DATE)]));
 });
