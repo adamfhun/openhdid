@@ -11,7 +11,7 @@ The commands run in the installation folder (`/opt/openhdid` in the examples), a
 ### 1. Előkészítés
 
 ```sh
-v=1.15.2
+v=1.15.3
 cd /opt/openhdid
 base=https://github.com/adamfhun/openhdid/releases/download/v$v
 ```
@@ -315,7 +315,7 @@ kubectl apply -k kubernetes/overlays/20k      # a régi címke klónjában
 ### 1. Preparation
 
 ```sh
-v=1.15.2
+v=1.15.3
 cd /opt/openhdid
 base=https://github.com/adamfhun/openhdid/releases/download/v$v
 ```

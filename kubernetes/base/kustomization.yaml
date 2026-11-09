@@ -55,4 +55,4 @@ resources:
 
 images:
   - name: ghcr.io/adamfhun/openhdid
-    newTag: "1.15.2"
+    newTag: "1.15.3"
