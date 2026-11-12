@@ -1,5 +1,6 @@
 <?php
 
+use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Process\ProcessResult;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
@@ -11,7 +12,9 @@ use Illuminate\Support\Facades\Process;
  *   it: the downloaded key files may hold other keys, and those sign nothing (F44, TEL-4).
  * - Every image is pinned by digest in every file that names it, and a rebuilt image of the same tag
  *   is a change of its own; an unreachable registry never leaves an empty digest behind (F55).
- * - The bundled MariaDB and Valkey images are scanned in the preflight and every week (F55, TEL-5).
+ * - The bundled MariaDB and Valkey images are scanned in the preflight and every week (F55, TEL-5). A
+ *   finding that no publisher rebuild removes is waived for these scans alone, by its id and exact path,
+ *   with a reason and a review date at most a year ahead; the image of OpenHDID is never waived.
  *
  * platform.sh runs in a throwaway copy of deploy/openhdid with a fake docker and curl in front of PATH:
  * the fake curl serves every version feed with the versions pinned now, so only digests differ, and
@@ -504,7 +507,54 @@ it('scans the bundled MariaDB and Valkey images in the preflight, without stoppi
         ->and($seven)->toContain('for ref in $helper_images; do')
         ->and($seven)->toContain('"$TRIVY_IMAGE" image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed')
         ->and($seven)->toContain('figyelem:');
+
+    // The reviewed waivers of the published tree apply to the helper images, never to the image of OpenHDID.
+    expect($seven)->toContain('--input /image.tar')
+        ->and($seven)->toContain('helper_waivers=.github/scripts/helper-images.trivyignore.yaml')
+        ->and($seven)->toContain('[[ -f $helper_waivers ]] || fail')
+        ->and($seven)->toContain('-v "$PWD/$helper_waivers":/waivers.yaml:ro "$TRIVY_IMAGE" image --scanners vuln')
+        ->and($seven)->toContain('--ignorefile /waivers.yaml --exit-code 5');
+    $imageScan = substr($seven, 0, (int) strpos($seven, 'helper_waivers='));
+    expect($imageScan)->toContain('--input /image.tar')
+        ->and($imageScan)->not->toMatch('/ignorefile|trivyignore|waivers/i')
+        ->and(substr_count($preflight, '--ignorefile'))->toBe(substr_count($seven, '--ignorefile'));
+
+    // Before the scans: the dates, a parse by the pinned Trivy itself, and the gosu the evidence was made for.
+    expect($seven)->toContain('check_helper_waivers "$helper_waivers" || fail')
+        ->and($seven)->toContain('docker run --rm --network none -v "$PWD/$helper_waivers":/waivers.yaml:ro -v "$waiver_probe":/scan:ro "$TRIVY_IMAGE" fs --scanners secret')
+        ->and($seven)->toContain("reviewed_gosu=\$(sed -n 's/^# felülvizsgált gosu: //p' \"\$helper_waivers\")")
+        ->and($seven)->toContain('shipped_gosu=$(docker run --rm --entrypoint gosu "$ref" --version </dev/null) || fail')
+        ->and($seven)->toContain('[[ -n $reviewed_gosu && $shipped_gosu == "$reviewed_gosu" ]]')
+        ->and(strpos($seven, 'check_helper_waivers "$helper_waivers"'))->toBeLessThan((int) strpos($seven, 'for ref in $helper_images; do'."\n".'    status=0'));
 });
+
+it('stops the preflight on an expired, far, malformed or missing waiver date', function (string $date, bool $accepted): void {
+    $preflight = platformScriptMain('deploy/openhdid/preflight.sh');
+    preg_match('/^check_helper_waivers\(\) \{\n.*?^\}\n/ms', $preflight, $function);
+    expect($function)->not->toBe([]);
+
+    $folder = sys_get_temp_dir().'/openhdid-waivers-'.bin2hex(random_bytes(6));
+    File::ensureDirectoryExists($folder);
+    $entry = "  - id: CVE-2026-00001\n    paths:\n      - usr/local/bin/gosu\n    statement: \"A próbalelet indoklása, elég hosszan\"\n";
+    file_put_contents($folder.'/waivers.yaml', "# fejléc\nvulnerabilities:\n".$entry.($date === '' ? '' : "    expired_at: {$date}\n"));
+
+    try {
+        $result = Process::path($folder)->run(['bash', '-c', $function[0].'check_helper_waivers waivers.yaml']);
+    } finally {
+        File::deleteDirectory($folder);
+    }
+
+    expect($result->successful())->toBe($accepted, $result->output());
+})->with(fn (): array => [
+    // The dates come from today: an expired waiver is no waiver to Trivy (00:00 UTC of that day).
+    'a month ahead' => [now('UTC')->addDays(30)->format('Y-m-d'), true],
+    'a year ahead' => [now('UTC')->addYear()->format('Y-m-d'), true],
+    'today' => [now('UTC')->format('Y-m-d'), false],
+    'yesterday' => [now('UTC')->subDay()->format('Y-m-d'), false],
+    'more than a year ahead' => [now('UTC')->addYear()->addDay()->format('Y-m-d'), false],
+    'no date' => ['soon', false],
+    'no expiry at all' => ['', false],
+]);
 
 it('scans the bundled MariaDB and Valkey images of the latest release every week', function (): void {
     $scan = platformScriptRelease('.github/workflows/security-scan.yml');
@@ -523,8 +573,62 @@ it('scans the bundled MariaDB and Valkey images of the latest release every week
     foreach ($assets as $asset) {
         expect($scan)->toContain('"$base/'.$asset.'"');
     }
-    expect($scan)->toContain('releases/latest/download')
+    // The release files and the waivers come from one release: its tag is looked up once and checked out.
+    expect($scan)->toContain('gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name')
+        ->and($scan)->toContain('base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG"')
+        ->and($scan)->toContain('ref: ${{ steps.release.outputs.tag }}')
+        ->and($scan)->toContain('TAG: ${{ steps.release.outputs.tag }}')
+        ->and($scan)->toContain('waivers=.github/scripts/helper-images.trivyignore.yaml')
         ->and($scan)->toContain('for ref in $refs; do')
         // One database download for every image of the job: a failed second download would be a false alert.
-        ->and($scan)->toContain('docker run --rm -v trivy-cache:/root/.cache "$TRIVY_IMAGE" image --platform "$PLATFORM" --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1');
+        // The waived findings are listed with their reasons in the log of every run.
+        ->and($scan)->toContain('docker run --rm -v trivy-cache:/root/.cache -v "$PWD/$waivers:/waivers.yaml:ro" "$TRIVY_IMAGE" image --platform "$PLATFORM" --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile /waivers.yaml --show-suppressed --exit-code 1');
+
+    // The image of OpenHDID itself is scanned without any waiver.
+    preg_match('/^  scan:\n(?:(?:    .*|)\n)*/m', $scan, $imageJob);
+    expect($imageJob[0] ?? '')->toContain('"$TRIVY_IMAGE" image --platform "$PLATFORM" \\'."\n".'            --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$IMAGE"')
+        ->and($imageJob[0] ?? '')->not->toMatch('/ignorefile|trivyignore|waivers/i')
+        ->and(substr_count($scan, '--ignorefile'))->toBe(1);
+});
+
+it('never waives a finding in the release gate of the OpenHDID image', function (): void {
+    $release = platformScriptRelease('.github/workflows/release.yml');
+    preg_match('/^      - name: Vulnerability and secret scan.*?(?=^      - )/ms', $release, $gate);
+
+    expect($gate[0] ?? '')->toContain('--scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1')
+        ->and($release)->not->toMatch('/ignorefile|trivyignore|waivers/i');
+});
+
+it('waives a helper image finding only by its id and exact path, with a reason, for the reviewed gosu', function (): void {
+    // The file belongs to both layouts (deploy/openhdid/repo in the main repository, the root of the
+    // exported tree); a missing file is a defect, not a reason to skip.
+    $path = collect([base_path('deploy/openhdid/repo/.github/scripts/helper-images.trivyignore.yaml'), base_path('.github/scripts/helper-images.trivyignore.yaml')])
+        ->first(fn (string $candidate): bool => is_file($candidate));
+    expect($path)->not->toBeNull();
+    $waivers = (string) file_get_contents((string) $path);
+
+    // Comments aside, the file is the one key and complete entries in exactly this form: Trivy stops on a
+    // YAML error (an unquoted ": " or a backslash escape in a statement), and a glob, a quoted or escaped
+    // path or a missing path would waive too much. The dates are the preflight's to check (against today).
+    $entry = '  - id: (?<id>CVE-\d{4}-\d{4,}|GHSA(?:-[0-9a-z]{4}){3})\n'
+        .'    paths:\n(?<paths>(?:      - [A-Za-z0-9._+-][A-Za-z0-9._\/+-]*\n)+)'
+        .'    statement: "(?<statement>[^"\\\\\x00-\x1f]{20,})"\n'
+        .'    expired_at: (?<date>\d{4}-\d{2}-\d{2})\n';
+    $body = (string) preg_replace('/^#.*\n/m', '', $waivers);
+    expect($body)->toStartWith("vulnerabilities:\n");
+    $list = substr($body, strlen("vulnerabilities:\n"));
+    preg_match_all('/'.$entry.'/', $list, $entries, PREG_SET_ORDER);
+
+    expect($entries)->not->toBeEmpty()
+        ->and(preg_replace('/'.$entry.'/', '', $list))->toBe('');
+
+    $ids = array_column($entries, 'id');
+    expect($ids)->toBe(array_values(array_unique($ids)));
+    foreach ($entries as $waiver) {
+        $date = CarbonImmutable::createFromFormat('!Y-m-d', $waiver['date'], 'UTC');
+        expect($date instanceof CarbonImmutable && $date->format('Y-m-d') === $waiver['date'])->toBeTrue("{$waiver['id']}: {$waiver['date']} is no date");
+    }
+
+    // The evidence names the gosu binary it was made for; the preflight compares it with the pinned image.
+    expect($waivers)->toMatch('/^# felülvizsgált gosu: \d+(\.\d+)+ \(go\d+(\.\d+)+\)$/m');
 });

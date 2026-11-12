@@ -504,17 +504,18 @@ it('lets the preflight publish the advisory script and lint it with the pinned s
     preg_match('/^    github_extra=\$\(find \.github .*\)$/m', $preflight, $line);
     expect($line)->not->toBe([]);
 
-    // The published tree may carry the advisory script and its exceptions file, nothing else new.
+    // The published tree may carry the advisory script, its exceptions file and the waivers of the helper
+    // image scans, nothing else new.
     $tree = realpath(sys_get_temp_dir()).'/openhdid-advisories-tree-'.bin2hex(random_bytes(6));
     upstreamAdvisoriesFolders($tree);
-    foreach (['.github/workflows/release.yml', '.github/scripts/upstream-advisories.sh', '.github/scripts/upstream-advisories.exceptions', '.github/scripts/fetch.py', '.github/dependabot.yml'] as $file) {
+    foreach (['.github/workflows/release.yml', '.github/scripts/upstream-advisories.sh', '.github/scripts/upstream-advisories.exceptions', '.github/scripts/helper-images.trivyignore.yaml', '.github/scripts/fetch.py', '.github/scripts/notes.yaml', '.github/dependabot.yml'] as $file) {
         File::ensureDirectoryExists(dirname($tree.'/'.$file));
         file_put_contents($tree.'/'.$file, "x\n");
     }
     $found = Process::path($tree)->run(['bash', '-c', $line[0].'; printf "%s\n" "$github_extra"']);
 
     expect($found->successful())->toBeTrue($found->errorOutput())
-        ->and(array_filter(explode("\n", $found->output())))->toEqualCanonicalizing(['.github/scripts/fetch.py', '.github/dependabot.yml']);
+        ->and(array_filter(explode("\n", $found->output())))->toEqualCanonicalizing(['.github/scripts/fetch.py', '.github/scripts/notes.yaml', '.github/dependabot.yml']);
 
     expect($preflight)->toContain('"$SHELLCHECK_IMAGE" -s bash install.sh backup.sh .github/scripts/upstream-advisories.sh');
 

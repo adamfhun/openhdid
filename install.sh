@@ -42,7 +42,7 @@ set -euo pipefail
 umask 077
 
 # The release this script belongs to; the release process writes it (like OPENHDID_VERSION in env.example).
-OPENHDID_RELEASE=1.15.3
+OPENHDID_RELEASE=1.15.4
 
 DIR=$(cd -- "$(dirname -- "$0")" && pwd -P)
 SELF="$DIR/$(basename -- "$0")"

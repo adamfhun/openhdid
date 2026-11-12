@@ -8,7 +8,10 @@
 # It only reports: a failed run notifies the maintainer, who then updates the
 # platform and releases a new patch version (platform.sh, release.sh). A helper
 # image is fixed only when its publisher rebuilds it (platform.sh check shows the
-# new digest). Published tags never change.
+# new digest); a finding no rebuild removes and the running system cannot reach is
+# waived, with its path, reason and review date, in the public
+# .github/scripts/helper-images.trivyignore.yaml of the release. Published tags
+# never change.
 name: Security scan
 
 on:
@@ -51,15 +54,39 @@ jobs:
       matrix:
         platform: [linux/amd64, linux/arm64]
     steps:
+      # The pinned helper images and the reviewed waivers for them come from the same release.
+      - name: Find the latest release
+        id: release
+        run: |
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          if ! [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "The latest release names no version tag: '$tag'" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Check out the latest release
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+          persist-credentials: false
       - name: Scan the helper images of the latest release
         run: |
-          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/latest/download"
-          curl -fsSL --retry 3 -o compose.yaml "$base/compose.yaml"
-          curl -fsSL --retry 3 -o infra.yaml "$base/profile-10k-infra.yaml"
-          refs=$(grep -hoE '^[[:space:]]*image:[[:space:]]*[^[:space:]$]+@sha256:[0-9a-f]{64}' compose.yaml infra.yaml \
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/compose.yaml" "$base/compose.yaml"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/infra.yaml" "$base/profile-10k-infra.yaml"
+          refs=$(grep -hoE '^[[:space:]]*image:[[:space:]]*[^[:space:]$]+@sha256:[0-9a-f]{64}' "$RUNNER_TEMP/compose.yaml" "$RUNNER_TEMP/infra.yaml" \
             | sed -E 's/^[[:space:]]*image:[[:space:]]*//' | sort -u)
           if [ -z "$refs" ]; then
             echo "No helper image pinned by digest in the release files." >&2
+            exit 1
+          fi
+          # Findings a publisher rebuild does not remove and that cannot reach the running system, each
+          # with its path, reason and review date; the image of OpenHDID itself is scanned without them.
+          waivers=.github/scripts/helper-images.trivyignore.yaml
+          if [ ! -f "$waivers" ]; then
+            echo "The release $TAG has no $waivers." >&2
             exit 1
           fi
           # One vulnerability database download for the whole job, not one per image:
@@ -67,12 +94,13 @@ jobs:
           status=0
           for ref in $refs; do
             echo "::group::$ref"
-            docker run --rm -v trivy-cache:/root/.cache "$TRIVY_IMAGE" image --platform "$PLATFORM" --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress "$ref" || status=1
+            docker run --rm -v trivy-cache:/root/.cache -v "$PWD/$waivers:/waivers.yaml:ro" "$TRIVY_IMAGE" image --platform "$PLATFORM" --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile /waivers.yaml --show-suppressed --exit-code 1 --no-progress "$ref" || status=1
             echo "::endgroup::"
           done
           exit "$status"
         env:
           PLATFORM: ${{ matrix.platform }}
+          TAG: ${{ steps.release.outputs.tag }}
 
   upstream:
     name: Upstream advisories, JavaScript and PHP packages

@@ -4,6 +4,28 @@ All notable changes of OpenHDID releases. The format follows [Keep a Changelog](
 
 Az OpenHDID kiadásainak lényeges változásai. Minden bejegyzés magyarul és angolul is szerepel.
 
+## [1.15.4] – 2026-11-12
+
+### Magyar
+- Platform: a beépített MariaDB 12.3.3 és a PHP 8.5.12 (Alpine 3.24) gyártó által újraépített image-e, Node 26.13.1 és Composer 2.11.2 (csak a buildhez). A MariaDB-image a javított `apt` csomaggal (2.8.4ubuntu0.1) érkezik, ezzel a CVE-2026-109518 lelete megszűnt; ezt a leletet nem vettük ki, a javítás szüntette meg. A `gosu` változatlanul 1.19 (go1.24.6), így a lenti kivétel bizonyítéka erre a binárisra is érvényes. A Trivy az új MariaDB-image-en amd64-en és arm64-en sem talál javítható HIGH/CRITICAL leletet a kivételeken kívül.
+- Függőségek: minden Composer- és npm-csomag a megengedett legfrissebb változatra került, többek közt Laravel 13.42, Filament 5.11.2, Sanctum 4.4, `spatie/laravel-permission` 8.5, Guzzle 8.3.1, `brick/math` 1.0, Vue 3.5.45, Vue Router 5.5, Vite 8.3.8 és Tailwind CSS 4.3.5. Ismert sérülékenység egyikben sincs.
+- Heti sérülékenységvizsgálat: a beépített MariaDB-image `gosu` programjának 26 Go-szabványkönyvtári lelete (Go 1.24.6; 1 CRITICAL, 25 HIGH) indokolt kivételt kapott a nyilvános `.github/scripts/helper-images.trivyignore.yaml` fájlban. A govulncheck szerint a gosu egyiket sem éri el, a gosu csak induláskor vált felhasználót, és sem a gosu, sem a MariaDB nem épít újra ilyen lelet miatt, ezért a gyártó újraépítése ezeket nem szünteti meg. A kivétel azonosítónként és csak a `usr/local/bin/gosu` útvonalra szól, 2027-02-10-én lejár; más lelet, más útvonal és a saját OpenHDID-image vizsgálata továbbra is riaszt. A heti vizsgálat naplója a kivett leleteket indoklással felsorolja. A kiadás előtti ellenőrzés segéd-image-vizsgálata ugyanezt a fájlt használja, és megáll, ha a Trivy nem tudja beolvasni, ha egy dátum lejárt vagy egy évnél tovább szól, vagy ha a rögzített MariaDB-image gosu-ja nem az, amelyre a bizonyíték szól (a fájl `# felülvizsgált gosu:` sora).
+- A heti vizsgálat a segéd-image-eket rögzítő mellékleteket és a kivételfájlt ugyanannak, a legutóbbi kiadásnak a címkéjéről veszi.
+- Pontosítás: az 1.15.3 CHANGELOG-bejegyzése a `gosu` leleteit is a gyártó újraépítéséig tartónak írta; ez csak az `apt`-ra igaz, a bejegyzés javítva.
+- A dokumentumok verziója 1.15.4.
+
+**Frissítés előtt:** migráció és új telepítési kulcs nincs; az 1.15.3-ról a szokásos menet (a két alkalmazásgép gördülően is frissíthető). A MariaDB-image új digestje miatt a `docker compose up -d` a beépített mariadb konténert újra létrehozza (néhány másodperc adatbázis-kiesés, az adat a kötetben marad); a kétgépes 10k elrendezésben ez az infra gépen történik, az új `profile-10k-infra.yaml`-lal (az UPGRADE.md 0. lépése). Az 1.15.0-ról vagy korábbiról közvetlenül erre a verzióra kell frissíteni, az 1.15.1 és 1.15.2 „Frissítés előtt” teendőivel.
+
+### English
+- Platform: the publisher's rebuilt images of the bundled MariaDB 12.3.3 and of PHP 8.5.12 (Alpine 3.24), Node 26.13.1 and Composer 2.11.2 (build only). The MariaDB image comes with the fixed `apt` package (2.8.4ubuntu0.1), which removes the CVE-2026-109518 finding; that finding was not waived, the fix removed it. `gosu` is still 1.19 (go1.24.6), so the evidence of the waiver below holds for this binary too. Trivy finds no fixable HIGH/CRITICAL finding outside the waivers in the new MariaDB image, on amd64 and arm64.
+- Dependencies: every Composer and npm package is at the latest allowed version, among them Laravel 13.42, Filament 5.11.2, Sanctum 4.4, `spatie/laravel-permission` 8.5, Guzzle 8.3.1, `brick/math` 1.0, Vue 3.5.45, Vue Router 5.5, Vite 8.3.8 and Tailwind CSS 4.3.5. None has a known vulnerability.
+- Weekly vulnerability scan: the 26 Go standard library findings of the `gosu` program in the bundled MariaDB image (Go 1.24.6; 1 CRITICAL, 25 HIGH) are waived, with the reasons, in the public `.github/scripts/helper-images.trivyignore.yaml`. By govulncheck gosu reaches none of them, gosu only switches the user at start, and neither gosu nor MariaDB rebuilds for such findings, so a publisher rebuild does not remove them. The waiver names each id and the path `usr/local/bin/gosu` only, and expires on 2027-02-10; any other finding, any other path and the scan of the OpenHDID image itself still alert. The log of the weekly scan lists the waived findings with their reasons. The helper image scan of the pre-release check uses the same file, and stops when Trivy cannot read it, when a date has passed or lies more than a year ahead, or when the gosu of the pinned MariaDB image is not the one the evidence was made for (the file's `# felülvizsgált gosu:` line).
+- The weekly scan reads the release files that pin the helper images and the waiver file from the tag of the same, latest release.
+- Correction: the 1.15.3 changelog entry said the `gosu` findings, too, stay until the publisher rebuilds the image; that holds for `apt` only, and the entry is corrected.
+- The documents carry version 1.15.4.
+
+**Before upgrading:** no migration and no new deployment key; from 1.15.3 the usual steps (the two application hosts may be upgraded one after the other). With the new digest of the MariaDB image, `docker compose up -d` recreates the bundled mariadb container (a few seconds without the database, the data stays in the volume); in the two-host 10k layout this happens on the infra host, with the new `profile-10k-infra.yaml` (step 0 of UPGRADE.md). From 1.15.0 or earlier upgrade straight to this release, with the "Before upgrading" steps of 1.15.1 and 1.15.2.
+
 ## [1.15.3] – 2026-11-09
 
 ### Magyar

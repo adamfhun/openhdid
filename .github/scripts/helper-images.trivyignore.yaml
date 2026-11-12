@@ -1,0 +1,169 @@
+# OpenHDID – a segéd-image-ek (MariaDB, Valkey) Trivy-vizsgálatának elfogadott kivételei.
+#
+# A heti vizsgálat (security-scan.yml, helpers job) és a kiadás előtti ellenőrzés (preflight) a kiadás
+# compose.yaml és profiles/*/*.yaml fájljaiban digesttel rögzített segéd-image-eket a Trivyvel vizsgálja
+# (HIGH és CRITICAL, javítással rendelkező leletek). Ide csak olyan lelet kerülhet, amelyet a gyártó
+# újraépítése sem szüntet meg, és amely a futó rendszert bizonyíthatóan nem érinti. A fájl nyilvános:
+# a telepítő is látja, mit tartunk nem érintettnek, és miért. A saját OpenHDID-image vizsgálatára nem hat.
+#
+# A Trivy .trivyignore.yaml formátuma (Trivy 0.76), bejegyzésenként:
+#   id          a lelet azonosítója (CVE-…, GHSA-…)
+#   paths       a lelet helye az image-ben, pontos út, helyettesítő karakter nélkül
+#   statement   miért nem érinti a rendszert, idézőjelben (a ": " idézőjel nélkül YAML-hiba)
+#   expired_at  a felülvizsgálat napja (ÉÉÉÉ-HH-NN), legfeljebb egy évre előre; utána a Trivy újra jelez,
+#               és a kivétel csak a bizonyíték újbóli előállítása után hosszabbítható
+# Más azonosító, más útvonal és minden új lelet továbbra is riaszt. Minden új vagy meghosszabbított
+# kivétel a CHANGELOG-ban is szerepel. A formát a PlatformScriptTest ellenőrzi; a kiadás előtti ellenőrzés
+# (preflight) azt is, hogy a Trivy beolvassa, egyik dátum sem járt le és egyik sem szól egy évnél tovább,
+# és hogy a rögzített MariaDB-image gosu-ja az, amelyre a bizonyíték szól (a lenti „felülvizsgált gosu”
+# sor és a `gosu --version` kimenete); eltérésnél megáll, és a bizonyítékot az új binárisra újra elő kell
+# állítani.
+#
+# gosu (a mariadb image /usr/local/bin/gosu fájlja), felülvizsgálva 2026-11-10-én:
+# felülvizsgált gosu: 1.19 (go1.24.6)
+# - A mariadb:12.3.3 image a gosu gyártói 1.19-es binárisát hozza (egyezik a gyártó SHA256SUMS-ával),
+#   Go 1.24.6-tal fordítva; a Trivy a Go-szabványkönyvtár 26 javított sérülékenységét jelzi rajta
+#   (1 CRITICAL, 25 HIGH).
+# - A govulncheck (-mode binary) szerint a gosu egyiket sem éri el: 25 esetben az érintett csomag nincs a
+#   binárisban (crypto/tls, crypto/x509, net, net/http, net/url, net/mail, mime, encoding/asn1,
+#   encoding/xml, html/template), a CVE-2026-39822 (os.Root) csomagja benne van, de az érintett
+#   függvényt nem hívja.
+# - A gosu csak induláskor fut: a MariaDB belépő szkriptje root-ként indulva vele vált a mysql
+#   felhasználóra, és a gosu exec-kel átadja a helyét. Hálózatot, tanúsítványt és levelet nem kezel.
+# - A gosu elérhetetlen Go-sérülékenység miatt nem épül újra (github.com/tianon/gosu, SECURITY.md), a
+#   MariaDB az ilyen leleteknél a govulncheck-re utal (github.com/MariaDB/mariadb-docker, SECURITY.md);
+#   a gosu 1.20 is Go 1.24.6-tal készül, ezért a gyártó újraépítése ezeket a leleteket nem szünteti meg.
+# - A gosu 1.19 egyetlen, a govulncheck szerint elérhető lelete (CVE-2026-61801, moby/sys/user, közepes
+#   súlyú) nincs a listán: a vizsgálat HIGH/CRITICAL szűrője nem mutatja, a gosu 1.20 javítja.
+# Az apt lelete (CVE-2026-109518) nem kivétel: a gyártó javított image-ével tűnik el.
+vulnerabilities:
+  - id: CVE-2025-61726
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2025-61729
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2025-68121
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-111943
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-25679
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-27145
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-32280
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-32281
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-32283
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-33811
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-33814
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-33818
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-39820
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-39821
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-39822
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-39836
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-42499
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-42504
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-56853
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-56858
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-56859
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-56860
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-56862
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-78667
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-78669
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-97031
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
