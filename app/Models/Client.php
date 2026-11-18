@@ -42,7 +42,7 @@ class Client extends Authenticatable implements Principal
     use SoftDeletes;
 
     /** @var list<string> */
-    protected array $auditExclude = ['pin_failed_attempts', 'pin_locked_until', 'pin_lockout_count', 'last_login_at', 'last_seen_at', 'session_epoch', 'failed_login_attempts', 'locked_until'];
+    protected array $auditExclude = ['pin_failed_attempts', 'pin_locked_until', 'pin_lockout_count', 'last_login_at', 'last_seen_at', 'session_epoch', 'failed_login_attempts', 'locked_until', 'moved_from_record_id'];
 
     protected function casts(): array
     {
@@ -120,6 +120,17 @@ class Client extends Authenticatable implements Principal
                 app(ClientLinks::class)->endLinkOfSelfSponsored($client);
             }
         });
+    }
+
+    /**
+     * The sync moved the account to another EMD record and no run has decided
+     * yet whether another person took it over (AccountProvisioner::settleRebounds()).
+     * Until then what the previous holder set up, the PIN and the security
+     * answers, identifies nobody.
+     */
+    public function holderChangePending(): bool
+    {
+        return $this->moved_from_record_id !== null;
     }
 
     public function hasPin(): bool

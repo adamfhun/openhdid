@@ -260,3 +260,23 @@ it('records the client as the one who removed an answer even when a staff sessio
 
     expect(AuditLog::query()->where('event', 'client_answer.removed')->sole()->actor_id)->toBe($this->client->id);
 });
+
+it('names the client, not the staff member signed in to the panel in the same browser, for everything the client does on the portal', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    app(Settings::class)->set(SettingKey::PinClientChangesEnabled, true);
+    AuditLog::query()->delete();
+    $staff = User::factory()->withRole(Role::Admin)->create();
+    $this->actingAs($staff, 'web');
+    Sanctum::actingAs($this->client, guard: 'client');
+
+    $this->putJson('/api/v1/client/pin', ['pin' => '482915', 'pin_confirmation' => '482915'])->assertOk();
+    $this->deleteJson('/api/v1/client/pin')->assertOk();
+    $this->putJson('/api/v1/client/answers/'.$this->questions[0]->id, ['answer' => 'Rex'])->assertOk();
+
+    $entries = AuditLog::query()->whereIn('event', ['client.pin_set', 'client.pin_cleared', 'client_answer.saved'])->get();
+
+    expect($entries->pluck('event')->sort()->values()->all())->toBe(['client.pin_cleared', 'client.pin_set', 'client_answer.saved'])
+        ->and($entries->pluck('actor_id')->unique()->all())->toBe([$this->client->id])
+        ->and($entries->pluck('actor_type')->unique()->all())->toBe([$this->client->getMorphClass()])
+        ->and(AuditLog::query()->where('actor_id', $staff->id)->exists())->toBeFalse();
+});

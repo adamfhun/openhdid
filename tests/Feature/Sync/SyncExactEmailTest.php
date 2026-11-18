@@ -182,10 +182,16 @@ it('still links and adopts accounts whose address differs from the row only in l
 /**
  * Puts a collation as lenient as MariaDB's utf8mb4_unicode_ci (letter case,
  * accents and width folded) on the account e-mail columns, so every lookup
- * and the unique index equate look-alike addresses, as in production.
+ * and the unique index equate look-alike addresses, as in production. On
+ * MariaDB itself the columns already have it.
  */
 function useLenientEmailCollation(): void
 {
+    // MariaDB's own collation is the lenient one: the test runs against it as it is.
+    if (DB::connection()->getDriverName() !== 'sqlite') {
+        return;
+    }
+
     $fold = fn (string $value): string => (string) preg_replace('/\p{Mn}+/u', '', (string) Normalizer::normalize(mb_strtolower($value), Normalizer::FORM_KD));
     $compare = fn (string $a, string $b): int => strcmp($fold($a), $fold($b));
     $pdo = DB::connection()->getPdo();

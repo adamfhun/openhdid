@@ -202,6 +202,29 @@ it('sends SMS codes only to a mobile number of the EMD record and drops the fact
     expect($this->mfa->enrolledMethods($this->agent->fresh()->load('externalRecord')))->toBe([]);
 });
 
+it('does not finish the SMS setup with a number that left the EMD record after the code was sent', function (): void {
+    $this->actingAs($this->agent);
+
+    $this->mfa->sendCode($this->agent, MfaMethod::Sms, StaffMfa::PURPOSE_SETUP, '+36301234567');
+    $code = lastSentCode();
+
+    // The directory withdraws the number between the two steps.
+    $this->agent->externalRecord->update(['phones' => ['+36307777777']]);
+
+    expect(fn () => $this->mfa->confirmSentSetup($this->agent, MfaMethod::Sms, $code))->toThrow(MfaException::class, 'SMS codes go only to a mobile number of your EMD record');
+
+    expect($this->agent->fresh()->mfa_sms_number)->toBeNull()
+        ->and($this->mfa->isSatisfied($this->agent))->toBeFalse()
+        ->and(AuditLog::query()->where('event', 'mfa.factor_added')->exists())->toBeFalse()
+        ->and($this->agent->fresh()->failed_mfa_attempts)->toBe(0);
+
+    // The pending code went with the number: it does not work once the number is back either.
+    $this->agent->externalRecord->update(['phones' => ['+36301234567']]);
+    expect(fn () => $this->mfa->confirmSentSetup($this->agent->fresh(), MfaMethod::Sms, $code))->toThrow(MfaException::class);
+    expect($this->agent->fresh()->mfa_sms_number)->toBeNull()
+        ->and($this->mfa->isSatisfied($this->agent))->toBeFalse();
+});
+
 it('does not let a session without the second factor change the factors of an account that has one', function (): void {
     withAppFactor($this->agent);
     $this->actingAs($this->agent);

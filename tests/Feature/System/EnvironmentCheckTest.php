@@ -61,6 +61,7 @@ it('turns the environment tile red in production for a value that switches a saf
     'one of a list' => [['trustedproxy.proxies' => '10.0.0.1, *'], 'TRUSTED_PROXIES'],
     'one of an array' => [['trustedproxy.proxies' => ['10.0.0.1', '*']], 'TRUSTED_PROXIES'],
     'insecure cookie' => [['session.secure' => false], 'SESSION_SECURE_COOKIE'],
+    'cookie readable by scripts' => [['session.http_only' => false], 'SESSION_HTTP_ONLY'],
     'plain http' => [['app.url' => 'http://hdid.example.org'], 'APP_URL'],
 ]);
 
@@ -118,7 +119,7 @@ it('uses the same environment names and trust-all entries as the container start
 });
 
 it('names the real keys and both installation types in the environment hint', function (): void {
-    expect(HealthChecks::hint('environment'))->toContain('APP_ENV', 'APP_DEBUG', 'TRUSTED_PROXIES', 'SESSION_SECURE_COOKIE', 'APP_URL', 'REDIS_PASSWORD', 'config:cache', 'docker compose');
+    expect(HealthChecks::hint('environment'))->toContain('APP_ENV', 'APP_DEBUG', 'TRUSTED_PROXIES', 'SESSION_SECURE_COOKIE', 'SESSION_HTTP_ONLY', 'APP_URL', 'REDIS_PASSWORD', 'config:cache', 'docker compose');
 });
 
 it('shows the environment in the modes block', function (): void {

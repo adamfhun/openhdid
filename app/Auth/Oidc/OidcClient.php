@@ -192,6 +192,15 @@ class OidcClient
             throw new OidcException('ID token invalid: '.$e->getMessage(), previous: $e);
         }
 
+        // OIDC Core 3.1.3.7: an ID token carries its expiry and issue time. The JWT
+        // library only checks an expiry that is there, so a token without one would
+        // never expire.
+        foreach (['exp', 'iat'] as $claim) {
+            if (! is_numeric($claims[$claim] ?? null)) {
+                throw new OidcException("ID token has no {$claim} claim.");
+            }
+        }
+
         $audiences = (array) ($claims['aud'] ?? []);
         if (! in_array($expectedAudience, $audiences, true)) {
             throw new OidcException('ID token audience mismatch.');

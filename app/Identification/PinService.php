@@ -17,6 +17,7 @@ use App\Models\User;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use App\System\Installation;
+use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -119,7 +120,10 @@ class PinService
         return $this->canSetPin($client) ? null : __('A PIN needs at least one registered phone number: the phone menu recognises the caller by the number before it asks for the PIN.');
     }
 
-    public function setPin(Client $client, string $pin): void
+    /**
+     * @param  Authenticatable|null  $actor  who sets it (the client on the portal, a staff member on the panel); the audit entry names them
+     */
+    public function setPin(Client $client, string $pin, ?Authenticatable $actor = null): void
     {
         if (($blocker = $this->setPinBlocker($client)) !== null) {
             throw ValidationException::withMessages(['pin' => $blocker]);
@@ -134,13 +138,13 @@ class PinService
         // removal clears a PIN on the same row lock).
         $hash = Hash::make($pin);
 
-        Cache::lock(Installation::lockName('hdid:pin-assignment'), 30)->block(5, function () use ($client, $pin, $hash): void {
+        Cache::lock(Installation::lockName('hdid:pin-assignment'), 30)->block(5, function () use ($client, $pin, $hash, $actor): void {
             // Outside the transaction, so that the refusal's audit row stays.
             if ($this->uniquenessRequired()) {
                 $this->refuseTakenPin($client, $pin);
             }
 
-            DB::transaction(function () use ($client, $pin, $hash): void {
+            DB::transaction(function () use ($client, $pin, $hash, $actor): void {
                 $record = Client::query()->whereKey($client->id)->lockForUpdate()->firstOrFail();
 
                 if (! $record->phoneNumbers()->exists()) {
@@ -156,7 +160,7 @@ class PinService
                     'pin_lockout_count' => 0,
                 ])->save();
                 $this->codes->revokeAll($record);
-                $this->auditor->record('client.pin_set', $record);
+                $this->auditor->record('client.pin_set', $record, actor: $actor);
             });
         });
 
@@ -191,13 +195,14 @@ class PinService
 
     /**
      * @param  string|null  $reason  why the PIN goes, when not an operator's or the client's own choice
+     * @param  Authenticatable|null  $actor  who removes it, when somebody does; the audit entry names them
      */
-    public function clearPin(Client $client, ?string $reason = null): void
+    public function clearPin(Client $client, ?string $reason = null, ?Authenticatable $actor = null): void
     {
-        DB::transaction(function () use ($client, $reason): void {
+        DB::transaction(function () use ($client, $reason, $actor): void {
             $client->forceFill(['pin_hash' => null, 'pin_lookup' => null, 'pin_set_at' => null, 'pin_failed_attempts' => 0, 'pin_locked_until' => null, 'pin_lockout_count' => 0])->save();
             $this->codes->revokeAll($client);
-            $this->auditor->record('client.pin_cleared', $client, array_filter(['reason' => $reason]));
+            $this->auditor->record('client.pin_cleared', $client, array_filter(['reason' => $reason]), $actor);
         });
     }
 
@@ -310,6 +315,12 @@ class PinService
     {
         if ($client->isClosed() || ! $this->tiers->isEntitled($client)) {
             return [IdSessionStatus::Failed, 'account_closed'];
+        }
+
+        // The account moved to another EMD record and no sync run has decided yet
+        // whether another person holds it now: the PIN may be the previous holder's.
+        if ($client->holderChangePending()) {
+            return [IdSessionStatus::Failed, 'holder_change_pending'];
         }
 
         if (! $client->hasPin()) {

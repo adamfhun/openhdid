@@ -406,6 +406,7 @@
     "No run recorded yet; is \"schedule:run\" in cron?": "No run recorded yet; is \"schedule:run\" in cron?",
     "no run yet": "no run yet",
     "no worker seen yet": "no worker seen yet",
+    "holder_change_pending": "suspended: the master data sync has not decided yet whether the account went to another person",
     "no_pin": "no_pin",
     "Non-Authoritative Information": "Non-Authoritative Information",
     "None": "None",

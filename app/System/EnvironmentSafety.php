@@ -73,6 +73,10 @@ final class EnvironmentSafety
             $problems[] = __('the session cookie also travels over plain http (SESSION_SECURE_COOKIE=false)');
         }
 
+        if (config('session.http_only') === false) {
+            $problems[] = __('scripts in the browser can read the session cookie (SESSION_HTTP_ONLY=false)');
+        }
+
         if (parse_url((string) config('app.url'), PHP_URL_SCHEME) !== 'https') {
             $problems[] = __('APP_URL is not an https:// address');
         }

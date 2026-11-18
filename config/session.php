@@ -173,7 +173,9 @@ return [
     |
     */
 
-    'secure' => env('SESSION_SECURE_COOKIE', env('APP_ENV') === 'production'),
+    // Only an explicit false turns it off: an empty line keeps the default, as the
+    // container start check reads it (an empty value must not weaken the cookie).
+    'secure' => in_array(env('SESSION_SECURE_COOKIE'), [null, ''], true) ? env('APP_ENV') === 'production' : (filter_var(env('SESSION_SECURE_COOKIE'), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? env('APP_ENV') === 'production'),
 
     /*
     |--------------------------------------------------------------------------
@@ -186,7 +188,8 @@ return [
     |
     */
 
-    'http_only' => env('SESSION_HTTP_ONLY', true),
+    // Only an explicit false turns it off; an empty line keeps it on.
+    'http_only' => in_array(env('SESSION_HTTP_ONLY'), [null, ''], true) ? true : (filter_var(env('SESSION_HTTP_ONLY'), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true),
 
     /*
     |--------------------------------------------------------------------------

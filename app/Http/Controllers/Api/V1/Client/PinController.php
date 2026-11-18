@@ -22,7 +22,7 @@ class PinController extends Controller
 
         $data = $request->validate(['pin' => ['required', 'string', 'confirmed', 'digits_between:'.$this->pins->minLength().','.$this->pins->maxLength()]]);
 
-        $this->pins->setPin($request->user(), $data['pin']);
+        $this->pins->setPin($request->user(), $data['pin'], $request->user());
 
         return response()->json(['message' => __('PIN saved.'), 'min_length' => $this->pins->minLength(), 'max_length' => $this->pins->maxLength()]);
     }
@@ -36,7 +36,7 @@ class PinController extends Controller
     {
         abort_unless($this->pins->clientChangesEnabled(), 403, __('PIN changes are managed by the helpdesk.'));
 
-        $this->pins->clearPin($request->user());
+        $this->pins->clearPin($request->user(), actor: $request->user());
 
         return response()->json(['message' => __('PIN removed.')]);
     }

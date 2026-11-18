@@ -49,6 +49,19 @@ it('rejects a token for the wrong audience or an unknown account', function (): 
         ->assertForbidden()->assertJsonPath('reason', 'no_account');
 });
 
+it('rejects a signed token without an expiry or an issue time', function (string $claim): void {
+    Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    FakeOidc::fake([], ENTRA_ISSUER, ENTRA_DISCOVERY);
+
+    // Signature, audience, tenant and address all match; only the claim is missing.
+    $token = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => '11111111-1111-4111-8111-111111111111', 'preferred_username' => 'c@x.hu', $claim => null], ENTRA_ISSUER);
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $token, 'device_name' => 'x'])
+        ->assertUnprocessable()->assertJsonPath('errors.id_token.0', 'The token is not valid.');
+
+    expect(AuditLog::query()->where('event', 'login.rejected')->sole()->context)
+        ->toMatchArray(['detail' => 'invalid_token', 'error' => "ID token has no {$claim} claim."]);
+})->with(['exp', 'iat']);
+
 it('rejects a token issued by another tenant even when signature, audience and e-mail match', function (): void {
     Client::factory()->synced()->create(['email' => 'c@x.hu']);
     FakeOidc::fake([], ENTRA_ISSUER, ENTRA_DISCOVERY);
@@ -263,6 +276,26 @@ it('accepts an ID token only once and audits the replay', function (): void {
     $this->assertDatabaseCount('personal_access_tokens', 1);
     expect(AuditLog::query()->where('event', 'login.rejected')->sole()->context)
         ->toMatchArray(['method' => 'sso.entra.mobile', 'reason' => 'invalid_credentials', 'detail' => 'token_replayed', 'email' => 'c@x.hu']);
+});
+
+it('keeps an exchanged ID token used up until it expires, also when the allowed age is raised afterwards', function (): void {
+    app(Settings::class)->set(SettingKey::SsoMobileTokenMaxAgeMinutes, 5);
+    Client::factory()->synced()->create(['email' => 'c@x.hu']);
+    FakeOidc::fake([], ENTRA_ISSUER, ENTRA_DISCOVERY);
+    $idToken = FakeOidc::idToken(['aud' => 'mobile-app', 'tid' => '11111111-1111-4111-8111-111111111111', 'preferred_username' => 'c@x.hu', 'iat' => time(), 'exp' => time() + 3600], ENTRA_ISSUER);
+
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'phone'])->assertOk();
+
+    // Past the age the token was exchanged under; then an administrator raises the limit.
+    $this->travel(7)->minutes();
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'thief'])->assertUnprocessable();
+    app(Settings::class)->set(SettingKey::SsoMobileTokenMaxAgeMinutes, 60);
+
+    $this->postJson('/api/v1/auth/client/entra/token', ['id_token' => $idToken, 'device_name' => 'thief'])
+        ->assertUnprocessable()->assertJsonPath('errors.id_token.0', 'The token is not valid.');
+
+    $this->assertDatabaseCount('personal_access_tokens', 1);
+    expect(AuditLog::query()->where('event', 'login.rejected')->latest('id')->first()->context['detail'])->toBe('token_replayed');
 });
 
 it('does not take a re-encoded signature for a new ID token', function (string $variant): void {

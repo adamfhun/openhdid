@@ -231,7 +231,12 @@
                                 ]) data-hdid-last-check>
                                     @if ($result === \App\Enums\AnswerCheckResult::Matched)
                                         <x-filament::icon icon="heroicon-m-check-circle" class="h-5 w-5 shrink-0" />
-                                        <span>{{ trans_choice('{0} The previous answer matched: :answer|{1} The previous answer matched with 1 typo: :answer|[2,*] The previous answer matched with :n typos: :answer', (int) $previous['step']->check_distance, ['n' => (int) $previous['step']->check_distance, 'answer' => $previous['answer'] ?? '–']) }}</span>
+                                        @if ($previous['answer'] === null)
+                                            {{-- The client changed or removed the answer after the match: only the fact of the match stays. --}}
+                                            <span>{{ __('The previous answer matched. The stored answer has changed since, so it is not shown.') }}</span>
+                                        @else
+                                            <span>{{ trans_choice('{0} The previous answer matched: :answer|{1} The previous answer matched with 1 typo: :answer|[2,*] The previous answer matched with :n typos: :answer', (int) $previous['step']->check_distance, ['n' => (int) $previous['step']->check_distance, 'answer' => $previous['answer']]) }}</span>
+                                        @endif
                                     @elseif ($result === \App\Enums\AnswerCheckResult::Mismatch)
                                         <x-filament::icon icon="heroicon-m-x-circle" class="h-5 w-5 shrink-0" />
                                         <span>{{ __('The previous answer did not match.') }}</span>

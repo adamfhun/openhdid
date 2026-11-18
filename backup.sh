@@ -347,6 +347,20 @@ prune() {
     [[ $KEEP == 0 ]] || prune_matching "$SAFETY_PATTERN" "$SAFETY_KEEP"
 }
 
+# The saved configuration takes the place of the present one. The ca folder comes back exactly as
+# the backup holds it, and a backup without one was made when there was none: the present folder
+# goes in every case. Otherwise a CA added since the backup would stay on the host, and the
+# container adds every file of the folder to the trust store of PHP and cURL at its next start.
+restore_config() {
+    local archive=$1
+    if [[ -e ca || -L ca ]]; then
+        rm -rf ca || die "A jelenlegi ca mappa nem törölhető (a tulajdonosa: $(id -un)?); a mentés CA-készlete nem állítható vissza pontosan. Törölje a mappát, majd indítsa újra a visszaállítást."
+    fi
+    # The CA files must stay readable for the container user: the archived modes count, not this script's umask.
+    (umask 022 && tar xzf "$archive") || die "A beállítások visszaállítása nem sikerült (írható a mappa: $DIR?)."
+    chmod 600 .env db.env
+}
+
 # A backup set may come back from storage outside this host. Its configuration archive may
 # hold only what config_archive writes, as plain files: no other file (this script, which
 # cron runs) and no links may reach the installation folder.
@@ -373,7 +387,7 @@ list_backups() {
 }
 
 restore_backup() {
-    local source image version db_state stage services differs=() f
+    local source image version db_state stage services differs=() f ca_differs=0
     if [[ -z $NAME ]]; then
         NAME=$(find "$BACKUPS" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | grep -E "$STAMP_PATTERN" | sort | tail -n 1 || true)
         [[ -n $NAME ]] || die "Nincs mentés a $BACKUPS mappában."
@@ -417,6 +431,11 @@ restore_backup() {
         [[ -e $f || -e $stage/$f ]] || continue
         cmp -s "$f" "$stage/$f" 2>/dev/null || differs+=("$f")
     done
+    # The trusted CAs: a file added since the backup goes with the restore, and the operator is told.
+    if [[ -e ca || -e $stage/ca ]] && ! diff -rq ca "$stage/ca" >/dev/null 2>&1; then
+        differs+=(ca)
+        ca_differs=1
+    fi
 
     step "Visszaállítás: backup/$NAME"
     say "    készült: $(sed -n 's/^created=//p' "$source/info.txt"), OpenHDID $version"
@@ -425,6 +444,7 @@ restore_backup() {
     say "    a mentés óta tett biztonsági lépéseket (fióklezárás, API-kulcs visszavonása, szerepkör- és jogelvétel,"
     say "    jelszó- és második lépés visszaállítása) meg kell ismételni: a mentés nem ismeri őket."
     [[ ${#differs[@]} == 0 ]] || say "    a mentés beállításai eltérnek a jelenlegitől: ${differs[*]}"
+    [[ $ca_differs == 0 ]] || say "    a ca mappa (megbízható tanúsítványkiadók) pontosan a mentés készletére áll vissza: ami azóta került bele, törlődik."
     confirm
 
     if [[ $SAFETY == 1 && -f .env ]]; then
@@ -443,12 +463,7 @@ restore_backup() {
     fi
 
     step "Beállítások és kulcsok"
-    if grep -qE '^(\./)?ca(/|$)' <<<"$(tar tzf "$source/config.tar.gz")"; then
-        rm -rf ca
-    fi
-    # The CA files must stay readable for the container user: the archived modes count, not this script's umask.
-    (umask 022 && tar xzf "$source/config.tar.gz") || die "A beállítások visszaállítása nem sikerült (írható a mappa: $DIR?)."
-    chmod 600 .env db.env
+    restore_config "$source/config.tar.gz"
     say "    .env, db.env, compose.yaml, profil, ca visszaállítva (OpenHDID $version)"
 
     # The container user writes the key into a folder inside backup/ (700): open to that user,

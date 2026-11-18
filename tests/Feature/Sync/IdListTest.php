@@ -9,6 +9,7 @@ use App\Settings\Settings;
 use App\Sync\IdList;
 use App\Sync\IdListException;
 use App\Sync\ReaderFactory;
+use App\Sync\RefusedResponse;
 use App\Sync\SourceFormatException;
 use App\Sync\SyncExternalRecords;
 use Carbon\CarbonImmutable;
@@ -275,4 +276,36 @@ it('names an unverifiable certificate of the ID list endpoint with the ca folder
     ]);
 
     expect(fn () => app(IdList::class)->refresh())->toThrow(IdListException::class, 'ca folder');
+});
+
+it('keeps the credentials of the configured address out of the log of a refused request', function (string $url, ?string $logged): void {
+    Log::spy();
+
+    RefusedResponse::log('export', 401, $url, 'denied');
+
+    Log::shouldHaveReceived('warning')->withArgs(function (string $message, array $context) use ($logged): bool {
+        return $context['url'] === $logged && ! str_contains(json_encode($context), 'S3cret') && ! str_contains(json_encode($context), 'svc-user');
+    })->once();
+})->with([
+    'user and password before the host' => ['https://svc-user:S3cret@directory.test:8443/export?key=S3cret#S3cret', 'https://directory.test:8443/export'],
+    'only a user name' => ['https://svc-user@directory.test/export', 'https://directory.test/export'],
+    'no credentials' => ['https://directory.test/export?key=S3cret', 'https://directory.test/export'],
+    'not readable as an address' => ['svc-user:S3cret@directory.test/export', null],
+]);
+
+it('logs a refused export without the password the configured address carries', function (): void {
+    Log::spy();
+    SyncIdListItem::factory()->selected()->create(['external_id' => '12']);
+    Http::fake([
+        'https://directory.test/login' => Http::response(['access_token' => 'access', 'refresh_token' => 'refresh']),
+        'https://directory.test/organizations' => Http::response(organizations([[12, 'Zebra Kft.']])),
+        '*directory.test/export*' => Http::response('denied', 401),
+    ]);
+    config()->set('hdid.sync.api_url', 'https://svc-user:S3cret@directory.test/export?key=S3cret');
+
+    expect(fn () => app(SyncExternalRecords::class)->run(app(ReaderFactory::class)->forApi()))->toThrow(SourceFormatException::class);
+
+    Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context): bool => $message === 'EMD export refused (HTTP 401); the response body follows.'
+        && $context['url'] === 'https://directory.test/export')->once();
+    Log::shouldNotHaveReceived('warning', fn (string $message, array $context = []): bool => str_contains($message.json_encode($context), 'S3cret'));
 });

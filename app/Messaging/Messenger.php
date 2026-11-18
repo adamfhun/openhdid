@@ -7,6 +7,7 @@ use App\Clients\ClientTiers;
 use App\Enums\OutboundMessageStatus;
 use App\Jobs\SendOutboundMessage;
 use App\Models\Client;
+use App\Models\ClientPhoneNumber;
 use App\Models\OutboundMessage;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
@@ -31,6 +32,13 @@ use Illuminate\Support\Carbon;
  */
 class Messenger
 {
+    /** The meta key of a waiting PIN message: a fingerprint of the PIN it tells. */
+    public const PIN_REF = 'pin_ref';
+
+    public const WITHDRAWN_RECIPIENT = 'recipient_removed';
+
+    public const WITHDRAWN_PIN = 'pin_changed';
+
     /** How many queued messages one "send now" click sends inside the web request. */
     public const SEND_NOW_LIMIT = 25;
 
@@ -59,6 +67,11 @@ class Messenger
 
         if (($lifetime = $this->signInSecretLifetime($key)) !== null) {
             $meta['valid_until'] = now()->addMinutes($lifetime)->toIso8601String();
+        }
+
+        // Which PIN the message tells: it must not go out once that PIN is replaced or removed.
+        if ($key === MessageKey::PinSms) {
+            $meta[self::PIN_REF] = self::pinRef($client);
         }
 
         $message = OutboundMessage::query()->create([
@@ -148,6 +161,43 @@ class Messenger
         $this->auditRefusal($message, $refusal);
 
         return true;
+    }
+
+    /**
+     * Why a text message a template wrote for a client must not go out any
+     * more, asked just before it is sent, on the data as it stands then: the
+     * number it was queued for is no longer a number of the client (it was
+     * removed while the message waited, and its former holder would get the
+     * PIN or the code), or the PIN it tells was replaced or removed. Null
+     * while it may go.
+     */
+    public static function withdrawnReason(OutboundMessage $message): ?string
+    {
+        if ($message->channel !== Channel::Sms || $message->template_key === null || $message->client_id === null) {
+            return null;
+        }
+
+        if (! ClientPhoneNumber::query()->where('client_id', $message->client_id)->where('number_e164', $message->recipient)->exists()) {
+            return self::WITHDRAWN_RECIPIENT;
+        }
+
+        $pinRef = $message->meta[self::PIN_REF] ?? null;
+
+        if ($message->template_key === MessageKey::PinSms && is_string($pinRef) && ($message->client === null || ! hash_equals($pinRef, self::pinRef($message->client)))) {
+            return self::WITHDRAWN_PIN;
+        }
+
+        return null;
+    }
+
+    /**
+     * A fingerprint of the client's PIN as stored now (of its hash, read
+     * fresh), kept on a waiting PIN message; it tells nothing of the PIN and
+     * goes with the message's other details when the message is wiped.
+     */
+    private static function pinRef(Client $client): string
+    {
+        return hash('sha256', (string) Client::query()->whereKey($client->id)->value('pin_hash'));
     }
 
     /**

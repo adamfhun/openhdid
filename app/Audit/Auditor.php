@@ -70,12 +70,26 @@ class Auditor
             $context += ['caller_request_id' => $callerRequestId];
         }
 
+        $actorId = self::uuidOrNull($actor?->getAuthIdentifier());
+        $subjectId = self::uuidOrNull($subject?->getKey());
+
+        // The id columns are uuid columns (a native uuid type on MariaDB 10.7+): a record
+        // with another kind of key (the package's Role has an integer one) keeps it in the
+        // context, from where AuditLog::subjectRecord() resolves it again.
+        if ($actor !== null && $actorId === null && is_scalar($actor->getAuthIdentifier())) {
+            $context += ['actor_key' => $actor->getAuthIdentifier()];
+        }
+
+        if ($subject !== null && $subjectId === null && is_scalar($subject->getKey())) {
+            $context += ['subject_key' => $subject->getKey()];
+        }
+
         $attributes = [
             'event' => $event,
             'actor_type' => $actor instanceof Model ? $actor->getMorphClass() : null,
-            'actor_id' => $actor?->getAuthIdentifier(),
+            'actor_id' => $actorId,
             'subject_type' => $subject?->getMorphClass(),
-            'subject_id' => $subject?->getKey(),
+            'subject_id' => $subjectId,
             'context' => $context,
             'ip_address' => $this->request?->ip(),
             'user_agent' => $this->request?->userAgent() ? mb_substr($this->request->userAgent(), 0, 500) : null,
@@ -89,6 +103,11 @@ class Auditor
         }
 
         return AuditLog::query()->create($attributes);
+    }
+
+    private static function uuidOrNull(mixed $key): ?string
+    {
+        return is_string($key) && Str::isUuid($key) ? $key : null;
     }
 
     private static function carriesRequestInput(string $event): bool
@@ -178,6 +197,17 @@ class Auditor
 
     private function currentActor(): ?Authenticatable
     {
+        // The guard this request was authenticated with comes first (the auth
+        // middleware and the panel make it the default guard): one browser may
+        // hold a staff session on the panel and a client session on the portal,
+        // and what the client does on the portal is not the staff member's act,
+        // nor the other way round.
+        $default = $this->auth->guard()->user();
+
+        if ($default !== null) {
+            return $default;
+        }
+
         foreach (self::GUARDS as $guard) {
             $user = $this->auth->guard($guard)->user();
 

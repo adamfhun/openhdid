@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-#[Fillable(['id_session_id', 'question_id', 'question_version_id', 'verdict', 'check_attempts', 'check_result', 'check_distance', 'shown_at', 'decided_at'])]
+#[Fillable(['id_session_id', 'question_id', 'question_version_id', 'verdict', 'check_attempts', 'check_result', 'check_distance', 'checked_answer_revision', 'shown_at', 'decided_at'])]
 class IdSessionStep extends Model
 {
     use HasTimeOrderedUuidKey;

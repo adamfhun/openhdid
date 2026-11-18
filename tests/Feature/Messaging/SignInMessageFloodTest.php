@@ -5,6 +5,7 @@ use App\Auth\Role;
 use App\Enums\MfaMethod;
 use App\Enums\OutboundMessageStatus;
 use App\Enums\PhoneNumberSource;
+use App\Identification\PinService;
 use App\Jobs\SendOutboundMessage;
 use App\Mail\MagicLinkMail;
 use App\Messaging\Channel;
@@ -400,4 +401,66 @@ it('lets a newer staff sign-in code replace only the same user\'s older one on a
     $this->travel(61)->seconds();
     $send('user-a', '444444');
     expect(deliverNow($older)->status)->toBe(OutboundMessageStatus::Cancelled);
+});
+
+it('does not send a waiting PIN message once its number is no longer the client\'s, or once the PIN changed', function (Closure $change, string $reason, string $error): void {
+    Queue::fake();
+    $client = floodClient('a@x.hu', '+36301234567');
+    $client->phoneNumbers()->create(['number_e164' => '+36307654321', 'source' => PhoneNumberSource::Sync, 'is_primary' => false]);
+    app(PinService::class)->setPin($client, '482915');
+    $message = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '482915'], '+36301234567');
+
+    $change($client);
+    deliverNow($message);
+
+    expect($message->status)->toBe(OutboundMessageStatus::Cancelled)
+        ->and($message->error)->toBe(__($error))
+        ->and($message->isRedacted())->toBeTrue()
+        ->and($message->body)->toBe('')
+        ->and($this->sms->sent)->toBeEmpty()
+        ->and(AuditLog::query()->where('event', 'message.cancelled')->sole()->context)->toMatchArray(['message_id' => $message->id, 'reason' => $reason]);
+})->with([
+    'the number was removed, another one keeps the PIN alive' => [
+        fn (Client $client) => $client->phoneNumbers()->where('number_e164', '+36301234567')->sole()->delete(),
+        'recipient_removed', 'Not sent: the number is no longer a phone number of the client.',
+    ],
+    'the PIN was replaced' => [
+        fn (Client $client) => app(PinService::class)->setPin($client, '730164'),
+        'pin_changed', 'Not sent: the PIN was changed or removed before the message could go out.',
+    ],
+    'the PIN was removed' => [
+        fn (Client $client) => app(PinService::class)->clearPin($client),
+        'pin_changed', 'Not sent: the PIN was changed or removed before the message could go out.',
+    ],
+]);
+
+it('sends a waiting PIN message while its number and the PIN are unchanged, and keeps no trace of the PIN on it afterwards', function (): void {
+    Queue::fake();
+    $client = floodClient('a@x.hu', '+36301234567');
+    app(PinService::class)->setPin($client, '482915');
+    $message = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '482915'], '+36301234567');
+
+    // Another number becoming the primary one does not take the message from its number.
+    $client->phoneNumbers()->create(['number_e164' => '+36307654321', 'source' => PhoneNumberSource::Sync, 'is_primary' => false]);
+    $this->travel(3)->hours();
+
+    expect(deliverNow($message)->status)->toBe(OutboundMessageStatus::Sent)
+        ->and($this->sms->lastTo('+36301234567'))->toContain('482915')
+        ->and($message->meta)->toBeNull();
+});
+
+it('does not send a waiting login code to a number that was taken off the client', function (): void {
+    Queue::fake();
+    app(Settings::class)->set(SettingKey::ClientLoginOtpSmsEnabled, true);
+    $client = floodClient('a@x.hu', '+36301234567');
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'a@x.hu'])->assertOk();
+    $message = OutboundMessage::query()->sole();
+
+    $client->phoneNumbers()->sole()->delete();
+    deliverNow($message);
+
+    expect($message->status)->toBe(OutboundMessageStatus::Cancelled)
+        ->and($message->isRedacted())->toBeTrue()
+        ->and($this->sms->sent)->toBeEmpty()
+        ->and(AuditLog::query()->where('event', 'message.cancelled')->sole()->context['reason'])->toBe('recipient_removed');
 });

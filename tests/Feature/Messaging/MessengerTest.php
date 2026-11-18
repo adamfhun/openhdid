@@ -35,7 +35,7 @@ beforeEach(function (): void {
 
 it('stores an sms, sends it through the queue and fills the support placeholders by tier', function (): void {
     app(Settings::class)->set(SettingKey::SupportPremiumPhone, '+36 1 999');
-    $client = Client::factory()->premium()->create(['name' => 'Anna']);
+    $client = Client::factory()->withPhone('+36301234567')->premium()->create(['name' => 'Anna']);
 
     $message = app(Messenger::class)->sendTemplate(MessageKey::LoginOtpSms, $client, ['code' => '555555', 'minutes' => '5'], '+36301234567', 'hu');
 
@@ -68,7 +68,7 @@ it('records a failure, retries and gives up after the maximum attempts', functio
             return null;
         }
     });
-    $client = Client::factory()->create();
+    $client = Client::factory()->withPhone('+36301234567')->create();
 
     $message = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '1'], '+36301234567');
     expect($message->fresh()->status)->toBe(OutboundMessageStatus::Queued)
@@ -121,7 +121,7 @@ it('retries a failed message that still has its body, but only from the failed s
 
 it('cancels a queued message and wipes its secret, but leaves a message already being sent alone', function (): void {
     Queue::fake();
-    $client = Client::factory()->create();
+    $client = Client::factory()->withPhone('+36301234567')->create();
     $queued = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '123456'], '+36301234567');
     expect($queued->fresh()->body)->toContain('123456');
 
@@ -141,7 +141,7 @@ it('cancels a queued message and wipes its secret, but leaves a message already 
 
 it('flushes queued messages synchronously and re-queues stale ones', function (): void {
     Queue::fake();
-    $client = Client::factory()->create();
+    $client = Client::factory()->withPhone('+36301234567')->create();
     $queued = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '2'], '+36301234567');
     Queue::assertPushed(SendOutboundMessage::class, fn (SendOutboundMessage $job) => $job->messageId === $queued->id);
     expect($queued->fresh()->status)->toBe(OutboundMessageStatus::Queued);
@@ -165,7 +165,7 @@ it('sends a raw e-mail with the generic mailable', function (): void {
 });
 
 it('wipes the secret body once a message is sent or given up on, but keeps the subject', function (): void {
-    $client = Client::factory()->create();
+    $client = Client::factory()->withPhone('+36301234567')->create();
 
     $sent = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '123456'], '+36301234567');
     expect($this->sms->lastTo('+36301234567'))->toContain('123456')
@@ -201,14 +201,14 @@ it('is unique per message and claims the row only once', function (): void {
     expect($job)->toBeInstanceOf(ShouldBeUnique::class)
         ->and($job->uniqueId())->toBe('abc');
 
-    $client = Client::factory()->create();
+    $client = Client::factory()->withPhone('+36301234567')->create();
     $message = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '1'], '+36301234567');
     SendOutboundMessage::dispatchSync($message->id);
     expect($message->fresh()->attempts)->toBe(1)->and($this->sms->sent)->toHaveCount(1);
 });
 
 it('sends e-mail in the client\'s own language but SMS always in Hungarian', function (): void {
-    $client = Client::factory()->create(['locale' => 'en']);
+    $client = Client::factory()->withPhone('+36301234567')->create(['locale' => 'en']);
     app()->setLocale('hu');
 
     app(Messenger::class)->sendTemplate(MessageKey::LoginOtpSms, $client, ['code' => '111111', 'minutes' => '5'], '+36301234567');
@@ -230,7 +230,7 @@ it('masks codes in the log driver and posts to ozeki without retrying a timed-ou
 });
 
 it('audits the outcome of every message on the client: sent, or failed once the retries are used up', function (): void {
-    $client = Client::factory()->create();
+    $client = Client::factory()->withPhone('+36301234567')->create();
 
     $sent = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $client, ['pin' => '123456'], '+36301234567');
     $audit = AuditLog::query()->where('event', 'message.sent')->sole();

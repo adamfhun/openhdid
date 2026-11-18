@@ -490,6 +490,16 @@ class ClientPasswordlessLogin
             throw new LoginRejectedException(LoginRejection::InvalidCredentials);
         }
 
+        // The code proves its holder has the number it went to; that only counts
+        // while the number is still a sign-in number of the client. A number
+        // removed (or no longer vouched for) since the code was sent leaves its
+        // former holder with a code that is used up here and signs nobody in.
+        if (($refusal = app(SmsDestinations::class)->signInCodeRefusal($client, $record->destination)) !== null) {
+            $this->login->recordRejection(PrincipalType::Client, self::METHOD_OTP_SMS, LoginRejection::InvalidCredentials, ['email' => $client->email, 'detail' => $refusal], $client);
+
+            throw new LoginRejectedException(LoginRejection::InvalidCredentials);
+        }
+
         $client = $this->login->assertEligible($client, PrincipalType::Client, self::METHOD_OTP_SMS);
         $this->lockout->recordSuccess($client);
         $this->login->loginToSession($client, self::METHOD_OTP_SMS, context: $this->numberContext($client, $record->destination));

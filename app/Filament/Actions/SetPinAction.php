@@ -13,6 +13,7 @@ use App\Models\Client;
 use App\Sms\SmsDestinations;
 use Filament\Actions\Action;
 use Filament\Actions\Contracts\HasActions;
+use Filament\Facades\Filament;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
@@ -77,7 +78,7 @@ class SetPinAction
             ])
             ->action(function (Client $record, array $data, HasActions $livewire) use ($pins): void {
                 try {
-                    $pins->setPin($record, (string) $data['pin']);
+                    $pins->setPin($record, (string) $data['pin'], Filament::auth()->user());
                 } catch (ValidationException $e) {
                     $path = $livewire->getSchema($livewire->getMountedActionSchemaName())->getStatePath();
 

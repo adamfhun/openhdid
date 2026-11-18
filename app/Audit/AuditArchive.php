@@ -8,7 +8,9 @@ use App\Settings\Settings;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 
@@ -17,7 +19,8 @@ use RuntimeException;
  * `retention.audit_hot_days` days, where the panel searches them; every older
  * day is written to one compressed JSON Lines file with a SHA-256 sidecar on
  * the storage disk and deleted from the table, in batches, only after the
- * file is on disk. The files live for the general retention period and go
+ * file is on disk, and only the rows read back from that file (a run that
+ * stopped half-way goes on from the finished file, see archiveDay()). The files live for the general retention period and go
  * into the backups with the storage volume. Days are archived oldest first,
  * a bounded number per run, so a first run on an old installation catches up
  * over a few nights without holding the scheduler.
@@ -73,9 +76,12 @@ class AuditArchive
             $day = Carbon::parse($oldest)->toImmutable()->startOfDay();
             $written = $this->archiveDay($day);
 
-            $result['days']++;
-            $result['rows'] += $written['rows'];
-            $result['files'][] = $written['path'];
+            // A day whose file was finished earlier and holds nothing left to delete is not a day of this run.
+            if ($written['rows'] > 0) {
+                $result['days']++;
+                $result['rows'] += $written['rows'];
+                $result['files'][] = $written['path'];
+            }
 
             $oldest = AuditLog::query()->where('created_at', '>=', $day->addDay())->where('created_at', '<', $cutoff)->min('created_at');
         }
@@ -190,9 +196,19 @@ class AuditArchive
     }
 
     /**
-     * One day into one file, then the day's rows out of the table. A file
-     * left behind by an interrupted run is overwritten: its rows are still in
-     * the table, so the new file is complete.
+     * One day into one file, then the rows that are in the file out of the
+     * table. The table never gives up a row on the word of anything but a
+     * finished file that matches its checksum:
+     *
+     * - A file with a matching checksum is a finished archive of a run that
+     *   stopped while deleting. It is kept as it is and the deleting goes on
+     *   from it; writing it again from what is left in the table would lose
+     *   the rows already deleted, under a fresh checksum.
+     * - A file without a checksum is from a run that stopped while writing:
+     *   the checksum is written before the first row is deleted, so every
+     *   row is still in the table and the file is written again.
+     * - A file that does not match its checksum stops the run: nothing is
+     *   overwritten and nothing is deleted until somebody has looked at it.
      *
      * @return array{rows: int, path: string}
      */
@@ -200,13 +216,35 @@ class AuditArchive
     {
         $path = self::DIRECTORY.'/'.$day->format('Y').'/audit-'.$day->toDateString().'.jsonl.gz';
         $rows = AuditLog::query()->where('created_at', '>=', $day)->where('created_at', '<', $day->addDay());
+        $disk = $this->disk();
 
+        if ($disk->exists($path) && $disk->exists($path.'.sha256')) {
+            $this->assertMatchesChecksum($path);
+        } else {
+            $this->writeDay($path, $rows);
+        }
+
+        $deleted = $this->deleteArchivedRows($path, $rows);
+
+        // Dated into the day after its file was finished: it stays in the table,
+        // where the panel still shows it, and the file stays as it is.
+        if (($left = (clone $rows)->count()) > 0) {
+            Log::warning('Audit archive: entries of an archived day are not in its archive file and stay in the audit log table.', ['file' => $path, 'entries' => $left]);
+        }
+
+        return ['rows' => $deleted, 'path' => $path];
+    }
+
+    /**
+     * @param  Builder<AuditLog>  $rows
+     */
+    private function writeDay(string $path, Builder $rows): void
+    {
         $tmp = tempnam(sys_get_temp_dir(), 'hdid-audit-');
         if ($tmp === false || ($gz = gzopen($tmp, 'wb9')) === false) {
             throw new RuntimeException('Cannot open a temporary file for the audit archive.');
         }
 
-        $count = 0;
         $disk = $this->disk();
 
         // The temporary file holds audit entries: removed on every path, a failed write too.
@@ -214,11 +252,13 @@ class AuditArchive
             try {
                 foreach ((clone $rows)->orderBy('id')->lazyById(self::BATCH) as $entry) {
                     gzwrite($gz, json_encode($entry->toArray(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
-                    $count++;
                 }
             } finally {
                 gzclose($gz);
             }
+
+            // A checksum left from an earlier state must not vouch for the new file.
+            $disk->delete($path.'.sha256');
 
             $stream = fopen($tmp, 'rb');
             try {
@@ -236,13 +276,83 @@ class AuditArchive
             @unlink($tmp);
         }
 
+        // Written last, and only then may a row go: a file without it is unfinished.
         $disk->put($path.'.sha256', $sum.'  '.basename($path)."\n");
+    }
 
-        // The file is on disk: the rows may go. Batches keep the lock short.
-        do {
-            $deleted = (clone $rows)->limit(self::BATCH)->delete();
-        } while ($deleted === self::BATCH);
+    /**
+     * @throws RuntimeException when the stored file is not the one its checksum was made of
+     */
+    private function assertMatchesChecksum(string $path): void
+    {
+        $disk = $this->disk();
+        $expected = trim((string) explode(' ', (string) $disk->get($path.'.sha256'), 2)[0]);
+        $stream = $disk->readStream($path);
 
-        return ['rows' => $count, 'path' => $path];
+        if (! is_resource($stream)) {
+            throw new RuntimeException('Cannot read the audit archive file '.$path.'.');
+        }
+
+        try {
+            $hash = hash_init('sha256');
+            hash_update_stream($hash, $stream);
+            $actual = hash_final($hash);
+        } finally {
+            fclose($stream);
+        }
+
+        if ($expected === '' || ! hash_equals($expected, $actual)) {
+            throw new RuntimeException('The audit archive file '.$path.' does not match its checksum: it is left untouched and no entry of its day is deleted. Compare it with a backup, then restore the file or remove both the file and its .sha256 to archive the day again from the table.');
+        }
+    }
+
+    /**
+     * Deletes the rows of the day that the finished file holds, by the ids
+     * read back from the file itself, in batches that keep the lock short.
+     * Returns the number of rows deleted.
+     *
+     * @param  Builder<AuditLog>  $rows
+     */
+    private function deleteArchivedRows(string $path, Builder $rows): int
+    {
+        $stream = $this->disk()->readStream($path);
+
+        if (! is_resource($stream)) {
+            throw new RuntimeException('Cannot read the audit archive file '.$path.'.');
+        }
+
+        // Reads the gzip format as a stream: the day never has to fit in memory.
+        stream_filter_append($stream, 'zlib.inflate', STREAM_FILTER_READ, ['window' => 15 + 16]);
+
+        $deleted = 0;
+        $ids = [];
+        $flush = function () use (&$ids, &$deleted, $rows): void {
+            if ($ids !== []) {
+                $deleted += (clone $rows)->whereIn('id', $ids)->delete();
+                $ids = [];
+            }
+        };
+
+        try {
+            while (($line = fgets($stream)) !== false) {
+                $id = json_decode($line, true)['id'] ?? null;
+
+                if (! is_string($id)) {
+                    throw new RuntimeException('The audit archive file '.$path.' holds a line without an entry id; no further entry of its day is deleted.');
+                }
+
+                $ids[] = $id;
+
+                if (count($ids) === self::BATCH) {
+                    $flush();
+                }
+            }
+
+            $flush();
+        } finally {
+            fclose($stream);
+        }
+
+        return $deleted;
     }
 }

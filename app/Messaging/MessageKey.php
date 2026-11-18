@@ -86,6 +86,33 @@ enum MessageKey: string
     }
 
     /**
+     * The placeholders that carry the message's secret: the login link, the
+     * PIN, a code. They belong in the body, which is wiped once the message
+     * is out; the subject stays on the message for good.
+     *
+     * @return list<string>
+     */
+    public function secretPlaceholders(): array
+    {
+        return match ($this) {
+            self::MagicLink => ['link'],
+            self::PinSms => ['pin'],
+            self::LoginOtpSms, self::PhoneVerifySms => ['code'],
+            self::SignInNumberAdded => [],
+        };
+    }
+
+    /**
+     * What a subject may hold: every placeholder but the secret ones.
+     *
+     * @return array<string, string>
+     */
+    public function subjectPlaceholders(): array
+    {
+        return array_diff_key($this->placeholders(), array_flip($this->secretPlaceholders()));
+    }
+
+    /**
      * Sample values for previews and test sends.
      *
      * @return array<string, string>

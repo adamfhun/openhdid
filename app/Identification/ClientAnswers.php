@@ -10,6 +10,7 @@ use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Str;
 
 /**
  * A client's answers and their eligibility for Q-A identification.
@@ -97,6 +98,20 @@ class ClientAnswers
             ->where('client_id', $client->id)
             ->whereHas('question', fn ($q) => $q->active()->whereColumn('questions.current_version_id', '!=', 'client_answers.question_version_id'))
             ->get();
+    }
+
+    /**
+     * The revision of a stored answer: a random value that changes with its
+     * text. An answer saved before revisions existed gets one here, without
+     * a new modification time or an audit entry (nothing about it changed).
+     */
+    public function revisionOf(ClientAnswer $answer): string
+    {
+        if ($answer->revision === null) {
+            ClientAnswer::withoutTimestamps(fn () => $answer->forceFill(['revision' => (string) Str::uuid()])->saveQuietly());
+        }
+
+        return (string) $answer->revision;
     }
 
     public function usableCount(Client $client): int

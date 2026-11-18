@@ -464,6 +464,13 @@ error starts with the HTTP status and says what Exchange answered.
   konténer nem indul, máshol a Levelezés csempe sárga (10. fejezet). / Do not switch the certificate check off: only
   an explicit `EWS_VERIFY_TLS=false` does, in production the container does not start with it, elsewhere the Mail
   tile is yellow (chapter 10).
+- Az SMS-ek „elküldve” állapotban maradnak, a Kimenő üzenetek kártya szerint esedékes kézbesítési lekérdezés
+  nem futott, és a `docker compose logs scheduler` percenként `Data too long for column 'status'` hibát mutat:
+  az 1.15.5 előtti változat hibája (az első nem kézbesíthető SMS megállította a lekérdezéseket). Az 1.15.5-re
+  frissítés után az első ellenőrzés a beragadt üzeneteket is feldolgozza. / SMS stay "sent", the Outbound
+  messages tile says a due delivery query did not run, and `docker compose logs scheduler` shows `Data too long
+  for column 'status'` every minute: a bug before 1.15.5 (the first undeliverable SMS stopped the queries). After
+  the upgrade to 1.15.5 the first check processes the waiting messages too.
 
 ## 14. Mentés és visszaállítás / Backup and restore
 

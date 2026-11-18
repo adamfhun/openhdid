@@ -59,6 +59,11 @@ class QaSessionEngine
             throw new IdentificationException(__('The client\'s account is closed or no longer entitled; it cannot be identified.'));
         }
 
+        // The answers may be the previous holder's while the move between two EMD records is undecided.
+        if ($client->holderChangePending()) {
+            throw new IdentificationException(__('The identification of this client is suspended until the next master data sync decides whether the account went to another person.'));
+        }
+
         if (! $this->answers->isEligible($client)) {
             throw new IdentificationException(__('The client has not answered enough questions (:n required).', ['n' => $this->answers->requiredCount()]));
         }
@@ -163,7 +168,10 @@ class QaSessionEngine
 
     /**
      * The stored answer for a step: while pending, or in a blind check only
-     * once the typed answer matched it.
+     * once the typed answer matched it, and only while the stored answer is
+     * still the revision that was compared. An answer the client saved after
+     * the match was never proven by the caller: of that the agent only keeps
+     * the fact of the earlier match.
      */
     public function revealAnswer(IdSessionStep $step): ?string
     {
@@ -173,7 +181,13 @@ class QaSessionEngine
             return null;
         }
 
-        return $this->answers->usable($session->client)->firstWhere('question_id', $step->question_id)?->answer;
+        $answer = $this->answers->usable($session->client)->firstWhere('question_id', $step->question_id);
+
+        if ($session->blind_check && ($answer?->revision === null || $step->checked_answer_revision === null || ! hash_equals($step->checked_answer_revision, $answer->revision))) {
+            return null;
+        }
+
+        return $answer?->answer;
     }
 
     public function decide(IdSessionStep $step, StepVerdict $verdict, ?User $agent = null): IdSession
@@ -223,7 +237,8 @@ class QaSessionEngine
                 }
 
                 $locked->setRelation('session', $session);
-                $stored = $this->answers->usable($session->client)->firstWhere('question_id', $locked->question_id)?->answer;
+                $answer = $this->answers->usable($session->client)->firstWhere('question_id', $locked->question_id);
+                $stored = $answer?->answer;
 
                 // The client changed or removed the answer meanwhile: nothing to compare with.
                 if ($stored === null) {
@@ -234,7 +249,13 @@ class QaSessionEngine
 
                 ['result' => $result, 'distance' => $distance] = $this->matcher->compare($stored, $given, (int) $session->typo_tolerance);
                 $attempt = $locked->check_attempts + 1;
-                $locked->forceFill(['check_attempts' => $attempt, 'check_result' => $result, 'check_distance' => $distance === null ? null : min($distance, 255)])->save();
+                $locked->forceFill([
+                    'check_attempts' => $attempt,
+                    'check_result' => $result,
+                    'check_distance' => $distance === null ? null : min($distance, 255),
+                    // A match is bound to the revision of the answer it was compared with.
+                    'checked_answer_revision' => $result === AnswerCheckResult::Matched ? $this->answers->revisionOf($answer) : null,
+                ])->save();
 
                 $this->auditor->record('id_session.answer_checked', $session, ['step_id' => $locked->id, 'result' => $result->value, 'attempt' => $attempt] + ($distance === null ? [] : ['distance' => $distance]));
 
@@ -315,6 +336,13 @@ class QaSessionEngine
                     ! $client->isClosed() && $this->tiers->heldBackByPremiumOnly($client) ? ['premium_only' => true] : []);
 
                 return new IdentificationException(__('The client\'s account is closed or no longer entitled; it cannot be identified.'));
+            }
+
+            // A move between two EMD records became undecided while the session was open.
+            if ($client->holderChangePending()) {
+                $this->finish($session, IdSessionStatus::Failed, 'holder_change_pending');
+
+                return new IdentificationException(__('The identification of this client is suspended until the next master data sync decides whether the account went to another person.'));
             }
 
             return $work($session);

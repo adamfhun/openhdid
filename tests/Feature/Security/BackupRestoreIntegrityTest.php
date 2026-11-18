@@ -114,3 +114,42 @@ it('archives a CA folder of symbolic links as plain files, so the restore check 
         @unlink($dir.'/host-ca.crt');
     }
 });
+
+it('restores the CA set exactly as the backup holds it, an empty one too, so a CA added since is trusted no more', function (bool $backupHadCa): void {
+    $script = (string) openhdidReleaseFile('backup.sh');
+    preg_match('/^config_archive\(\) \{.*?^\}\n/ms', $script, $archive);
+    preg_match('/^restore_config\(\) \{.*?^\}\n/ms', $script, $restore);
+    expect($restore[0] ?? null)->not->toBeNull('backup.sh restores the configuration in restore_config()');
+
+    $dir = sys_get_temp_dir().'/hdid-restore-ca-'.bin2hex(random_bytes(4));
+    mkdir($dir, 0o755, true);
+    foreach (['.env', 'db.env', 'compose.yaml'] as $file) {
+        file_put_contents($dir.'/'.$file, "# {$file}\n");
+    }
+    if ($backupHadCa) {
+        mkdir($dir.'/ca');
+        file_put_contents($dir.'/ca/company-ca.crt', "-----BEGIN CERTIFICATE-----\nold\n");
+    }
+
+    try {
+        $run = fn (string $commands) => Process::path($dir)->run(['bash', '-c', 'set -euo pipefail; DIR=$PWD; die() { echo "DIE: $*"; exit 1; }; '.$archive[0].$restore[0].$commands]);
+
+        $backup = $run('mkdir -m 700 work && config_archive work > config.tar.gz');
+        expect($backup->exitCode())->toBe(0, $backup->output().$backup->errorOutput());
+
+        // After the backup somebody adds a CA: the container would trust it at its next start.
+        @mkdir($dir.'/ca');
+        file_put_contents($dir.'/ca/added-later.crt', "-----BEGIN CERTIFICATE-----\nnew\n");
+        file_put_contents($dir.'/.env', "# changed\n");
+
+        $restored = $run('restore_config config.tar.gz');
+
+        expect($restored->exitCode())->toBe(0, $restored->output().$restored->errorOutput())
+            ->and(file_exists($dir.'/ca/added-later.crt'))->toBeFalse('a CA the backup does not hold stays trusted after the restore')
+            ->and(file_get_contents($dir.'/.env'))->toBe("# .env\n")
+            ->and(is_file($dir.'/ca/company-ca.crt'))->toBe($backupHadCa)
+            ->and(is_dir($dir.'/ca'))->toBe($backupHadCa);
+    } finally {
+        File::deleteDirectory($dir);
+    }
+})->with(['the backup was made without a ca folder' => [false], 'the backup holds one CA' => [true]]);

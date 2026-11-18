@@ -111,7 +111,10 @@ class MessageTemplateResource extends BaseResource
                         ->helperText(fn (Get $get, MessageTemplate $record) => static::smsLengthHint((string) ($get('body') ?: $record->key->defaultBody($record->locale))))
                         ->columnSpanFull(),
                     View::make('filament.admin.template-placeholders')
-                        ->viewData(fn (MessageTemplate $record) => ['placeholders' => $record->key->placeholders()])
+                        ->viewData(fn (MessageTemplate $record) => [
+                            'placeholders' => $record->key->placeholders(),
+                            'bodyOnly' => $record->key->channel() === Channel::Email ? $record->key->secretPlaceholders() : [],
+                        ])
                         ->columnSpanFull(),
                 ]),
             Section::make(__('Preview'))

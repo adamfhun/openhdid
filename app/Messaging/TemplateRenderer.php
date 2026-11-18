@@ -24,7 +24,9 @@ class TemplateRenderer
     public function render(MessageKey $key, string $locale, array $data, bool $withLayout = true): RenderedMessage
     {
         $template = $this->template($key, $locale);
-        $subject = $template['subject'] === null ? null : $this->substitute($template['subject'], $data, html: false);
+        // The subject never gets the secret values, whatever the stored template asks for
+        // (one saved before the rule too): it stays on the message after the body is wiped.
+        $subject = $template['subject'] === null ? null : $this->substitute($template['subject'], array_diff_key($data, array_flip($key->secretPlaceholders())), html: false);
         $body = $this->substitute($template['body'], $data, html: $key->channel() === Channel::Email);
 
         if ($key->channel() === Channel::Email && $withLayout) {
@@ -78,7 +80,15 @@ class TemplateRenderer
      */
     public function assertPlaceholdersKnown(MessageKey $key, ?string $text, string $field = 'body'): void
     {
-        $unknown = array_diff($this->placeholdersIn((string) $text), array_keys($key->placeholders()));
+        $used = $this->placeholdersIn((string) $text);
+
+        if ($field === 'subject' && ($secret = array_values(array_intersect($used, $key->secretPlaceholders()))) !== []) {
+            throw ValidationException::withMessages([
+                $field => __('The subject cannot hold :list: it stays readable on the message after sending, while the body is wiped. Allowed in the subject: :allowed', ['list' => implode(', ', $secret), 'allowed' => implode(', ', array_keys($key->subjectPlaceholders()))]),
+            ]);
+        }
+
+        $unknown = array_diff($used, array_keys($key->placeholders()));
 
         if ($unknown !== []) {
             throw ValidationException::withMessages([

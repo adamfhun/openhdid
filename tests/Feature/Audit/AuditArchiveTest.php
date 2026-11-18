@@ -14,6 +14,7 @@ use App\System\CheckStatus;
 use App\System\HealthChecks;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Facades\Filament;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 
@@ -179,4 +180,93 @@ it('leaves no temporary file behind when writing the archive file fails', functi
 
     expect(array_values(array_diff(glob(sys_get_temp_dir().'/hdid-audit-*') ?: [], $before)))->toBe([])
         ->and(AuditLog::query()->where('event', 'login.succeeded')->exists())->toBeTrue('nothing leaves the table without its file');
+});
+
+/**
+ * The entries of an archive file, and the file's path, for the day so many days ago.
+ *
+ * @return array{path: string, entries: list<array<string, mixed>>}
+ */
+function archivedDay(int $daysAgo): array
+{
+    $day = now()->subDays($daysAgo)->toDateString();
+    $path = AuditArchive::DIRECTORY.'/'.substr($day, 0, 4).'/audit-'.$day.'.jsonl.gz';
+    $lines = array_filter(explode("\n", (string) gzdecode((string) Storage::disk('local')->get($path))));
+
+    return ['path' => $path, 'entries' => array_values(array_map(fn (string $line): array => json_decode($line, true), $lines))];
+}
+
+it('keeps a finished archive file when the run stopped while deleting its rows, and deletes the rest from it', function (): void {
+    app(Settings::class)->set(SettingKey::RetentionAuditHotDays, 150);
+    $entries = [auditEntryOn('old.one', 200), auditEntryOn('old.two', 200), auditEntryOn('old.three', 200)];
+    $archive = app(AuditArchive::class);
+    $archive->archive();
+
+    ['path' => $path] = archivedDay(200);
+    $file = Storage::disk('local')->get($path);
+    $sum = Storage::disk('local')->get($path.'.sha256');
+
+    // The state an interrupted run leaves: the whole day in the file, a part of it still in the table.
+    AuditLog::query()->insert(['id' => $entries[2]->id, 'event' => 'old.three', 'context' => json_encode(['days_ago' => 200]), 'created_at' => $entries[2]->created_at]);
+
+    $result = $archive->archive();
+
+    expect(Storage::disk('local')->get($path))->toBe($file, 'the complete file is not rewritten from what is left in the table')
+        ->and(Storage::disk('local')->get($path.'.sha256'))->toBe($sum)
+        ->and(array_column(archivedDay(200)['entries'], 'event'))->toBe(['old.one', 'old.two', 'old.three'])
+        ->and(AuditLog::query()->whereKey($entries[2]->id)->exists())->toBeFalse('the archived row leaves the table')
+        ->and($result['rows'])->toBe(1);
+});
+
+it('writes the day again when only a file without its checksum was left behind, because no row was deleted yet', function (): void {
+    app(Settings::class)->set(SettingKey::RetentionAuditHotDays, 150);
+    auditEntryOn('old.one', 200);
+    auditEntryOn('old.two', 200);
+    $day = now()->subDays(200)->toDateString();
+    $path = AuditArchive::DIRECTORY.'/'.substr($day, 0, 4).'/audit-'.$day.'.jsonl.gz';
+    // A run that stopped while writing: half a file, no checksum.
+    Storage::disk('local')->put($path, substr((string) gzencode('{"id":"x","event":"old.one"}'."\n"), 0, 12));
+
+    app(AuditArchive::class)->archive();
+
+    expect(array_column(archivedDay(200)['entries'], 'event'))->toBe(['old.one', 'old.two'])
+        ->and(trim(explode(' ', (string) Storage::disk('local')->get($path.'.sha256'))[0]))->toBe(hash('sha256', (string) Storage::disk('local')->get($path)))
+        ->and(AuditLog::query()->whereIn('event', ['old.one', 'old.two'])->count())->toBe(0);
+});
+
+it('stops without touching the file or the table when an archive file does not match its checksum', function (): void {
+    app(Settings::class)->set(SettingKey::RetentionAuditHotDays, 150);
+    $entry = auditEntryOn('old.one', 200);
+    $archive = app(AuditArchive::class);
+    $archive->archive();
+    ['path' => $path] = archivedDay(200);
+
+    Storage::disk('local')->put($path, (string) gzencode('{"id":"'.$entry->id.'","event":"forged"}'."\n"));
+    $forged = Storage::disk('local')->get($path);
+    AuditLog::query()->insert(['id' => $entry->id, 'event' => 'old.one', 'created_at' => $entry->created_at]);
+
+    expect(fn () => $archive->archive())->toThrow(RuntimeException::class, 'does not match its checksum');
+
+    expect(Storage::disk('local')->get($path))->toBe($forged)
+        ->and(AuditLog::query()->whereKey($entry->id)->exists())->toBeTrue('nothing is deleted on the word of a file that fails its checksum');
+});
+
+it('leaves a row in the table that the finished archive file of its day does not hold', function (): void {
+    app(Settings::class)->set(SettingKey::RetentionAuditHotDays, 150);
+    auditEntryOn('old.one', 200);
+    $archive = app(AuditArchive::class);
+    $archive->archive();
+    ['path' => $path] = archivedDay(200);
+    $file = Storage::disk('local')->get($path);
+
+    // An entry dated into the archived day afterwards: not in the file, so it must not be deleted.
+    $late = auditEntryOn('old.late', 200);
+    Log::spy();
+
+    $result = $archive->archive();
+
+    expect(Storage::disk('local')->get($path))->toBe($file)
+        ->and(AuditLog::query()->whereKey($late->id)->exists())->toBeTrue()
+        ->and($result['days'])->toBe(0);
+    Log::shouldHaveReceived('warning')->withArgs(fn (string $message): bool => str_contains($message, 'not in its archive file'))->once();
 });

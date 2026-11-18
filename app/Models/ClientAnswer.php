@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Str;
 
 /**
  * The answer is stored encrypted (agents must read it), plus a hash of the
@@ -22,6 +23,13 @@ class ClientAnswer extends Model
 {
     use Auditable;
 
+    /**
+     * The revision is housekeeping, not a change worth an audit entry.
+     *
+     * @var list<string>
+     */
+    protected array $auditExclude = ['revision'];
+
     /** @use HasFactory<ClientAnswerFactory> */
     use HasFactory;
 
@@ -31,6 +39,20 @@ class ClientAnswer extends Model
     protected function casts(): array
     {
         return ['answer' => 'encrypted'];
+    }
+
+    /**
+     * A new random revision whenever the answer's text changes, on whatever
+     * path it is written: a blind check that matched shows the stored answer
+     * only while it still is the revision that was compared.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (self $answer): void {
+            if ($answer->revision === null || $answer->isDirty(['answer', 'answer_hash'])) {
+                $answer->revision = (string) Str::uuid();
+            }
+        });
     }
 
     /** @return BelongsTo<Client, $this> */

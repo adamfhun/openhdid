@@ -156,9 +156,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       # Every npm package of the release is a build dependency; vue and vue-router are bundled into the
       # browser code, so the whole lock file is audited (without the dev dependencies nothing would be).
+      # The script and its waivers (an advisory without a fixed version that does not reach the release,
+      # with a reason and a review date) come from the release tag, like the advisory script above.
       - name: Audit the JavaScript packages of the release
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
-        run: npm audit --package-lock-only --audit-level=high
+        run: bash .github/scripts/npm-audit.sh --package-lock-only
       - name: Audit the PHP packages of the release
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |

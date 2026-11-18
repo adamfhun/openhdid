@@ -12,6 +12,7 @@ use App\Identification\IdentificationException;
 use App\Identification\QaSessionEngine;
 use App\Models\AuditLog;
 use App\Models\Client;
+use App\Models\ClientAnswer;
 use App\Models\IdSession;
 use App\Models\IdSessionStep;
 use App\Models\Question;
@@ -200,4 +201,64 @@ it('keeps the distance of a missed answer out of the step and the audit log, and
     expect($matched->check_result?->value)->toBe('matched')
         ->and($matched->check_distance)->not->toBeNull()
         ->and($entry->context)->toHaveKey('distance');
+});
+
+it('shows a matched answer only while it is the answer that was compared, not one the client saved afterwards', function (): void {
+    $session = $this->engine->start($this->client, $this->agent);
+    $checked = $this->engine->check($this->engine->next($session, $this->agent), 'arvizturo tukorfurogep', $this->agent);
+    $question = Question::query()->findOrFail($checked->question_id);
+
+    expect($this->engine->revealAnswer($checked))->toBe('Árvíztűrő Tükörfúrógép');
+
+    // The same answer saved again is still the answer the caller proved.
+    app(ClientAnswers::class)->save($this->client, $question, 'Árvíztűrő Tükörfúrógép');
+    expect($this->engine->revealAnswer($checked->fresh()))->toBe('Árvíztűrő Tükörfúrógép');
+
+    // The client saves a new answer on the portal: the caller never proved this one.
+    app(ClientAnswers::class)->save($this->client, $question, 'Az új titkos válasz');
+    expect($this->engine->revealAnswer($checked->fresh()))->toBeNull()
+        ->and($checked->fresh()->check_result)->toBe(AnswerCheckResult::Matched);
+
+    // Changing it back to the old text is a new answer all the same.
+    app(ClientAnswers::class)->save($this->client, $question, 'Árvíztűrő Tükörfúrógép');
+    expect($this->engine->revealAnswer($checked->fresh()))->toBeNull();
+});
+
+it('tells the agent on the page that a matched answer changed since, without showing the new one', function (): void {
+    $page = Livewire::test(Identify::class, ['client' => $this->client->id])->call('startQa');
+    $page->set('givenAnswer', 'árvíztűrő tükörfúrógép')->call('checkAnswer')
+        ->assertSee(trans_choice('{0} The previous answer matched: :answer|{1} The previous answer matched with 1 typo: :answer|[2,*] The previous answer matched with :n typos: :answer', 0, ['n' => 0, 'answer' => 'Árvíztűrő Tükörfúrógép']));
+
+    $matched = IdSession::query()->sole()->steps()->where('check_result', AnswerCheckResult::Matched)->sole();
+    app(ClientAnswers::class)->save($this->client, Question::query()->findOrFail($matched->question_id), 'Az új titkos válasz');
+
+    $page->call('$refresh')
+        ->assertSee(__('The previous answer matched. The stored answer has changed since, so it is not shown.'))
+        ->assertDontSee('Az új titkos válasz');
+});
+
+it('gives an answer saved before revisions existed its revision at the first match, without touching it otherwise', function (): void {
+    ClientAnswer::query()->update(['revision' => null]);
+    $before = ClientAnswer::query()->pluck('updated_at', 'id');
+    $answerEntries = fn (): int => AuditLog::query()->where('subject_type', (new ClientAnswer)->getMorphClass())->count();
+    $audited = $answerEntries();
+
+    $session = $this->engine->start($this->client, $this->agent);
+    $checked = $this->engine->check($this->engine->next($session, $this->agent), 'arvizturo tukorfurogep', $this->agent);
+    $answer = ClientAnswer::query()->where('question_id', $checked->question_id)->sole();
+
+    expect($answer->revision)->not->toBeNull()
+        ->and($checked->checked_answer_revision)->toBe($answer->revision)
+        ->and($this->engine->revealAnswer($checked))->toBe('Árvíztűrő Tükörfúrógép')
+        ->and($answer->updated_at->equalTo($before[$answer->id]))->toBeTrue()
+        ->and(ClientAnswer::query()->whereNull('revision')->count())->toBe(4)
+        ->and($answerEntries())->toBe($audited);
+});
+
+it('keeps the revision of a miss out of the step', function (): void {
+    $session = $this->engine->start($this->client, $this->agent);
+    $checked = $this->engine->check($this->engine->next($session, $this->agent), 'Teljesen más', $this->agent);
+
+    expect($checked->check_result)->toBe(AnswerCheckResult::Mismatch)
+        ->and($checked->checked_answer_revision)->toBeNull();
 });

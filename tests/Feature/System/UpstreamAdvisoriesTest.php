@@ -482,7 +482,7 @@ it('audits the bundled JavaScript of the latest release tag every week', functio
     $job = upstreamAdvisoriesJob(upstreamAdvisoriesRelease('.github/workflows/security-scan.yml'), 'upstream');
     $package = json_decode(upstreamAdvisoriesRelease('package.json'), true);
 
-    expect(strpos($job, 'npm audit --package-lock-only --audit-level=high'))->toBeGreaterThan((int) strpos($job, 'ref: v${{ steps.image.outputs.release }}'));
+    expect(strpos($job, 'bash .github/scripts/npm-audit.sh --package-lock-only'))->toBeGreaterThan((int) strpos($job, 'ref: v${{ steps.image.outputs.release }}'));
 
     // vue and vue-router are bundled into the browser code but listed as build dependencies, like the
     // rest of the front end: an audit without the dev dependencies would audit nothing at all.
@@ -517,7 +517,7 @@ it('lets the preflight publish the advisory script and lint it with the pinned s
     expect($found->successful())->toBeTrue($found->errorOutput())
         ->and(array_filter(explode("\n", $found->output())))->toEqualCanonicalizing(['.github/scripts/fetch.py', '.github/scripts/notes.yaml', '.github/dependabot.yml']);
 
-    expect($preflight)->toContain('"$SHELLCHECK_IMAGE" -s bash install.sh backup.sh .github/scripts/upstream-advisories.sh');
+    expect($preflight)->toContain('"$SHELLCHECK_IMAGE" -s bash install.sh backup.sh .github/scripts/upstream-advisories.sh .github/scripts/npm-audit.sh');
 
     // bash 3.2 to 5 under set -euo pipefail: no associative arrays or case conversion, no early-exiting readers.
     $script = upstreamAdvisoriesRelease('.github/scripts/upstream-advisories.sh');

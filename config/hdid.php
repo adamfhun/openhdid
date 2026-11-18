@@ -90,7 +90,8 @@ return [
     // Client logins need a present EMD record carrying the account's e-mail. False lets clients
     // sign in without one (closure, packages and the per-request checks stay); staff are not affected.
     'client_login' => [
-        'require_emd' => filter_var(env('CLIENT_LOGIN_REQUIRE_EMD', true), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true,
+        // Only an explicit false turns it off; an empty line keeps it on.
+        'require_emd' => in_array(env('CLIENT_LOGIN_REQUIRE_EMD'), [null, ''], true) ? true : (filter_var(env('CLIENT_LOGIN_REQUIRE_EMD'), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true),
     ],
 
     // Staff MFA: "amr" values of a verified SSO ID token that prove the provider already asked for a
@@ -160,7 +161,8 @@ return [
     'security' => [
         // Content-Security-Policy header; keep it on in production, add the
         // Vite dev server or other hosts to the extra sources when needed.
-        'csp_enabled' => (bool) env('HDID_CSP_ENABLED', env('APP_ENV') !== 'local'),
+        // Only an explicit false turns it off; an empty line keeps the default.
+        'csp_enabled' => in_array(env('HDID_CSP_ENABLED'), [null, ''], true) ? env('APP_ENV') !== 'local' : (filter_var(env('HDID_CSP_ENABLED'), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? env('APP_ENV') !== 'local'),
         'csp_extra_sources' => env('HDID_CSP_EXTRA_SOURCES', ''),
     ],
 
@@ -189,7 +191,8 @@ return [
 
     'oidc' => [
         // A company sign-in without a stable subject (Entra oid, ADFS sub) is refused; false signs it in unbound.
-        'require_subject' => filter_var(env('HDID_SSO_REQUIRE_SUBJECT', true), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true,
+        // Only an explicit false turns it off; an empty line keeps it on.
+        'require_subject' => in_array(env('HDID_SSO_REQUIRE_SUBJECT'), [null, ''], true) ? true : (filter_var(env('HDID_SSO_REQUIRE_SUBJECT'), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true),
         'user' => [
             // Which claim finds the account: "email" (default) or "employee_id" (compared with the EMD external id).
             'match' => env('USER_SSO_MATCH'),

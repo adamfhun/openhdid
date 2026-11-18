@@ -132,6 +132,18 @@ function expectCanaryAsText(string $html, string $marker = 'hdidLinkCanary'): vo
  */
 function ewsConfigWithEnv(array $env): array
 {
+    return configFileWithEnv('hdid', $env)['ews'];
+}
+
+/**
+ * A config file as it reads the given environment values (APP_ENV too), without
+ * touching the loaded configuration: the way an operator's .env line reaches the app.
+ *
+ * @param  array<string, string>  $env
+ * @return array<string, mixed>
+ */
+function configFileWithEnv(string $name, array $env): array
+{
     $saved = [];
     foreach ($env as $key => $value) {
         $saved[$key] = [$_ENV[$key] ?? null, $_SERVER[$key] ?? null];
@@ -139,7 +151,7 @@ function ewsConfigWithEnv(array $env): array
     }
 
     try {
-        return (require config_path('hdid.php'))['ews'];
+        return require config_path($name.'.php');
     } finally {
         foreach ($saved as $key => [$envValue, $serverValue]) {
             if ($envValue === null) {

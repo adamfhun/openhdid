@@ -100,6 +100,27 @@ class SmsDestinations
     }
 
     /**
+     * Why a sign-in code sent to this number does not sign the client in any
+     * more, read from the numbers as they stand now: the number was removed
+     * since, lost what vouched for it, or may not receive SMS any more. Null
+     * while it is still one of the client's sign-in numbers; it need not be
+     * the one a new code would go to, so making another number the primary
+     * one does not void the code of the rightful holder.
+     */
+    public function signInCodeRefusal(Client $client, ?string $number): ?string
+    {
+        /** @var ClientPhoneNumber|null $phone */
+        $phone = $number === null ? null : $client->phoneNumbers()->where('number_e164', $number)->first();
+
+        return match (true) {
+            $phone === null => 'destination_removed',
+            ! $phone->vouchedForSignIn() => 'destination_not_vouched',
+            ! $this->allows($phone->number_e164) => 'destination_not_accepted',
+            default => null,
+        };
+    }
+
+    /**
      * @return Collection<int, ClientPhoneNumber> the primary number first
      */
     private function orderedNumbers(Client $client): Collection

@@ -533,6 +533,23 @@ it('reads EWS_VERIFY_TLS the same way in the application and in the container st
     expect($container)->toBe($app);
 })->with(['', 'empty', 'garbage', 'true', 'false', '0', 'off', 'no']);
 
+it('refuses to start in production while the session cookie is readable from JavaScript', function (): void {
+    $result = runContainerCheckEnv(['SESSION_HTTP_ONLY' => 'false']);
+
+    expect($result->exitCode())->toBe(64)
+        ->and($result->errorOutput())->toContain('SESSION_HTTP_ONLY=false is not allowed in production.');
+
+    expect(runContainerCheckEnv(['SESSION_HTTP_ONLY' => ''])->exitCode())->toBe(0, 'an empty value keeps HttpOnly on');
+});
+
+it('reads the session cookie switches the same way in the application and in the container start check', function (string $key, string $value): void {
+    $config = configFileWithEnv('session', ['APP_ENV' => 'production', $key => $value]);
+    $app = $key === 'SESSION_SECURE_COOKIE' ? $config['secure'] : $config['http_only'];
+    $container = runContainerCheckEnv([$key => $value])->exitCode() === 0;
+
+    expect($container)->toBe($app);
+})->with(['SESSION_SECURE_COOKIE', 'SESSION_HTTP_ONLY'])->with(['', 'empty', 'garbage', 'true', 'false', '0', 'off', 'no']);
+
 it('counts the memory-backed /tmp and the spare in the web container memory check at start', function (): void {
     $source = (string) file_get_contents(openhdidRuntimeHelper());
     $dir = sys_get_temp_dir().'/hdid-fpm-'.bin2hex(random_bytes(4));

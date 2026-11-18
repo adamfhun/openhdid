@@ -101,6 +101,22 @@ class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
             return;
         }
 
+        // What the message was queued on may be gone by now: its number taken off the
+        // client, or the PIN it tells replaced. Then nobody may get it any more.
+        if (($withdrawn = Messenger::withdrawnReason($message)) !== null) {
+            $message->forceFill([
+                'status' => OutboundMessageStatus::Cancelled,
+                'error' => $withdrawn === Messenger::WITHDRAWN_RECIPIENT
+                    ? __('Not sent: the number is no longer a phone number of the client.')
+                    : __('Not sent: the PIN was changed or removed before the message could go out.'),
+            ])->save();
+            $context = self::auditContext($message) + ['reason' => $withdrawn];
+            $message->redactSecret();
+            $auditor->record('message.cancelled', $message->client, $context);
+
+            return;
+        }
+
         // Asked again right before sending: a row queued before a country was taken
         // off the accepted list (or before an update) must not reach the gateway.
         if (app(Messenger::class)->refuseIfBlocked($message)) {

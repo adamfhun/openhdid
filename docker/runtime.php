@@ -254,6 +254,9 @@ function check_env(string $role): void
     if ($production && ! env_bool('SESSION_SECURE_COOKIE', true)) {
         $errors[] = 'SESSION_SECURE_COOKIE=false is not allowed in production.';
     }
+    if ($production && ! env_bool('SESSION_HTTP_ONLY', true)) {
+        $errors[] = 'SESSION_HTTP_ONLY=false is not allowed in production.';
+    }
 
     $tls = strtolower((string) env_value('OPENHDID_TLS', 'on'));
     if (! in_array($tls, ['on', 'off', 'selfsigned'], true)) {

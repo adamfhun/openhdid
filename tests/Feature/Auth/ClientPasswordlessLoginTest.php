@@ -10,6 +10,7 @@ use App\Messaging\MessageKey;
 use App\Messaging\Messenger;
 use App\Models\AuditLog;
 use App\Models\Client;
+use App\Models\ClientPhoneNumber;
 use App\Models\ExternalRecord;
 use App\Models\MessageTemplate;
 use App\Models\OneTimeCode;
@@ -515,4 +516,45 @@ it('checks and sends a client\'s login codes under the client lock', function ()
     $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
 
     expect($lockWasFree)->toBeFalse();
+});
+
+it('refuses the SMS code once the number it was sent to is no longer the client\'s sign-in number', function (Closure $change, string $detail): void {
+    $client = smsSignInClient();
+    $client->phoneNumbers()->create(['number_e164' => '+36307654321', 'source' => PhoneNumberSource::Sync, 'is_primary' => false]);
+
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+    preg_match('/(\d{6})/', (string) $this->sms->lastTo('+36301234567'), $code);
+
+    // The number goes (or loses what vouched for it) while its former holder still has the code.
+    $change($client->phoneNumbers()->where('number_e164', '+36301234567')->sole());
+
+    $this->postJson('/api/v1/client/auth/otp/verify', ['email' => 'c@x.hu', 'code' => $code[1]])->assertForbidden();
+    $this->assertGuest('client');
+
+    expect(AuditLog::query()->where('event', 'login.rejected')->latest('id')->first()->context)->toMatchArray(['method' => 'otp_sms', 'detail' => $detail])
+        ->and(AuditLog::query()->where('event', 'login.succeeded')->exists())->toBeFalse()
+        // The right code was given: no guess is counted against the account.
+        ->and($client->fresh()->failed_login_attempts)->toBe(0);
+
+    // The code is used up: it does not come back to life when the number does.
+    ClientPhoneNumber::withTrashed()->where('number_e164', '+36301234567')->first()?->restore();
+    $this->postJson('/api/v1/client/auth/otp/verify', ['email' => 'c@x.hu', 'code' => $code[1]])->assertForbidden();
+    $this->assertGuest('client');
+})->with([
+    'the number was removed' => [fn (ClientPhoneNumber $phone) => $phone->delete(), 'destination_removed'],
+    'the number is no longer vouched for' => [fn (ClientPhoneNumber $phone) => $phone->forceFill(['source' => PhoneNumberSource::ClientSelf, 'verified_at' => null])->save(), 'destination_not_vouched'],
+]);
+
+it('keeps the SMS code valid when another number becomes the primary one', function (): void {
+    $client = smsSignInClient();
+    $other = $client->phoneNumbers()->create(['number_e164' => '+36307654321', 'source' => PhoneNumberSource::Sync, 'is_primary' => false]);
+
+    $this->postJson('/api/v1/client/auth/otp/request', ['email' => 'c@x.hu'])->assertOk();
+    preg_match('/(\d{6})/', (string) $this->sms->lastTo('+36301234567'), $code);
+
+    $client->phoneNumbers()->where('number_e164', '+36301234567')->update(['is_primary' => false]);
+    $other->forceFill(['is_primary' => true])->save();
+
+    $this->postJson('/api/v1/client/auth/otp/verify', ['email' => 'c@x.hu', 'code' => $code[1]])->assertOk();
+    $this->assertAuthenticatedAs($client, 'client');
 });

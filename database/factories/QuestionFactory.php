@@ -15,7 +15,8 @@ class QuestionFactory extends Factory
     {
         return [
             'is_active' => true,
-            'position' => fake()->unique()->numberBetween(1, 100000),
+            // The column is an unsigned SMALLINT: MariaDB refuses a larger position.
+            'position' => fake()->unique()->numberBetween(1, 65535),
         ];
     }
 

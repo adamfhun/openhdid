@@ -92,11 +92,11 @@ class AuditLogResource extends BaseResource
             TextEntry::make('created_at')->label(__('Time'))->dateTime(),
             TextEntry::make('event')->label(__('Event')),
             TextEntry::make('actor')->label(__('Actor'))->state(fn (AuditLog $record) => static::actorLabel($record))->url(fn (AuditLog $record) => static::describe($record->actor)['url'])->placeholder(__('system')),
-            TextEntry::make('subject')->label(__('Subject'))->state(fn (AuditLog $record) => static::subjectLabel($record))->url(fn (AuditLog $record) => static::describe($record->subject)['url'])->placeholder('-'),
+            TextEntry::make('subject')->label(__('Subject'))->state(fn (AuditLog $record) => static::subjectLabel($record))->url(fn (AuditLog $record) => static::describe($record->subjectRecord())['url'])->placeholder('-'),
             TextEntry::make('actor_id')->label(__('Actor id'))->placeholder('-')->copyable()->fontFamily('mono')
                 ->visible(fn (AuditLog $record) => $record->actor_id !== null && static::describe($record->actor)['url'] === null),
             TextEntry::make('subject_id')->label(__('Subject id'))->placeholder('-')->copyable()->fontFamily('mono')
-                ->visible(fn (AuditLog $record) => $record->subject_id !== null && static::describe($record->subject)['url'] === null),
+                ->visible(fn (AuditLog $record) => $record->subject_id !== null && static::describe($record->subjectRecord())['url'] === null),
             TextEntry::make('ip_address')->label(__('IP address'))->placeholder('-'),
             TextEntry::make('request_id')->label(__('Request id'))->placeholder(__('none'))->copyable()->fontFamily('mono')
                 ->helperText(__('Every entry written while serving one web request shares this id and the list can be filtered by it; scheduled tasks, commands and entries from before this feature have none.').' '.__('HDID generates this id; an id the caller sent is kept under Details as caller_request_id.')),
@@ -130,7 +130,7 @@ class AuditLogResource extends BaseResource
                     ->placeholder(__('system')),
                 TextColumn::make('actor_id')->label(__('Actor id'))->searchable()->copyable()->fontFamily('mono')->size('xs')->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('subject')->label(__('Subject'))->state(fn (AuditLog $record) => static::subjectLabel($record))
-                    ->url(fn (AuditLog $record) => static::describe($record->subject)['url'])->color(fn (AuditLog $record) => $record->subject ? 'primary' : null)
+                    ->url(fn (AuditLog $record) => static::describe($record->subjectRecord())['url'])->color(fn (AuditLog $record) => $record->subjectRecord() ? 'primary' : null)
                     ->placeholder('-')->wrap(),
                 TextColumn::make('subject_id')->label(__('Subject id'))->searchable()->copyable()->fontFamily('mono')->size('xs')->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('ip_address')->label(__('IP address'))->placeholder('-')->toggleable(),
@@ -189,7 +189,7 @@ class AuditLogResource extends BaseResource
             return null;
         }
 
-        return static::describe($log->subject)['label'] ?? static::fallbackLabel($log->subject_type, $log->subject_id);
+        return static::describe($log->subjectRecord())['label'] ?? static::fallbackLabel($log->subject_type, $log->subject_id ?? (isset($log->context['subject_key']) ? (string) $log->context['subject_key'] : null));
     }
 
     /**

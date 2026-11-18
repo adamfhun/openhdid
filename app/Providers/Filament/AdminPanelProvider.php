@@ -15,6 +15,7 @@ use App\Filament\Admin\Widgets\OngoingCallsWidget;
 use App\Filament\Admin\Widgets\OverviewStatsWidget;
 use App\Filament\BrandedPanel;
 use App\Filament\Concerns\GuardsUnsavedChanges;
+use App\Filament\InitialsAvatarProvider;
 use App\Filament\Pages\Auth\Login;
 use App\Filament\Pages\Auth\MfaChallenge;
 use App\Filament\Pages\Auth\MfaSetup;
@@ -142,6 +143,8 @@ class AdminPanelProvider extends PanelProvider
                 Action::make('locale_hu')->label('Magyar')->icon('heroicon-o-language')->url(fn () => route('locale.switch', 'hu'))->visible(fn () => app()->getLocale() !== 'hu'),
                 Action::make('locale_en')->label('English')->icon('heroicon-o-language')->url(fn () => route('locale.switch', 'en'))->visible(fn () => app()->getLocale() !== 'en'),
             ])
+            // Initials drawn in the browser: the default loads them from ui-avatars.com with the full name.
+            ->defaultAvatarProvider(InitialsAvatarProvider::class)
             ->viteTheme('resources/css/filament/panels/theme.css')
             ->login(Login::class)
             ->discoverResources(in: app_path('Filament/Admin/Resources'), for: 'App\Filament\Admin\Resources')

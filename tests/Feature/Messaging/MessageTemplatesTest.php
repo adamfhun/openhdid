@@ -163,3 +163,62 @@ it('treats a template test send like the real message: its content is wiped once
         ->callAction('sendTest', ['email' => 'admin@x.hu']);
     Mail::assertSent(TemplatedMail::class, fn (TemplatedMail $mail): bool => $mail->hasTo('admin@x.hu') && $mail->carriesSecret === true);
 });
+
+it('refuses a secret placeholder in the subject, which stays readable after the message is sent', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    Filament::setCurrentPanel('admin');
+    $this->get('/admin/content/message-templates')->assertOk();
+    $template = MessageTemplate::query()->where('key', 'magic_link')->where('locale', 'hu')->firstOrFail();
+
+    Livewire::test(EditMessageTemplate::class, ['record' => $template->id])
+        ->fillForm(['subject' => 'Belépés: {{ link }}'])
+        ->call('save')
+        ->assertHasFormErrors(['subject']);
+
+    // The body may carry it, and the subject the placeholders that are no secret.
+    Livewire::test(EditMessageTemplate::class, ['record' => $template->id])
+        ->fillForm(['subject' => '{{ app_name }}: belépés {{ minutes }} percig', 'body' => '<p><a href="{{ link }}">Belépés</a></p>'])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect(MessageKey::MagicLink->subjectPlaceholders())->not->toHaveKey('link')->toHaveKeys(['name', 'minutes', 'app_name'])
+        ->and(array_keys(MessageKey::MagicLink->placeholders()))->toContain('link')
+        ->and(fn () => app(TemplateRenderer::class)->assertPlaceholdersKnown(MessageKey::MagicLink, 'x {{ link }}', 'subject'))->toThrow(ValidationException::class);
+});
+
+it('never puts the login link into the stored subject, also with a template saved before the rule', function (): void {
+    Queue::fake();
+    // As an older release could store it: the link placeholder in the subject.
+    MessageTemplate::query()->create(['key' => 'magic_link', 'locale' => 'hu', 'subject' => 'Belépés: {{ link }} ({{ name }})', 'body' => '<p>{{ link }}</p>']);
+    $client = Client::factory()->create(['name' => 'Kiss Éva', 'locale' => 'hu']);
+    $link = 'https://hdid.example.org/auth/client/magic/secret-token?signature=abc';
+
+    $message = app(Messenger::class)->sendTemplate(MessageKey::MagicLink, $client, ['link' => $link, 'minutes' => 720, 'hours' => 12, 'days' => 1], 'eva@x.hu');
+
+    expect($message->subject)->not->toContain('secret-token')->not->toContain('://')
+        ->and($message->subject)->toBe('Belépés:  (Kiss Éva)')
+        ->and($message->body)->toContain('secret-token');
+
+    $message->redactSecret();
+    expect(json_encode($message->fresh()->getAttributes()))->not->toContain('secret-token');
+});
+
+it('clears the login links already stored in subjects and the template subjects that put them there', function (): void {
+    $template = MessageTemplate::query()->create(['key' => 'magic_link', 'locale' => 'hu', 'subject' => 'Belépés: {{ link }}', 'body' => '<p>{{ link }}</p>']);
+    $plain = MessageTemplate::query()->create(['key' => 'magic_link', 'locale' => 'en', 'subject' => 'Sign in to {{ app_name }}', 'body' => '<p>{{ link }}</p>']);
+    $leaked = OutboundMessage::factory()->sent()->create(['template_key' => MessageKey::MagicLink, 'subject' => 'Belépés: https://hdid.example.org/auth/client/magic/t0ken?signature=abc', 'body' => '', 'redacted_at' => now()]);
+    $clean = OutboundMessage::factory()->sent()->create(['template_key' => MessageKey::MagicLink, 'subject' => 'Belépés a portálra', 'body' => '', 'redacted_at' => now()]);
+    $other = OutboundMessage::factory()->sent()->create(['template_key' => null, 'subject' => 'Lásd: https://example.org/doc']);
+
+    $migration = require database_path('migrations/2026_11_18_100001_clear_login_links_from_message_subjects.php');
+    $migration->up();
+    $migration->up();
+
+    expect($leaked->fresh()->subject)->toBeNull()
+        ->and($clean->fresh()->subject)->toBe('Belépés a portálra')
+        ->and($other->fresh()->subject)->toBe('Lásd: https://example.org/doc')
+        ->and($template->fresh()->subject)->toBeNull()
+        ->and($template->fresh()->body)->toBe('<p>{{ link }}</p>')
+        ->and($plain->fresh()->subject)->toBe('Sign in to {{ app_name }}');
+});

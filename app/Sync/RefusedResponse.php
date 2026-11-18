@@ -22,9 +22,21 @@ final class RefusedResponse
 
         Log::warning('EMD '.$request.' refused (HTTP '.$status.'); the response body follows.', [
             'status' => $status,
-            'url' => strtok($url, '?'),
+            'url' => self::address($url),
             'body' => mb_scrub(mb_strcut($body, 0, self::MAX_BYTES, 'UTF-8'), 'UTF-8'),
             'truncated' => strlen($body) > self::MAX_BYTES,
         ]);
+    }
+
+    /**
+     * The address for the log: scheme, host, port and path only. The
+     * configured address may carry a user name and password before the host
+     * (user:password@host) and a key in its query string; neither may reach
+     * the application log. An address that cannot be read as one is not
+     * logged at all, rather than as it stands.
+     */
+    private static function address(string $url): ?string
+    {
+        return isset(parse_url($url)['host']) ? SourceLabel::of($url) : null;
     }
 }

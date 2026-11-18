@@ -15,4 +15,7 @@
             </button>
         @endforeach
     </div>
+    @if (($bodyOnly ?? []) !== [])
+        <div class="text-xs text-gray-500 dark:text-gray-400">{{ __('Only in the body, not in the subject: :list. The subject stays readable on the message after sending; the body is wiped.', ['list' => implode(', ', array_map(fn (string $name): string => '{'.'{ '.$name.' }'.'}', $bodyOnly))]) }}</div>
+    @endif
 </div>

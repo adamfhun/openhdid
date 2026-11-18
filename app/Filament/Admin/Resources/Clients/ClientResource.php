@@ -48,6 +48,7 @@ use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
 use Filament\Actions\RestoreAction;
 use Filament\Actions\ViewAction;
+use Filament\Facades\Filament;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -641,6 +642,11 @@ class ClientResource extends BaseResource
      */
     public static function pinNote(Client $client): ?string
     {
+        // Said with or without a PIN: the security questions are suspended as well.
+        if ($client->holderChangePending()) {
+            return __('The account moved to another EMD record, and no sync run has decided yet whether another person holds it now: the PIN and the security questions identify nobody until the next sync run decides (it then deletes the previous holder\'s data, or keeps it for the same person).');
+        }
+
         if (! $client->hasPin()) {
             return null;
         }
@@ -708,7 +714,7 @@ class ClientResource extends BaseResource
             ->modalDescription(__('The client can no longer identify with the PIN until a new one is set; the clearing is recorded in the audit log.'))
             ->visible(fn (Client $record) => $record->hasPin() && static::canEdit($record))
             ->authorize(fn (Client $record) => static::canEdit($record))
-            ->action(fn (Client $record) => app(PinService::class)->clearPin($record));
+            ->action(fn (Client $record) => app(PinService::class)->clearPin($record, actor: Filament::auth()->user()));
     }
 
     /**

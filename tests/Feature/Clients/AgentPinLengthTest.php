@@ -2,6 +2,8 @@
 
 use App\Auth\Role;
 use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
+use App\Identification\PinService;
+use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\User;
 use App\Settings\SettingKey;
@@ -62,4 +64,41 @@ it('shows a field error when an agent selects an already assigned pin', function
         ->assertHasActionErrors(['pin']);
 
     expect($client->fresh()->hasPin())->toBeFalse();
+});
+
+it('names the staff member for a PIN set and cleared on the panel, also while a client is signed in to the portal in the same browser', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $agent = User::factory()->withRole(Role::Admin)->create();
+    $client = Client::factory()->synced()->withPhone()->create();
+    // The same browser holds a portal session of a client (here: of the client being edited).
+    $this->actingAs($client, 'client');
+    $this->actingAs($agent, 'web');
+    Filament::setCurrentPanel('admin');
+
+    Livewire::test(ViewClient::class, ['record' => $client->id])
+        ->callAction(TestAction::make('setPin')->schemaComponent('pin_hash'), ['pin' => '482915', 'send_sms' => false])
+        ->assertHasNoActionErrors();
+    Livewire::test(ViewClient::class, ['record' => $client->id])
+        ->callAction(TestAction::make('clearPin')->schemaComponent('pin_hash'))
+        ->assertHasNoActionErrors();
+
+    $entries = AuditLog::query()->whereIn('event', ['client.pin_set', 'client.pin_cleared'])->get();
+
+    expect($entries)->toHaveCount(2)
+        ->and($entries->pluck('actor_id')->unique()->all())->toBe([$agent->id])
+        ->and($entries->pluck('subject_id')->unique()->all())->toBe([$client->id]);
+});
+
+it('records the actor a PIN change is given, whoever else is signed in', function (): void {
+    $this->seed(RolesAndPermissionsSeeder::class);
+    $agent = User::factory()->withRole(Role::Admin)->create();
+    $client = Client::factory()->synced()->withPhone()->create();
+    // Signed in on both sides; the service is told who acts.
+    $this->actingAs($client, 'client');
+    $this->actingAs($agent, 'web');
+
+    app(PinService::class)->setPin($client, '482915', $client);
+    app(PinService::class)->clearPin($client, actor: $client);
+
+    expect(AuditLog::query()->whereIn('event', ['client.pin_set', 'client.pin_cleared'])->pluck('actor_id')->unique()->all())->toBe([$client->id]);
 });

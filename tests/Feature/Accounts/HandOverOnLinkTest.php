@@ -1,12 +1,17 @@
 <?php
 
 use App\Auth\Role;
+use App\Enums\IdChannel;
+use App\Enums\IdSessionStatus;
 use App\Enums\PhoneNumberSource;
 use App\Enums\SyncRunStatus;
 use App\Enums\SyncSource;
+use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Admin\Resources\Clients\Pages\EditClient;
 use App\Filament\Admin\Resources\Users\Pages\EditUser;
+use App\Identification\IdentificationException;
 use App\Identification\PinService;
+use App\Identification\QaSessionEngine;
 use App\Models\AuditLog;
 use App\Models\Client;
 use App\Models\ClientAnswer;
@@ -258,4 +263,126 @@ it('tells on the page that saves the link what the hand-over removed, and warns 
 
     expect($account->fresh()->password)->toBeNull()
         ->and(EditUser::handOverNote($account->fresh()))->toBeNull();
+});
+
+/**
+ * A source that gives its rows and then breaks, as a connection lost while reading does.
+ *
+ * @param  list<ExternalRecordDto>  $rows
+ */
+function handOverBrokenReader(array $rows): SourceReader
+{
+    return new class($rows) implements SourceReader
+    {
+        /**
+         * @param  list<ExternalRecordDto>  $rows
+         */
+        public function __construct(private array $rows) {}
+
+        public function source(): SyncSource
+        {
+            return SyncSource::Csv;
+        }
+
+        public function label(): ?string
+        {
+            return 'test';
+        }
+
+        public function read(): iterable
+        {
+            yield from $this->rows;
+
+            throw new RuntimeException('The connection to the source was lost.');
+        }
+
+        public function details(): array
+        {
+            return [];
+        }
+    };
+}
+
+/**
+ * A client of record 1001 with holder data, then a run that moves it to record 1002 and breaks before its end.
+ */
+function handOverInterruptedMove(): Client
+{
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(handOverReader([handOverRow(1001, 'a@client.hu')]));
+    $client = Client::query()->where('email', 'a@client.hu')->sole();
+    ClientPhoneNumber::factory()->create(['client_id' => $client->id, 'number_e164' => '+36301110002', 'source' => PhoneNumberSource::ClientSelf]);
+    handOverHolderData($client);
+
+    expect(fn () => $sync->run(handOverBrokenReader([handOverRow(1002, 'a@client.hu')])))->toThrow(RuntimeException::class);
+
+    return $client->refresh();
+}
+
+it('remembers a move the run could not decide, and suspends the PIN and the questions until a run decides it', function (): void {
+    app(Settings::class)->set(SettingKey::PinAgentVerificationEnabled, true);
+    $client = handOverInterruptedMove();
+    $agent = User::factory()->withRole(Role::Agent)->create();
+
+    // The link was saved; whether the previous holder's data goes is still open.
+    expect($client->externalRecord->external_id)->toBe(1002)
+        ->and($client->holderChangePending())->toBeTrue()
+        ->and($client->hasPin())->toBeTrue();
+
+    $session = app(PinService::class)->verify($client, '482913', IdChannel::Manual, $agent);
+    expect($session->status)->toBe(IdSessionStatus::Failed)
+        ->and($session->outcome_reason)->toBe('holder_change_pending')
+        ->and($client->fresh()->pin_failed_attempts)->toBe(0);
+
+    // The client page says so next to the PIN.
+    expect(ClientResource::pinNote($client->fresh()))->toContain('no sync run has decided yet');
+
+    app(Settings::class)->set(SettingKey::QaMinAnsweredQuestionsRequired, 1);
+    expect(fn () => app(QaSessionEngine::class)->start($client, $agent))
+        ->toThrow(IdentificationException::class, __('The identification of this client is suspended until the next master data sync decides whether the account went to another person.'));
+});
+
+it('deletes the previous holder\'s data on the next run when the interrupted run left the move undecided and the old record is still in the source', function (): void {
+    $client = handOverInterruptedMove();
+
+    // The rerun finds the account on the new record already; the old record is still there, under another address.
+    $run = app(SyncExternalRecords::class)->run(handOverReader([handOverRow(1002, 'a@client.hu'), handOverRow(1001, 'b@client.hu')]));
+
+    $client->refresh();
+    expect($run->status)->toBe(SyncRunStatus::Completed)
+        ->and($client->holderChangePending())->toBeFalse()
+        ->and($client->hasPin())->toBeFalse()
+        ->and($client->answers()->count())->toBe(0)
+        ->and($client->phoneNumbers()->where('number_e164', '+36301110002')->exists())->toBeFalse()
+        ->and($run->stats['holder_data_removed'])->toBe(1)
+        ->and(AuditLog::query()->where('event', 'client.holder_data_removed')->sole()->context)->toMatchArray(['reason' => AccountProvisioner::REASON_SYNC_REBOUND, 'takes_over_external_id' => 1002, 'from_external_id' => 1001]);
+});
+
+it('keeps the data and lifts the suspension on the next run when the interrupted move turns out to be a reissue', function (): void {
+    app(Settings::class)->set(SettingKey::PinAgentVerificationEnabled, true);
+    $client = handOverInterruptedMove();
+
+    // The old record never comes again: the same person under a new id.
+    $run = app(SyncExternalRecords::class)->run(handOverReader([handOverRow(1002, 'a@client.hu')]));
+
+    $client->refresh();
+    expect($client->holderChangePending())->toBeFalse()
+        ->and($client->hasPin())->toBeTrue()
+        ->and($client->answers()->count())->toBe(2)
+        ->and($run->stats['reissued'])->toBe(1)
+        ->and(AuditLog::query()->where('event', 'account.reissued')->sole()->context)->toMatchArray(['from_external_id' => 1001, 'external_id' => 1002])
+        ->and(app(PinService::class)->verify($client, '482913', IdChannel::Manual, User::factory()->withRole(Role::Agent)->create())->status)->toBe(IdSessionStatus::Passed);
+});
+
+it('leaves no move pending after a run that decided it, and none after a trial run', function (): void {
+    $sync = app(SyncExternalRecords::class);
+    $sync->run(handOverReader([handOverRow(1001, 'a@client.hu')]));
+    $client = Client::query()->where('email', 'a@client.hu')->sole();
+
+    $sync->run(handOverReader([handOverRow(1003, 'a@client.hu')]), dryRun: true);
+    expect($client->fresh()->holderChangePending())->toBeFalse()
+        ->and($client->fresh()->externalRecord->external_id)->toBe(1001);
+
+    $sync->run(handOverReader([handOverRow(1002, 'a@client.hu')]));
+    expect($client->fresh()->holderChangePending())->toBeFalse();
 });

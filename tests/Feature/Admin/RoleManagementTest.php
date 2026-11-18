@@ -229,7 +229,8 @@ it('refuses to name a custom role like a built-in one', function (string $name):
         ->assertHasActionErrors(['name']);
 
     expect($custom->fresh()->name)->toBe('Helpers')
-        ->and(RoleModel::query()->where('name', $name)->exists())->toBeFalse();
+        // Compared exactly in PHP: MariaDB's collation would match the built-in role itself.
+        ->and(RoleModel::query()->pluck('name')->contains($name))->toBeFalse();
 })->with(['Super-Admin', ' super-admin', 'ADMIN']);
 
 it('audits a plain rename of a custom role', function (): void {

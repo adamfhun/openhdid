@@ -432,7 +432,21 @@ class StaffMfa
             $this->assertNotLocked($user, $method);
             $number = $method === MfaMethod::Sms ? (Cache::get($this->codeKey($user))['number'] ?? null) : null;
 
+            // The number is checked again here, on the record as it stands now: one that
+            // left the EMD record (or the accepted countries) since the code was sent must
+            // not become the factor, nor verify this session. Its pending code goes with it.
+            if ($method === MfaMethod::Sms && $number !== null && ! in_array($number, $this->smsNumbers($user->load('externalRecord')), true)) {
+                Cache::forget($this->codeKey($user));
+
+                throw new MfaException(__('SMS codes go only to a mobile number of your EMD record; this number is not on it.'));
+            }
+
             $this->settle($user, $method, $this->consumeSentCode($user, $method, self::PURPOSE_SETUP, $code));
+
+            // An SMS factor without its number would verify the session and enrol nothing.
+            if ($method === MfaMethod::Sms && $number === null) {
+                throw new MfaException(__('The setup has expired. Start it again.'));
+            }
 
             $user->forceFill($method === MfaMethod::Sms ? ['mfa_sms_number' => $number] : ['mfa_email_enabled_at' => now()])->save();
             $this->factorAdded($user, $method);

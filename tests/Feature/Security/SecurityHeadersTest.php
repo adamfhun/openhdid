@@ -127,3 +127,20 @@ it('accepts only plain local addresses as the place to go back to', function ():
         expect(SafeRedirect::isLocal($url))->toBeTrue($case);
     }
 });
+
+it('answers a cross-origin request on no path with a CORS permission', function (string $method, string $path): void {
+    $response = $this->call($method, $path, server: [
+        'HTTP_ORIGIN' => 'https://attacker.example',
+        'HTTP_ACCESS_CONTROL_REQUEST_METHOD' => 'POST',
+        'HTTP_ACCESS_CONTROL_REQUEST_HEADERS' => 'content-type, x-api-key',
+    ]);
+
+    expect($response->headers->has('Access-Control-Allow-Origin'))->toBeFalse()
+        ->and($response->headers->has('Access-Control-Allow-Methods'))->toBeFalse()
+        ->and($response->headers->has('Access-Control-Allow-Headers'))->toBeFalse();
+})->with([
+    'preflight on the call center api' => ['OPTIONS', '/api/v1/callcenter/calls'],
+    'call center api' => ['POST', '/api/v1/callcenter/calls'],
+    'cookie-authenticated client api' => ['GET', '/api/v1/client/me'],
+    'csrf cookie' => ['GET', '/sanctum/csrf-cookie'],
+]);

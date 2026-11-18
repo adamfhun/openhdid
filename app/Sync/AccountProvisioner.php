@@ -425,16 +425,30 @@ class AccountProvisioner
      * (account.reissued, counted on the run as a reissue). Either way the
      * sign-ins ended at the move (revokeAfterIdentityChange()). Without a
      * run (an admin save that links at once) a move counts as a reissue.
+     * The record a client moved from is kept on the client until this is
+     * decided, so a run that failed after saving the new link leaves the
+     * decision to the next run instead of losing it.
      */
     public function settleRebounds(?SyncRun $run): void
     {
         $pending = $this->pendingRebounds;
         $this->pendingRebounds = [];
 
+        // A run decides every move that is still open, also one an earlier run
+        // saved and then failed before deciding it: the client carries the record
+        // it moved from. An admin save decides only its own move.
+        if ($run !== null) {
+            $pending = Client::query()->whereNotNull('moved_from_record_id')->with('externalRecord')->get()
+                ->filter(fn (Client $client): bool => $client->externalRecord !== null)
+                ->map(fn (Client $client): array => ['client' => $client, 'record' => $client->externalRecord, 'from_record_id' => (string) $client->moved_from_record_id])
+                ->all();
+        }
+
         foreach ($pending as ['client' => $client, 'record' => $record, 'from_record_id' => $fromRecordId]) {
             $old = ExternalRecord::withTrashed()->find($fromRecordId);
             $oldStillInSource = $run !== null && $old !== null && (string) $old->last_seen_run_id === (string) $run->id;
             $client->refresh();
+            $client->forceFill(['moved_from_record_id' => null])->save();
 
             if ($oldStillInSource) {
                 $removed = $this->removeClientHolder($client, $record, self::REASON_SYNC_REBOUND, ['from_external_id' => (int) $old->external_id]);
@@ -457,8 +471,10 @@ class AccountProvisioner
     }
 
     /**
-     * Drops the moves a failed run left undecided, so that they cannot be
-     * settled against a later run's state.
+     * Drops this run's list of moves when the run fails. The open decision
+     * itself stays on the client (moved_from_record_id), where the next run
+     * that reaches its end finds and decides it; until then the PIN and the
+     * security answers of the account are suspended.
      */
     public function discardPendingRebounds(): void
     {
@@ -649,7 +665,11 @@ class AccountProvisioner
             // the run, once it is known if the old record is still in the source
             // (settleRebounds()); the sign-ins end now either way.
             $identityChange = 'rebound';
-            $this->pendingRebounds[] = ['client' => $client, 'record' => $record, 'from_record_id' => (string) $client->external_record_id];
+            // Kept on the client as well, saved with the new link below: a run that
+            // fails before its end must not lose the open decision. A move still
+            // undecided keeps the record it first moved from.
+            $client->moved_from_record_id ??= (string) $client->external_record_id;
+            $this->pendingRebounds[] = ['client' => $client, 'record' => $record, 'from_record_id' => (string) $client->moved_from_record_id];
             $this->auditor->record('account.rebound', $client, [
                 'from_external_record_id' => $client->external_record_id,
                 'to_external_record_id' => $record->id,

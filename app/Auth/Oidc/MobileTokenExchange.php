@@ -9,6 +9,7 @@ use App\Enums\PrincipalType;
 use App\Models\Client;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
@@ -65,13 +66,16 @@ class MobileTokenExchange
             $this->reject('token_too_old', ['issued_at' => is_numeric($issuedAt) ? (int) $issuedAt : null]);
         }
 
-        // One exchange per token: the first presentation claims it for as long
-        // as the age limit could still accept it. The key is the signed part
-        // (header and payload) only: the signature segment can be re-encoded
-        // (padding, stray characters) and still verify, so it must not make
-        // the same token look new.
+        // One exchange per token: the first presentation claims it until the
+        // token itself expires (plus the accepted clock skew), not only for
+        // the age limit of this moment: the limit is a setting, and raising
+        // it later must not let an exchanged token through again. The key is
+        // the signed part (header and payload) only: the signature segment
+        // can be re-encoded (padding, stray characters) and still verify, so
+        // it must not make the same token look new.
         $signedPart = implode('.', array_slice(explode('.', $idToken), 0, 2));
-        if (! Cache::add(self::REPLAY_KEY_PREFIX.hash('sha256', $signedPart), true, $maxAgeSeconds + OidcClient::CLOCK_SKEW_SECONDS)) {
+        $usedUntil = max((int) $claims['exp'], now()->getTimestamp() + $maxAgeSeconds) + OidcClient::CLOCK_SKEW_SECONDS;
+        if (! Cache::add(self::REPLAY_KEY_PREFIX.hash('sha256', $signedPart), true, Carbon::createFromTimestamp($usedUntil))) {
             $this->reject('token_replayed', ['email' => $this->oidc->email($claims, $config)]);
         }
 
