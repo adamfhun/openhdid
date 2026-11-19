@@ -5,9 +5,13 @@ use App\Filament\Admin\Resources\Clients\ClientResource;
 use App\Filament\Admin\Resources\Clients\Pages\ListClients;
 use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
 use App\Filament\Admin\Resources\Users\Pages\EditUser;
+use App\Identification\ClientAnswers;
 use App\Models\Client;
+use App\Models\Question;
 use App\Models\SsoIdentity;
 use App\Models\User;
+use App\Settings\SettingKey;
+use App\Settings\Settings;
 use App\Support\HuDate;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Filament\Actions\Testing\TestAction;
@@ -193,4 +197,52 @@ it('names in the send-login-link confirmation that the client\'s earlier link st
     Livewire::test(ViewClient::class, ['record' => $client->id])
         ->mountAction(entryAction('sendMagicLink', 'last_login_at'))
         ->assertMountedActionModalSee(__('The link signs the client in once and expires after the configured minutes. Any login link sent to the client earlier stops working.'));
+});
+
+it('lists the identification methods on the client page, each with whether it can be used and why not', function (): void {
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    $client = Client::factory()->synced()->withPhone()->withPin('482915')->create();
+    $questions = Question::factory()->count(6)->create();
+    foreach ($questions as $question) {
+        app(ClientAnswers::class)->save($client, $question, 'válasz');
+    }
+
+    // Agents may not check the PIN (the default): the page says so instead of leaving a grey button to guesswork.
+    $this->get(ClientResource::getUrl('view', ['record' => $client]))->assertOk()
+        ->assertSee(__('Identification: available methods'))
+        ->assertSee(__('PIN check by an agent'))
+        ->assertSee('Switched off for the whole system')
+        // Enough answers: the count alone, without the number needed.
+        ->assertSee('6 answers')->assertDontSee('6 / ')
+        ->assertSee(__('View EMD data'));
+
+    expect(ClientResource::agentPinCheckBlocker($client))->toContain('Switched off for the whole system');
+
+    app(Settings::class)->set(SettingKey::PinAgentVerificationEnabled, true);
+    expect(ClientResource::agentPinCheckBlocker($client->fresh()))->toBeNull()
+        ->and(ClientResource::agentPinCheckBlocker(Client::factory()->synced()->create()))->toBe(__('The client has no PIN.'));
+
+    // Too few answers: now the number needed is worth saying.
+    $few = Client::factory()->synced()->create();
+    app(ClientAnswers::class)->save($few, $questions[0], 'válasz');
+    $this->get(ClientResource::getUrl('view', ['record' => $few]))->assertOk()->assertSee('1 answers, 5 needed');
+});
+
+it('counts on the client list the answers the client page counts, not every stored one', function (): void {
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    $client = Client::factory()->synced()->create();
+    $questions = Question::factory()->count(3)->create();
+    foreach ($questions as $question) {
+        app(ClientAnswers::class)->save($client, $question, 'válasz');
+    }
+    // One question is switched off: its answer is stored but does not count anywhere.
+    $questions[0]->forceFill(['is_active' => false])->save();
+
+    $listed = ClientResource::getEloquentQuery()->withCount(['answers' => ClientAnswers::usableOnly(...)])->findOrFail($client->id);
+
+    expect((int) $listed->answers_count)->toBe(2)
+        ->and(app(ClientAnswers::class)->usableCount($client))->toBe(2)
+        ->and($client->answers()->count())->toBe(3);
+
+    Livewire::test(ListClients::class)->assertCanSeeTableRecords([$client])->assertTableColumnStateSet('answers_count', 2, $client);
 });

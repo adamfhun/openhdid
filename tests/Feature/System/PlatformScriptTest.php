@@ -361,6 +361,61 @@ it('repins every image in every file that pins it when the registry has rebuilt 
         ->and(platformScriptPins($sandbox['here']))->toBe($rebuilt);
 });
 
+/**
+ * The MariaDB feed announcing the next patch release of the pinned branch.
+ *
+ * @return string the next version
+ */
+function platformScriptNextMariadb(array $sandbox): string
+{
+    $current = substr(platformScriptTag($sandbox['pins'], 'mariadb'), strlen('mariadb:'));
+    [$major, $minor, $patch] = explode('.', $current);
+    $next = $major.'.'.$minor.'.'.((int) $patch + 1);
+    platformScriptFeeds($sandbox, ['https://endoflife.date/api/mariadb.json' => json_encode([['cycle' => $major.'.'.$minor, 'latest' => $next, 'lts' => true, 'releaseDate' => '2000-01-01']])]);
+
+    return $next;
+}
+
+/**
+ * A new release announced before its image is published (MariaDB 12.3.4, 2026-11-19): that image keeps
+ * its pin, checked like any other, and the rest is updated (owner's decision); nothing empty is written.
+ */
+it('keeps an image whose newer version is not published yet on its pin and updates the rest', function (): void {
+    $sandbox = platformScriptSandbox();
+    $maria = platformScriptTag($sandbox['pins'], 'mariadb');
+    $valkey = platformScriptTag($sandbox['pins'], 'valkey/valkey');
+    $rebuilt = platformScriptRebuilt($valkey);
+    $next = platformScriptNextMariadb($sandbox);
+    // mariadb:<next> is not in the registry (not found); Valkey was rebuilt.
+    platformScriptRegistry($sandbox, [$valkey => $rebuilt]);
+
+    $check = platformScriptRun($sandbox, 'check');
+
+    expect($check->exitCode())->toBe(0, $check->output().$check->errorOutput())
+        ->and($check->output())->toContain("mariadb:{$next}", 'még nincs közzétéve, marad: '.$maria, 'Még nem közzétett image');
+
+    $apply = platformScriptRun($sandbox, 'apply');
+    $compose = (string) file_get_contents($sandbox['here'].'/repo/compose.yaml');
+
+    expect($apply->exitCode())->toBe(0, $apply->output().$apply->errorOutput())
+        ->and($compose)->toContain("{$maria}@{$sandbox['pins'][$maria]}", "{$valkey}@{$rebuilt}")
+        ->and($compose)->not->toContain("mariadb:{$next}");
+});
+
+it('still writes nothing when neither the newer nor the pinned tag of an image has a digest', function (): void {
+    $sandbox = platformScriptSandbox();
+    $maria = platformScriptTag($sandbox['pins'], 'mariadb');
+    $valkey = platformScriptTag($sandbox['pins'], 'valkey/valkey');
+    $next = platformScriptNextMariadb($sandbox);
+    platformScriptRegistry($sandbox, [$maria => null, $valkey => platformScriptRebuilt($valkey)]);
+
+    $apply = platformScriptRun($sandbox, 'apply');
+
+    expect($apply->exitCode())->not->toBe(0)
+        ->and($apply->output().$apply->errorOutput())->toContain("mariadb:{$next}", 'semmi nem íródott át')
+        ->and(platformScriptHashes($sandbox['here']))->toBe($sandbox['before']);
+});
+
 it('never writes an empty digest into a pin when the registry gives none', function (?string $answer): void {
     $sandbox = platformScriptSandbox();
     $maria = platformScriptTag($sandbox['pins'], 'mariadb');

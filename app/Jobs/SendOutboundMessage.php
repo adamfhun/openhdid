@@ -13,6 +13,7 @@ use App\Messaging\Messenger;
 use App\Messaging\SmsDeliveryChecks;
 use App\Models\OutboundMessage;
 use App\Sms\SmsSender;
+use App\System\ErrorMail;
 use Illuminate\Contracts\Mail\Mailer;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -139,7 +140,12 @@ class SendOutboundMessage implements ShouldBeUnique, ShouldQueue
                 $auditor->record('message.failed', $message->client, self::auditContext($message) + ['error' => mb_substr($error, 0, 500)]);
             }
 
-            report($e);
+            // A failed error report is logged, not reported again (HTTP 500 Report).
+            if ($message->meta['error_report'] ?? false) {
+                ErrorMail::muted(fn () => report($e));
+            } else {
+                report($e);
+            }
 
             if (! $exhausted && $this->job !== null && ! $this->job->isReleased()) {
                 $this->release(60 * $message->attempts);

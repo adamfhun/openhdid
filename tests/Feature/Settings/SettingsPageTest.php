@@ -61,7 +61,7 @@ it('saves separate pin limits and ivr and dictated code lengths', function (): v
     Livewire::test(ManageSettings::class)
         ->fillForm([
             ManageSettings::fieldName(SettingKey::PinMinLength) => 9,
-            ManageSettings::fieldName(SettingKey::PinMaxLength) => 12,
+            ManageSettings::fieldName(SettingKey::PinMaxLength) => 10,
             ManageSettings::fieldName(SettingKey::IvrCodeLength) => 10,
             ManageSettings::fieldName(SettingKey::PinClientChangesEnabled) => true,
             ManageSettings::fieldName(SettingKey::PinUniqueRequired) => false,
@@ -72,7 +72,7 @@ it('saves separate pin limits and ivr and dictated code lengths', function (): v
 
     $settings = app(Settings::class);
     expect($settings->int(SettingKey::PinMinLength))->toBe(9)
-        ->and($settings->int(SettingKey::PinMaxLength))->toBe(12)
+        ->and($settings->int(SettingKey::PinMaxLength))->toBe(10)
         ->and($settings->int(SettingKey::IvrCodeLength))->toBe(10)
         ->and($settings->bool(SettingKey::PinClientChangesEnabled))->toBeTrue()
         ->and($settings->bool(SettingKey::PinUniqueRequired))->toBeFalse()

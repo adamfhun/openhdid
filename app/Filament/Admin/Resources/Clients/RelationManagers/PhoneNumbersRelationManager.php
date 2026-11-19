@@ -14,6 +14,7 @@ use App\Sms\SmsRefusal;
 use App\Support\HuDate;
 use App\Support\PhoneNormalizer;
 use App\Support\PhoneNumberRule;
+use App\Support\Placeholders;
 use Filament\Actions\Action;
 use Filament\Actions\CreateAction;
 use Filament\Actions\DeleteAction;
@@ -67,6 +68,8 @@ class PhoneNumbersRelationManager extends RelationManager
         return $schema->components([
             TextInput::make('number_e164')
                 ->label(__('Phone number'))
+                ->tel()
+                ->placeholder(Placeholders::PHONE)
                 ->required()
                 ->maxLength(PhoneNumberRule::RAW_MAX_LENGTH)
                 ->live(onBlur: true)
@@ -86,7 +89,7 @@ class PhoneNumbersRelationManager extends RelationManager
                 ->required(fn (Get $get): bool => $this->otherHolders($get('number_e164'))->isNotEmpty())
                 ->accepted()
                 ->dehydrated(false),
-            TextInput::make('label')->label(__('Label'))->maxLength(50),
+            TextInput::make('label')->label(__('Label'))->placeholder(Placeholders::phoneLabel())->maxLength(50),
             Toggle::make('is_primary')->label(__('Primary'))->helperText(__('Only one number can be primary; switching it on here removes the flag from the others.')),
         ]);
     }
@@ -121,6 +124,8 @@ class PhoneNumbersRelationManager extends RelationManager
             ])
             ->headerActions([
                 CreateAction::make()
+                    // A number removed earlier comes back on its own row (ClientPhones::addByStaff()).
+                    ->using(fn (array $data): ClientPhoneNumber => $phones->addByStaff($this->getOwnerRecord(), $data))
                     ->mutateDataUsing(fn (array $data): array => $data + ['source' => PhoneNumberSource::Admin, 'verified_at' => now(), 'verified_via' => PhoneVerificationSource::Admin, 'verified_by_user_id' => auth()->id()])
                     ->after(fn (ClientPhoneNumber $record) => $this->recordSharedAcknowledgement($record)),
             ])
@@ -147,9 +152,15 @@ class PhoneNumbersRelationManager extends RelationManager
                     ->mutateDataUsing(fn (array $data, ClientPhoneNumber $record): array => ($data['number_e164'] ?? $record->number_e164) === $record->number_e164
                         ? $data
                         : $data + ['verified_at' => now(), 'verified_via' => PhoneVerificationSource::Admin, 'verified_by_user_id' => auth()->id()])
+                    // The number it changes to may be one removed from this client earlier: that row gives way.
+                    ->before(function (array $data, ClientPhoneNumber $record) use ($phones): void {
+                        if (($data['number_e164'] ?? $record->number_e164) !== $record->number_e164) {
+                            $phones->forgetRemovedCopy($this->getOwnerRecord(), (string) $data['number_e164']);
+                        }
+                    })
                     ->after(fn (ClientPhoneNumber $record) => $this->recordSharedAcknowledgement($record)),
                 DeleteAction::make()->visible(fn ($record) => $record->source !== PhoneNumberSource::Sync)
-                    ->modalDescription(fn (ClientPhoneNumber $record) => $record->client->hasPin() && $record->client->phoneNumbers()->count() === 1
+                    ->modalDescription(fn (ClientPhoneNumber $record) => $this->getOwnerRecord()->hasPin() && $this->getOwnerRecord()->phoneNumbers()->count() === 1
                         ? __('This is the client\'s last registered number. Removing it also removes the PIN, because the phone menu could no longer use it.')
                         : null),
             ]);

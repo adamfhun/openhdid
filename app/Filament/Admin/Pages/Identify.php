@@ -252,12 +252,12 @@ class Identify extends Page
             'qa' => [
                 'label' => __('Question & answer'),
                 'enabled' => $this->isEligibleForQa(),
-                'note' => $this->isEligibleForQa() ? null : __('The client has not answered enough questions yet (:n / :r).', ['n' => $this->getUsableAnswerCount(), 'r' => $this->getRequiredAnswerCount()]),
+                'note' => $this->isEligibleForQa() ? null : __('The client has not answered enough questions yet (:n answers, :r needed).', ['n' => $this->getUsableAnswerCount(), 'r' => $this->getRequiredAnswerCount()]),
             ],
             'pin' => [
                 'label' => __('PIN'),
                 'enabled' => $this->agentPinEnabled() && $client->hasPin(),
-                'note' => ! $this->agentPinEnabled() ? __('Agents may not verify PINs; the caller has to use the phone menu.') : ($client->hasPin() ? null : __('The client has no PIN.')),
+                'note' => ! $this->agentPinEnabled() ? __('Switched off for the whole system (Settings › Identification › PIN › "Agents may check the PIN"): the caller uses the phone menu for the PIN.') : ($client->hasPin() ? null : __('The client has no PIN.')),
             ],
         ];
     }
@@ -676,7 +676,7 @@ class Identify extends Page
         // (a shorter one cannot exist): any other input is a typing slip,
         // refused before a session is opened or an attempt is counted against
         // the agent or the client.
-        if (! ctype_digit($this->pin) || strlen($this->pin) < PinService::MIN_ALLOWED_LENGTH || strlen($this->pin) > PinService::MAX_ALLOWED_LENGTH) {
+        if (! ctype_digit($this->pin) || strlen($this->pin) < PinService::MIN_ALLOWED_LENGTH || strlen($this->pin) > PinService::MAX_ACCEPTED_LENGTH) {
             $this->pin = '';
             Notification::make()->title(NotificationText::of(__('A PIN is made of digits only, at least :min and at most :max of them.', ['min' => PinService::MIN_ALLOWED_LENGTH, 'max' => PinService::MAX_ALLOWED_LENGTH])))->danger()->send();
 
@@ -733,6 +733,65 @@ class Identify extends Page
                 }
 
                 $this->notifyOutcome($session);
+            });
+    }
+
+    /**
+     * The identified caller rings from a number the client does not have: the
+     * agent may add it with one button, after asking the caller on the call.
+     * Offered quietly on the call card, only after a successful
+     * identification on this call; whether an identified call confirms an
+     * existing number by itself (a setting) does not matter here.
+     */
+    public function callerNumberToAdd(): ?string
+    {
+        $call = $this->getCall();
+        $number = $call?->caller_number_e164;
+        $passed = $this->getCurrentPassed();
+
+        if ($number === null || $passed === null || $passed->call_id !== $call->id) {
+            return null;
+        }
+
+        return $this->getClient()->phoneNumbers()->where('number_e164', $number)->exists() ? null : $number;
+    }
+
+    public function addCallerNumberAction(): Action
+    {
+        return Action::make('addCallerNumber')
+            ->label(__('Add this number to the client'))
+            ->icon('heroicon-o-phone-arrow-down-left')
+            ->color('gray')
+            ->link()
+            ->visible(fn (): bool => (auth()->user()?->can(Permission::ClientsPhoneAddFromCall->value) ?? false) && $this->callerNumberToAdd() !== null)
+            ->requiresConfirmation()
+            ->modalHeading(fn (): string => __('Add :number to :name?', ['number' => (string) $this->callerNumberToAdd(), 'name' => $this->getClient()->name]))
+            ->modalDescription(function (): string {
+                $holders = app(ClientPhones::class)->otherHolders((string) $this->callerNumberToAdd(), $this->getClient());
+
+                return __('Do this only when the caller, identified on this call, agreed on the call that this number is recorded for them. It is added as a confirmed number; the audit log keeps the call and that the consent was given on it.')
+                    .($holders->isEmpty() ? '' : ' '.__('This number is already on file for :names: with it on both, the phone menu will not recognise the caller from this number.', ['names' => app(ClientPhones::class)->holderNames($holders)]));
+            })
+            ->modalSubmitActionLabel(__('The caller agreed: add the number'))
+            ->action(function (): void {
+                $passed = $this->getCurrentPassed();
+
+                // Decided again on the server: the permission, the identification and the call as they stand now.
+                if (! (auth()->user()?->can(Permission::ClientsPhoneAddFromCall->value) ?? false) || $passed === null || $this->callerNumberToAdd() === null) {
+                    Notification::make()->title(__('The number cannot be added any more.'))->danger()->send();
+
+                    return;
+                }
+
+                try {
+                    $phone = app(ClientPhones::class)->addFromIdentifiedCall($passed, $this->agent());
+                } catch (ValidationException $e) {
+                    Notification::make()->title(NotificationText::of($e->getMessage()))->danger()->send();
+
+                    return;
+                }
+
+                Notification::make()->title(NotificationText::of(__(':number added to the client', ['number' => $phone->number_e164])))->success()->send();
             });
     }
 

@@ -149,7 +149,7 @@ async function verify(phone) {
         <p v-if="phones.length" class="text-xs text-ink-muted">{{ t('Removing your last registered number also removes your PIN: the phone menu could no longer use it.') }}</p>
 
         <form class="card grid gap-3 p-5 sm:grid-cols-[1fr_1fr_auto]" @submit.prevent="add">
-            <div><label class="label" for="number">{{ t('Phone number') }}</label><input id="number" v-model="number" class="input" placeholder="+36 30 123 4567" required maxlength="32" autocomplete="tel" :disabled="atCap" /></div>
+            <div><label class="label" for="number">{{ t('Phone number') }}</label><input id="number" v-model="number" type="tel" class="input" placeholder="+36 30 123 4567" required maxlength="32" autocomplete="tel" :disabled="atCap" /></div>
             <div><label class="label" for="label">{{ t('Label (optional)') }}</label><input id="label" v-model="label" class="input" :placeholder="t('mobile, office…')" maxlength="50" :disabled="atCap" /></div>
             <div class="self-end"><button class="btn-primary w-full" :disabled="busy || atCap">{{ t('Add') }}</button></div>
             <p v-if="atCap" class="text-xs text-ink-muted sm:col-span-3">{{ t('You can keep at most {n} phone numbers. Remove one to add another.', { n: maxNumbers }) }}</p>

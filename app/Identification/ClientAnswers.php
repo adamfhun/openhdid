@@ -9,6 +9,7 @@ use App\Models\Question;
 use App\Settings\SettingKey;
 use App\Settings\Settings;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Str;
 
@@ -82,7 +83,7 @@ class ClientAnswers
     {
         return ClientAnswer::query()
             ->where('client_id', $client->id)
-            ->whereHas('question', fn ($q) => $q->active()->whereColumn('questions.current_version_id', 'client_answers.question_version_id'))
+            ->tap(self::usableOnly(...))
             ->with(['question.currentVersion', 'questionVersion'])
             ->get();
     }
@@ -112,6 +113,48 @@ class ClientAnswers
         }
 
         return (string) $answer->revision;
+    }
+
+    /**
+     * Narrows a query of answers to the usable ones (an active question, the
+     * answer given to its current wording): the one rule behind the count on
+     * the client page, the client list and the export, so they cannot differ.
+     *
+     * @param  Builder<ClientAnswer>  $answers
+     */
+    /**
+     * Why the answer cannot be used for an identification now, or null when
+     * it can; the same conditions as usableOnly(), said in words.
+     */
+    public static function unusableReason(ClientAnswer $answer): ?string
+    {
+        $question = $answer->questionEvenDeleted;
+
+        return match (true) {
+            $question === null || $question->trashed() => __('The question was deleted.'),
+            ! $question->is_active => __('The question is switched off.'),
+            $question->current_version_id !== $answer->question_version_id => __('Answered to an earlier wording of the question; the client has to answer it again.'),
+            default => null,
+        };
+    }
+
+    public static function usableOnly(Builder $answers): void
+    {
+        $answers->whereHas('question', fn ($q) => $q->active()->whereColumn('questions.current_version_id', 'client_answers.question_version_id'));
+    }
+
+    /**
+     * "6 answers", or while they are too few for an identification "3 answers,
+     * 5 needed": the number needed is a system setting, said only where it
+     * tells the reader something (owner's decision of 2026-11-18).
+     */
+    public function summary(int $usable): string
+    {
+        $required = $this->requiredCount();
+
+        return $usable >= $required
+            ? trans_choice('{1} :n answer|[2,*] :n answers', $usable, ['n' => $usable])
+            : __(':n answers, :r needed', ['n' => $usable, 'r' => $required]);
     }
 
     public function usableCount(Client $client): int

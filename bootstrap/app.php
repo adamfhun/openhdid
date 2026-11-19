@@ -6,10 +6,12 @@ use App\Http\Middleware\EnforceAuthSessions;
 use App\Http\Middleware\EnsureClientEntitled;
 use App\Http\Middleware\EnsurePrincipal;
 use App\Http\Middleware\EnsureStaffMfa;
+use App\Http\Middleware\ReportServerErrors;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\TouchLastSeen;
 use App\Http\Middleware\ValidateCsrfTokenUnlessBearer;
 use App\Localization\SetLocale;
+use App\System\ErrorMail;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -51,6 +53,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // such as the call-view switch. The closure runs per request.
         $middleware->redirectGuestsTo(fn (Request $request): ?string => $request->is('api', 'api/*') ? null : route('filament.admin.auth.login'));
         $middleware->append(SecurityHeaders::class);
+        // Outermost, so it sees the final answer of every web request (HTTP 500 Report).
+        $middleware->prepend(ReportServerErrors::class);
         $middleware->statefulApi();
         $middleware->web(append: [SetLocale::class, EnforceAuthSessions::class, TouchLastSeen::class]);
         // Route-level auth is sorted ahead of the group's tail by priority; the
@@ -69,6 +73,13 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        // HTTP 500 Report (HDID_ERROR_MAIL_TO): every reported error, after
+        // the log as before; in a web request it is only noted, the final
+        // answer decides (ReportServerErrors). Never throws.
+        $exceptions->report(function (Throwable $e): void {
+            app(ErrorMail::class)->reported($e);
+        });
+
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api', 'api/*') || $request->expectsJson(),
         );

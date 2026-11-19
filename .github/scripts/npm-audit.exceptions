@@ -16,9 +16,5 @@
 # kivételt a futás jelzi (törölhető). A kivétel csak a megnevezett csomag megnevezett közleményére szól:
 # minden más közlemény megállít. Minden új kivétel a CHANGELOG-ban is szerepel.
 #
-# picomatch, GHSA-fc5q-39xc-vjpf (CVE-2026-112366, ReDoS ismételt extglob mintával): a közlemény
-# 2026-11-17 óta minden kiadott verziót érint (<= 4.0.7), javított verzió nincs. A picomatch a build
-# eszközeinek (Vite, laravel-vite-plugin, vue-router, fontaine) fájlminta-illesztője: a mintákat a saját
-# build-konfigurációnk adja, külső bemenet nem éri el. A lefordított böngészőkódban nincs benne, a kész
-# image-ben nincs Node. Javított verzió megjelenésekor a csomag frissül, és a kivétel törlődik.
-picomatch | GHSA-fc5q-39xc-vjpf | 2027-02-18 | csak a build fájlminta-illesztője (Vite és társai), a mintákat a saját build-konfiguráció adja; nincs a lefordított böngészőkódban és a kész image-ben (ott nincs Node); javított verzió nincs (<= 4.0.7 mind érintett)
+# Jelenleg nincs kivétel (a picomatch GHSA-fc5q-39xc-vjpf kivétele 2026-11-19-én törölve: a közlemény már
+# nem érinti a használt verziót).

@@ -32,18 +32,22 @@ class AnswersRelationManager extends RelationManager
     public function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn (Builder $query) => $query->with(['question.currentVersion', 'questionVersion']))
+            // A deleted question keeps its answers (it can be restored): load it anyway, so the tab says why they cannot be used.
+            ->modifyQueryUsing(fn (Builder $query) => $query->with(['questionEvenDeleted', 'questionVersion']))
             ->columns([
                 TextColumn::make('questionVersion.text')->label(__('Question'))->wrap(),
                 TextColumn::make('questionVersion.version')->label(__('Version'))->badge(),
                 IconColumn::make('usable')->label(__('Usable'))->boolean()
-                    ->state(fn (ClientAnswer $record) => $record->question->is_active && $record->question->current_version_id === $record->question_version_id),
+                    ->state(fn (ClientAnswer $record): bool => ClientAnswers::unusableReason($record) === null)
+                    ->tooltip(fn (ClientAnswer $record): ?string => ClientAnswers::unusableReason($record)),
+                TextColumn::make('unusable_reason')->label(__('Why not usable'))->wrap()->placeholder('-')
+                    ->state(fn (ClientAnswer $record): ?string => ClientAnswers::unusableReason($record)),
                 TextColumn::make('updated_at')->label(__('Answered'))->since(),
             ])
             ->recordActions([
                 DeleteAction::make()->label(__('Remove answer'))
                     ->modalDescription(__('The answer is deleted for good and the helpdesk can no longer ask this question; the client can give a new answer on the portal. The removal is recorded in the audit log.'))
-                    ->using(fn (ClientAnswer $record): bool => app(ClientAnswers::class)->remove($record->client, $record->question, actor: auth('web')->user(), via: 'staff')),
+                    ->using(fn (ClientAnswer $record): bool => app(ClientAnswers::class)->remove($this->getOwnerRecord(), $record->questionEvenDeleted, actor: auth('web')->user(), via: 'staff')),
             ]);
     }
 }

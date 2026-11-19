@@ -3,11 +3,13 @@
 use App\Auth\Permission;
 use App\Auth\Role;
 use App\CallCenter\CallCenterService;
+use App\Clients\ClientPhones;
 use App\Enums\CallStatus;
 use App\Enums\ClientTier;
 use App\Enums\IdMethod;
 use App\Enums\IdSessionStatus;
 use App\Enums\PhoneNumberSource;
+use App\Enums\PhoneVerificationSource;
 use App\Filament\Admin\Pages\Identify;
 use App\Filament\Admin\Pages\SearchClients;
 use App\Filament\Admin\Pages\VerifyCode;
@@ -34,8 +36,11 @@ use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
 use Livewire\Features\SupportLockedProperties\CannotUpdateLockedPropertyException;
 use Livewire\Livewire;
+use Spatie\Permission\Models\Role as SpatieRole;
+use Spatie\Permission\PermissionRegistrar;
 
 beforeEach(function (): void {
     $this->seed(RolesAndPermissionsSeeder::class);
@@ -53,7 +58,8 @@ beforeEach(function (): void {
 it('runs a full q-a session from the page', function (): void {
     $page = Livewire::test(Identify::class, ['client' => $this->client->id])
         ->assertSee('Kovács Anna')
-        ->assertSee('5 / 5 answers')
+        // Enough answers: the count alone; the number needed is said only while they are too few.
+        ->assertSee('5 answers')->assertDontSee('5 / 5')
         ->call('startQa');
 
     $session = IdSession::query()->first();
@@ -84,9 +90,10 @@ it('attaches the client to the call and claims it from the dashboard', function 
 });
 
 it('offers the pin method only when enabled and set', function (): void {
+    // The reason stands under the buttons whichever method is selected, not only on a click.
     Livewire::test(Identify::class, ['client' => $this->client->id])
-        ->call('chooseMethod', 'pin')
-        ->assertSee('Agents may not verify PINs');
+        ->assertSee('Switched off for the whole system')
+        ->assertSeeHtml('data-hdid-method-note="pin"');
 
     app(Settings::class)->set(SettingKey::PinAgentVerificationEnabled, true);
     $this->client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Sync, 'verified_at' => now()]);
@@ -594,3 +601,46 @@ it('does not show a call on the client search that the user may not work on, nor
 
     expect(AuditLog::query()->where('event', 'client.searched')->latest('id')->first()?->context['call_id'] ?? null)->toBeNull();
 })->with(['another level', 'a colleague\'s call', 'no identification permission']);
+
+it('lets the agent add the identified caller\'s number to the client with one confirmed button, and records the consent', function (): void {
+    $call = Call::factory()->create(['client_id' => $this->client->id, 'agent_user_id' => $this->agent->id, 'status' => CallStatus::Active, 'caller_number_e164' => '+36309876543']);
+    $page = fn () => Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id]);
+
+    // Before the identification the button is not there: nobody proved yet who is calling.
+    $page()->assertActionHidden('addCallerNumber');
+
+    $page()->callAction('manualIdentify', data: ['reason' => 'Visszahívtam a rögzített számon, egyeztettük.']);
+    $passed = IdSession::query()->where('call_id', $call->id)->sole();
+
+    $page()->assertActionVisible('addCallerNumber')
+        ->callAction('addCallerNumber')
+        ->assertNotified(__(':number added to the client', ['number' => '+36309876543']));
+
+    $phone = $this->client->phoneNumbers()->sole();
+    expect($phone->number_e164)->toBe('+36309876543')
+        ->and($phone->source)->toBe(PhoneNumberSource::Admin)
+        ->and($phone->verified_via)->toBe(PhoneVerificationSource::IdentifiedCall)
+        ->and($phone->verified_by_user_id)->toBe($this->agent->id)
+        ->and($phone->is_primary)->toBeTrue();
+
+    $entry = AuditLog::query()->where('event', 'client_phone.added_from_call')->sole();
+    expect($entry->actor_id)->toBe($this->agent->id)
+        ->and($entry->context)->toMatchArray(['number' => '+36309876543', 'call_id' => $call->id, 'id_session_id' => $passed->id, 'consent' => 'given_on_the_call']);
+
+    // The client has the number now: nothing left to offer.
+    $page()->assertActionHidden('addCallerNumber');
+});
+
+it('does not offer the caller\'s number without the permission, and refuses a forged call of the action', function (): void {
+    $call = Call::factory()->create(['client_id' => $this->client->id, 'agent_user_id' => $this->agent->id, 'status' => CallStatus::Active, 'caller_number_e164' => '+36309876543']);
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id])
+        ->callAction('manualIdentify', data: ['reason' => 'Visszahívtam a rögzített számon, egyeztettük.']);
+
+    SpatieRole::findByName(Role::Agent->value, 'web')->revokePermissionTo(Permission::ClientsPhoneAddFromCall->value);
+    app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+    Livewire::test(Identify::class, ['client' => $this->client->id, 'call' => $call->id])->assertActionHidden('addCallerNumber');
+    expect(fn () => app(ClientPhones::class)->addFromIdentifiedCall(IdSession::factory()->create(['client_id' => $this->client->id, 'status' => IdSessionStatus::Failed, 'call_id' => $call->id]), $this->agent))
+        ->toThrow(ValidationException::class);
+    expect($this->client->phoneNumbers()->count())->toBe(0);
+});

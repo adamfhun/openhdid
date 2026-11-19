@@ -155,7 +155,7 @@ enum SettingSection: string
             ],
             self::Pin => [
                 SettingKey::PinMinLength, SettingKey::PinMaxLength, SettingKey::PinMaxFailedAttempts, SettingKey::PinLockoutMinutes,
-                SettingKey::PinAgentVerificationEnabled, SettingKey::PinClientChangesEnabled, SettingKey::PinUniqueRequired,
+                SettingKey::PinAgentVerificationEnabled, SettingKey::PinClientChangesEnabled, SettingKey::PinUniqueRequired, SettingKey::PinStaffMayReveal,
             ],
             self::OneTimeCodes => [SettingKey::MobileOtpLength, SettingKey::MobileOtpTtlMinutes, SettingKey::IvrCodeLength, SettingKey::AgentAttemptsPerHour],
             self::PhoneNumbers => [

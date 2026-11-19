@@ -89,6 +89,12 @@ class SettingRules
             $errors[SettingKey::PinMaxLength->value] = __('The maximum PIN length must be at least the minimum PIN length.');
         }
 
+        // Unique PINs need room: four digits are ten thousand PINs, and each refused one is a valid one.
+        if (filter_var($values[SettingKey::PinUniqueRequired->value] ?? SettingKey::PinUniqueRequired->default(), FILTER_VALIDATE_BOOL)
+            && $int(SettingKey::PinMinLength) < PinService::MIN_UNIQUE_LENGTH) {
+            $errors[SettingKey::PinMinLength->value] = __('With "Unique PINs" on, the shortest PIN is at least :min digits: with fewer too few PINs exist, and each refusal of a PIN in use would give a valid one away. Switch "Unique PINs" off to allow a shorter PIN.', ['min' => PinService::MIN_UNIQUE_LENGTH]);
+        }
+
         $errors = [...$errors, ...static::payloadErrors($values)];
 
         // Premium-only with no premium package would serve nobody at all.

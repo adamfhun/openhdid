@@ -84,7 +84,7 @@ class IvrController extends Controller
     {
         $data = $request->validate([
             'call_id' => ['required', 'string', 'max:'.CallEventRequest::CALL_ID_MAX_LENGTH],
-            'pin' => ['required', 'string', 'max:'.PinService::MAX_ALLOWED_LENGTH],
+            'pin' => ['required', 'string', 'max:'.PinService::MAX_ACCEPTED_LENGTH],
         ]);
         $this->takeCallBudget($request, $data['call_id']);
 

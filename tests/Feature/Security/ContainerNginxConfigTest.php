@@ -1,6 +1,7 @@
 <?php
 
 use App\Support\RateLimitExemptions;
+use App\System\ErrorMail;
 use Illuminate\Contracts\Process\ProcessResult;
 use Illuminate\Http\Middleware\TrustProxies;
 use Illuminate\Http\Request;
@@ -621,3 +622,31 @@ it('writes the TLS check and every other runtime output to standard output throu
         File::deleteDirectory($dir);
     }
 });
+
+it('refuses to start on an HTTP 500 Report entry the application would leave out, as the application reads it', function (string $key, string $value, bool $refused): void {
+    $result = runContainerCheckEnv([$key => $value]);
+
+    config(['hdid.error_mail.to' => $key === 'HDID_ERROR_MAIL_TO' ? $value : '', 'hdid.error_mail.statuses' => $key === 'HDID_ERROR_MAIL_STATUSES' ? $value : '']);
+    $ignored = app(ErrorMail::class)->ignoredEntries();
+
+    if ($refused) {
+        expect($result->exitCode())->toBe(64)
+            ->and($result->errorOutput())->toContain('ERROR: '.$key)
+            ->and($ignored)->not->toBeEmpty();
+    } else {
+        expect($result->exitCode())->toBe(0, $result->errorOutput())
+            ->and($ignored)->toBe([]);
+    }
+})->with([
+    ['HDID_ERROR_MAIL_TO', '', false],
+    ['HDID_ERROR_MAIL_TO', 'ops@example.org', false],
+    ['HDID_ERROR_MAIL_TO', 'ops@example.org, dev@example.org', false],
+    ['HDID_ERROR_MAIL_TO', 'ops@example.org dev@example.org', false],
+    ['HDID_ERROR_MAIL_TO', 'ops', true],
+    ['HDID_ERROR_MAIL_TO', 'ops@example.org,Ops Team <ops@example.org>', true],
+    ['HDID_ERROR_MAIL_STATUSES', '', false],
+    ['HDID_ERROR_MAIL_STATUSES', '500,502, 503', false],
+    ['HDID_ERROR_MAIL_STATUSES', '404', true],
+    ['HDID_ERROR_MAIL_STATUSES', '5xx', true],
+    ['HDID_ERROR_MAIL_STATUSES', '600', true],
+]);

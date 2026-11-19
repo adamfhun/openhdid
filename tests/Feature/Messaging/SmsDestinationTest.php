@@ -5,6 +5,7 @@ use App\Enums\OneTimeCodePurpose;
 use App\Enums\OutboundMessageStatus;
 use App\Enums\PhoneNumberSource;
 use App\Enums\PhoneVerificationSource;
+use App\Filament\Actions\SetPinAction;
 use App\Filament\Admin\Pages\ManageSettings;
 use App\Filament\Admin\Resources\Clients\Pages\ViewClient;
 use App\Filament\Admin\Resources\Clients\RelationManagers\PhoneNumbersRelationManager;
@@ -260,13 +261,14 @@ it('offers the PIN by SMS only to a number that receives text messages, and neve
     $client = Client::factory()->synced()->create();
     $client->phoneNumbers()->create(['number_e164' => '+3612345678', 'source' => PhoneNumberSource::Admin, 'is_primary' => true]);
 
+    // No send button for a landline, no proposed PIN either, and the dialog says why.
     $page = Livewire::test(ViewClient::class, ['record' => $client->id])->mountAction(TestAction::make('setPin')->schemaComponent('pin_hash'));
-    expect($page->get('mountedActions.0.data.send_sms'))->toBeFalse('off by default: the landline receives no SMS');
-    $toggle = $page->instance()->getSchemaComponent('mountedActionSchema0.send_sms');
-    expect($toggle->isDisabled())->toBeTrue()
-        ->and($toggle->toHtml())->toContain('No text message goes to +3612345678');
-    $page->fillForm(['pin' => '482915', 'send_sms' => true])
-        ->callMountedAction()
+    expect(SetPinAction::smsBlocker($client))->toContain('No text message goes to +3612345678')
+        ->and($page->get('mountedActions.0.data.pin'))->toBeNull();
+    expect($page->instance()->getMountedAction()->getExtraModalFooterActions())->toBe([]);
+    // Asking for the send all the same (a forged request) sends nothing.
+    $page->fillForm(['pin' => '482915'])
+        ->callMountedAction(['send_sms' => true])
         ->assertHasNoActionErrors()
         ->assertNotified(__('PIN set'));
 
@@ -278,9 +280,15 @@ it('offers the PIN by SMS only to a number that receives text messages, and neve
     // With a mobile beside the landline, the PIN goes to the mobile.
     $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Admin, 'is_primary' => false]);
     Livewire::test(ViewClient::class, ['record' => $client->id])
-        ->callAction(TestAction::make('setPin')->schemaComponent('pin_hash'), ['pin' => '593016', 'send_sms' => true])
+        ->callAction(TestAction::make('setPin')->schemaComponent('pin_hash')->arguments(['send_sms' => true]), ['pin' => '593016'])
         ->assertHasNoActionErrors()
         ->assertNotified(__('PIN set and sent by SMS to :number', ['number' => '+36301234567']));
+
+    // With a number that takes an SMS the second button is there, and a PIN is proposed (masked).
+    $withMobile = Livewire::test(ViewClient::class, ['record' => $client->id])->mountAction(TestAction::make('setPin')->schemaComponent('pin_hash'));
+    expect(array_values(array_map(fn ($action) => $action->getLabel(), $withMobile->instance()->getMountedAction()->getExtraModalFooterActions())))->toBe([__('Set and send by SMS')])
+        ->and($withMobile->get('mountedActions.0.data.pin'))->toMatch('/^\d{6}$/')
+        ->and($withMobile->instance()->getSchemaComponent('mountedActionSchema0.pin')->isPassword())->toBeTrue();
 
     expect(array_column($this->sms->sent, 'to'))->toBe(['+36301234567'])
         ->and(AuditLog::query()->where('event', 'client.pin_sent_sms')->sole()->context)->toMatchArray(['phone' => '+36301234567']);

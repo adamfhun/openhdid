@@ -80,7 +80,7 @@
                             <x-filament::badge color="danger">{{ __('Account closed') }}</x-filament::badge>
                         @endif
                         <x-filament::badge :color="$this->isEligibleForQa() ? 'success' : 'gray'">
-                            {{ __(':n / :r answers', ['n' => $this->getUsableAnswerCount(), 'r' => $this->getRequiredAnswerCount()]) }}
+                            {{ app(\App\Identification\ClientAnswers::class)->summary($this->getUsableAnswerCount()) }}
                         </x-filament::badge>
                         @if ($client->hasPin() && $client->phoneNumbers->isEmpty())
                             <x-filament::badge color="warning" :tooltip="__('The phone menu recognises the caller by a registered number before it asks for the PIN; without a number the PIN cannot be used there.')">{{ __('PIN set, no phone number') }}</x-filament::badge>
@@ -118,6 +118,10 @@
                         {{ $this->wrapUpNoteAction }}
                         {{ $this->releaseCallAction }}
                     </div>
+                    {{-- Quiet on purpose: only after the identification, when the caller's number is not the client's yet. --}}
+                    @if ($this->addCallerNumberAction->isVisible())
+                        <div class="mt-3 text-sm">{{ $this->addCallerNumberAction }}</div>
+                    @endif
                     <div class="mt-4 border-t border-gray-100 pt-3 dark:border-white/5">
                         <p class="mb-2 text-xs {{ $muted }}">{{ __('Someone else on the line? Pick the real caller from the client list; the call moves to them.') }}</p>
                         <x-filament::button tag="a" :href="\App\Filament\Admin\Pages\SearchClients::getUrl(['call' => $call->id])" color="gray" outlined size="sm" icon="heroicon-o-arrow-path">
@@ -159,15 +163,19 @@
                             :color="$this->method === $key ? 'primary' : 'gray'"
                             :outlined="$this->method !== $key"
                             :disabled="! $m['enabled']"
+                            :tooltip="$m['enabled'] ? null : $m['note']"
                         >
                             {{ $m['label'] }}
                         </x-filament::button>
                     @endforeach
                     <span class="ml-auto">{{ $this->manualIdentifyAction }}</span>
                 </div>
-                @if ($methods[$this->method]['note'])
-                    <p class="mt-3 text-sm {{ $muted }}">{{ $methods[$this->method]['note'] }}</p>
-                @endif
+                {{-- Every method that cannot be used says why, not only the one that is selected. --}}
+                @foreach ($methods as $key => $m)
+                    @if ($m['note'] && (! $m['enabled'] || $this->method === $key))
+                        <p class="mt-3 text-sm {{ $muted }}" data-hdid-method-note="{{ $key }}"><span class="font-medium">{{ $m['label'] }}:</span> {{ $m['note'] }}</p>
+                    @endif
+                @endforeach
                 @if (! $methods['qa']['enabled'] && ! $methods['pin']['enabled'] && $this->canIdentifyManually())
                     <p class="mt-3 text-sm {{ $muted }}">{{ __('No automatic method is available for this client. Check a one-time identification code, or record a manual identification with a reason.') }}</p>
                 @endif
@@ -248,7 +256,7 @@
                             @endif
 
                             <div>
-                                <div class="text-xl font-semibold leading-snug">{{ $step->questionVersion?->text ?? $step->question->text }}</div>
+                                <div class="text-xl font-semibold leading-snug">{{ $step->questionVersion?->text ?? $step->question?->text }}</div>
                                 @if ($step->questionVersion?->hint)
                                     <div class="mt-1 text-sm {{ $muted }}">{{ $step->questionVersion->hint }}</div>
                                 @endif
@@ -299,7 +307,7 @@
                 <x-filament::section :heading="__('PIN told by the caller')">
                     <form wire:submit="verifyPin" class="flex gap-3">
                         <x-filament::input.wrapper class="flex-1">
-                            <x-filament::input type="password" wire:model="pin" inputmode="numeric" maxlength="{{ \App\Identification\PinService::MAX_ALLOWED_LENGTH }}" autocomplete="off" placeholder="••••" autofocus x-init="$nextTick(() => $el.focus())" :disabled="! $methods['pin']['enabled']" />
+                            <x-filament::input type="password" wire:model="pin" inputmode="numeric" maxlength="{{ \App\Identification\PinService::MAX_ACCEPTED_LENGTH }}" autocomplete="off" placeholder="••••" autofocus x-init="$nextTick(() => $el.focus())" :disabled="! $methods['pin']['enabled']" />
                         </x-filament::input.wrapper>
                         <x-filament::button type="submit" :disabled="! $methods['pin']['enabled']">{{ __('Verify') }}</x-filament::button>
                     </form>

@@ -104,7 +104,7 @@ it('sets a pin from the admin and sends it by sms to the primary number', functi
     $client->phoneNumbers()->create(['number_e164' => '+36301234567', 'source' => PhoneNumberSource::Admin, 'is_primary' => true]);
 
     Livewire::test(ClientResource::getPages()['index']->getPage())
-        ->callTableAction('setPin', $client, ['pin' => '654321', 'send_sms' => true]);
+        ->callTableAction('setPin', $client, ['pin' => '654321'], ['send_sms' => true]);
 
     expect($client->fresh()->hasPin())->toBeTrue()
         ->and(Hash::check('654321', $client->fresh()->pin_hash))->toBeTrue()

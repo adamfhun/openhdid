@@ -53,3 +53,37 @@ it('deletes for good the answers removed before the upgrade', function (): void 
 
     expect(ClientAnswer::withTrashed()->find($this->answer->id))->toBeNull();
 });
+
+/**
+ * A question deleted after the client answered it: the answer stays (the
+ * question can be restored), cannot be used, and the tab says why instead
+ * of failing on the missing question (500 on 1.15.5).
+ */
+it('shows an answer to a deleted question as unusable with the reason, and lets a manager remove it', function (): void {
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    $this->answer->question->delete();
+
+    Livewire::test(AnswersRelationManager::class, ['ownerRecord' => $this->client, 'pageClass' => ViewClient::class])
+        ->assertSuccessful()
+        ->assertCanSeeTableRecords([$this->answer])
+        ->assertTableColumnStateSet('usable', false, $this->answer)
+        ->assertSee(__('The question was deleted.'))
+        ->callAction(TestAction::make('delete')->table($this->answer))
+        ->assertHasNoActionErrors();
+
+    expect(ClientAnswer::withTrashed()->whereKey($this->answer->getKey())->exists())->toBeFalse()
+        ->and(AuditLog::query()->where('event', 'client_answer.removed')->exists())->toBeTrue();
+});
+
+it('says why an answer cannot be used: switched-off question, earlier wording', function (): void {
+    $this->actingAs(User::factory()->withRole(Role::Admin)->create());
+    $question = $this->answer->question;
+
+    $question->update(['is_active' => false]);
+    Livewire::test(AnswersRelationManager::class, ['ownerRecord' => $this->client, 'pageClass' => ViewClient::class])
+        ->assertTableColumnStateSet('usable', false, $this->answer)
+        ->assertSee(__('The question is switched off.'));
+
+    $question->update(['is_active' => true]);
+    expect(ClientAnswers::unusableReason($this->answer->fresh()))->toBeNull();
+});

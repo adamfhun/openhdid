@@ -40,15 +40,15 @@ it('enforces new pin limits in the service while existing pins still verify', fu
     $client = Client::factory()->withPin('123456')->withPhone()->create();
     app(Settings::class)->setMany([
         SettingKey::PinMinLength->value => 9,
-        SettingKey::PinMaxLength->value => 11,
+        SettingKey::PinMaxLength->value => 10,
     ]);
     $pins = app(PinService::class);
 
     expect($pins->verify($client, '123456', IdChannel::Ivr)->status)->toBe(IdSessionStatus::Passed);
     expect(fn () => $pins->setPin($client, '12345678'))->toThrow(ValidationException::class);
-    expect(fn () => $pins->setPin($client, '123456789012'))->toThrow(ValidationException::class);
-    $pins->setPin($client, '01234567890');
-    expect($pins->verify($client, '01234567890', IdChannel::Ivr)->status)->toBe(IdSessionStatus::Passed);
+    expect(fn () => $pins->setPin($client, '12345678901'))->toThrow(ValidationException::class);
+    $pins->setPin($client, '0123456789');
+    expect($pins->verify($client, '0123456789', IdChannel::Ivr)->status)->toBe(IdSessionStatus::Passed);
 });
 
 it('verifies a pin from the ivr and locks after repeated failures', function (): void {

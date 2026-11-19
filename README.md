@@ -118,7 +118,7 @@ The image contains only what runs the application: Alpine Linux, PHP-FPM with th
 Every image is signed and carries a build provenance and an SBOM attestation. Set `v` to the version you install (the `OPENHDID_VERSION` of your `.env`):
 
 ```sh
-v=1.15.5
+v=1.16.0
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -150,6 +150,7 @@ In [`docs/`](docs), in Hungarian, as PDF (also attached to every release):
 - `openhdid-telepitesi-utmutato` – installation guide: requirements, configuration reference, HTTPS, database, first steps, external systems, acceptance tests
 - `openhdid-uzemeltetesi-kezikonyv` – operations manual: logs, scheduler, health checks, backup and restore, upgrades, scaling, security
 - `felhasznaloi-kezikonyv` – user manual for agents and administrators
+- `gyorskezikonyv` – quick guide to the daily helpdesk work (a few pages)
 
 In the repository root and attached to every release, in Hungarian and English: `UPGRADE.md` (upgrading), `TROUBLESHOOTING.md` (troubleshooting, with the finding ids of `install.sh check`), `install.sh` (installer, checker and fixer), `backup.sh` (backup and restore).
 

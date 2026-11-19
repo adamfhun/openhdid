@@ -49,13 +49,35 @@ class PinService
         private readonly AgentAttemptLimiter $agentLimiter,
     ) {}
 
-    public const MIN_ALLOWED_LENGTH = 6;
+    /** The shortest and the longest PIN the settings may allow for a new PIN (owner's decision of 2026-11-18). */
+    public const MIN_ALLOWED_LENGTH = 4;
 
-    public const MAX_ALLOWED_LENGTH = 12;
+    public const MAX_ALLOWED_LENGTH = 10;
+
+    /**
+     * With unique PINs a new PIN is never shorter than this: four digits make
+     * ten thousand PINs, too few for the clients to have one each, and every
+     * "already in use" refusal would give a valid one away.
+     */
+    public const MIN_UNIQUE_LENGTH = 6;
+
+    /** The longest PIN that is still checked: PINs set while twelve digits were allowed stay valid. */
+    public const MAX_ACCEPTED_LENGTH = 12;
 
     public function minLength(): int
     {
-        return max(self::MIN_ALLOWED_LENGTH, min(self::MAX_ALLOWED_LENGTH, $this->settings->int(SettingKey::PinMinLength)));
+        $floor = $this->uniquenessRequired() ? self::MIN_UNIQUE_LENGTH : self::MIN_ALLOWED_LENGTH;
+
+        return max($floor, min(self::MAX_ALLOWED_LENGTH, $this->settings->int(SettingKey::PinMinLength)));
+    }
+
+    /**
+     * Whether the staff member who sets a PIN may uncover it in the dialog
+     * (off by default: the field stays masked, the PIN goes out by SMS).
+     */
+    public function staffMayReveal(): bool
+    {
+        return $this->settings->bool(SettingKey::PinStaffMayReveal);
     }
 
     public function maxLength(): int

@@ -152,19 +152,19 @@ it('exposes and enforces configured pin limits on the client api', function (): 
 
     app(Settings::class)->setMany([
         SettingKey::PinMinLength->value => 9,
-        SettingKey::PinMaxLength->value => 12,
+        SettingKey::PinMaxLength->value => 10,
     ]);
 
     $this->getJson('/api/v1/client/me')->assertOk()
         ->assertJsonPath('data.identification.pin_min_length', 9)
-        ->assertJsonPath('data.identification.pin_max_length', 12);
+        ->assertJsonPath('data.identification.pin_max_length', 10);
     $this->putJson('/api/v1/client/pin', ['pin' => '12345678', 'pin_confirmation' => '12345678'])
         ->assertUnprocessable()->assertJsonValidationErrors('pin');
     expect($this->client->fresh()->hasPin())->toBeFalse();
 
-    $this->putJson('/api/v1/client/pin', ['pin' => '012345678901', 'pin_confirmation' => '012345678901'])
-        ->assertOk()->assertJsonPath('min_length', 9)->assertJsonPath('max_length', 12);
-    expect(Hash::check('012345678901', $this->client->fresh()->pin_hash))->toBeTrue();
+    $this->putJson('/api/v1/client/pin', ['pin' => '0123456789', 'pin_confirmation' => '0123456789'])
+        ->assertOk()->assertJsonPath('min_length', 9)->assertJsonPath('max_length', 10);
+    expect(Hash::check('0123456789', $this->client->fresh()->pin_hash))->toBeTrue();
     $this->assertDatabaseHas('audit_log', ['event' => 'client.pin_set', 'subject_id' => $this->client->id]);
 });
 

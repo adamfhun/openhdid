@@ -25,6 +25,7 @@ use App\Support\ClientAddress;
 use App\Support\HuDate;
 use App\Support\OutboundProxy;
 use App\Support\PhoneNormalizer;
+use App\System\ErrorMail;
 use App\System\InstallationCommandMutex;
 use App\System\InstallationEventMutex;
 use App\System\InstallationRateLimiter;
@@ -51,6 +52,7 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory as Http;
 use Illuminate\Http\Request;
 use Illuminate\Mail\Markdown;
+use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
@@ -134,6 +136,13 @@ class AppServiceProvider extends ServiceProvider
 
         // A long-running worker must not keep the settings of a past request.
         Queue::before(fn () => $this->app->make(Settings::class)->forgetLocal());
+
+        // The job an error report names (HTTP 500 Report). A failing job is
+        // reported after its JobFailed event, so only the next round of the
+        // worker (or a finished job) forgets it.
+        Queue::before(fn (JobProcessing $event) => ErrorMail::jobStarted($event->job));
+        Queue::after(fn () => ErrorMail::jobEnded());
+        Queue::looping(fn () => ErrorMail::jobEnded());
 
         // Markdown mails (the fallback login link mail prints the client's
         // name): echoed data stays text, a link or image in it is not rendered.

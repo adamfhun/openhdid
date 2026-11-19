@@ -80,7 +80,7 @@ it('attaches the installer and every profile file to the release under the name 
             ->and($installer)->toContain("{$asset}) printf '{$relative}'");
     }
 
-    // 16 assets: 3 PDFs, the 6 files of the cp line, env.example, 4 profile files, the SBOM and SHA256SUMS.
+    // 17 assets: 4 PDFs, the 6 files of the cp line, env.example, 4 profile files, the SBOM and SHA256SUMS.
     expect($profiles)->toHaveCount(4);
 });
 

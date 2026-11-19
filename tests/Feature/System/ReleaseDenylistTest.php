@@ -47,16 +47,17 @@ function denylistSandbox(): array
         expect(preg_match('/^'.$function.'\(\) \{.*?^\}$/ms', $script, $body))->toBe(1, "preflight.sh has no {$function}()");
         $parts[] = $body[0];
     }
-    $parts[] = 'paths() { printf "%s\n" "${PRINTED_DOCS[@]}"; printf "source=%s\nimages=%s\n" "$MANUAL_SOURCE" "$MANUAL_IMAGES"; }';
+    $parts[] = 'paths() { printf "%s\n" "${PRINTED_DOCS[@]}"; printf "source=%s\nquick=%s\nimages=%s\n" "$MANUAL_SOURCE" "$MANUAL_QUICK_SOURCE" "$MANUAL_IMAGES"; }';
     $parts[] = '"$@"';
     file_put_contents($base.'/harness.sh', implode("\n\n", $parts)."\n");
     file_put_contents($base.'/terms.txt', "# Test terms\n".DENYLIST_TEST_TERM."\n");
 
     $docs = [];
-    $source = $images = '';
+    $source = $quick = $images = '';
     foreach (explode("\n", trim(denylistHarness($base, ['paths'])->throw()->output())) as $line) {
         match (true) {
             str_starts_with($line, 'source=') => $source = substr($line, 7),
+            str_starts_with($line, 'quick=') => $quick = substr($line, 6),
             str_starts_with($line, 'images=') => $images = substr($line, 7),
             default => $docs[] = $line,
         };
@@ -76,6 +77,8 @@ function denylistSandbox(): array
         denylistWrite($sandbox['export'].'/docs/'.basename($doc, '.html').'.pdf', denylistPdf($title));
     }
     denylistWrite($sandbox['root'].'/'.$source, "<h1>Kézikönyv</h1>\n[[IMG:01-belepes|<b>Belépő oldal.</b> Jelszavas belépés.]]\n");
+    // The quick guide: its own source, the same screenshots (a cropped one too).
+    denylistWrite($sandbox['root'].'/'.$quick, "<h1>Gyorskézikönyv</h1>\n[[IMG-TOP:01-belepes|<b>Belépés.</b>]]\n");
     denylistWrite($sandbox['root'].'/'.$images.'/01-belepes.jpg', 'jpeg');
     denylistWrite($sandbox['export'].'/README.md', "# OpenHDID\n");
 
@@ -307,7 +310,7 @@ it('refuses a published PDF older than the HTML it is printed from', function ()
     expect(denylistHarness($sandbox['base'], ['check_printed_pdfs', $sandbox['root'], '0'])->exitCode())->toBe(0);
 
     // A new screenshot makes the manual's PDF stale: it is printed from forras.html and the screenshots.
-    $manual = $sandbox['docs'][array_key_last($sandbox['docs'])];
+    $manual = collect($sandbox['docs'])->first(fn (string $doc): bool => str_contains($doc, 'felhasznaloi-kezikonyv'));
     denylistWrite($sandbox['root'].'/'.$sandbox['images'].'/02-vezerlopult.jpg', 'jpeg');
     denylistGit($sandbox, ['add', '-A']);
     denylistGit($sandbox, ['commit', '--quiet', '-m', 'New screenshot'], '2026-11-02T12:00:00Z');
@@ -339,8 +342,10 @@ it('compares uncommitted changes by their file time under --dirty', function ():
 
 it('dates an uncommitted screenshot folder by the files git keeps, not by the files it ignores', function (): void {
     $sandbox = denylistSandbox();
-    $manual = $sandbox['docs'][array_key_last($sandbox['docs'])];
-    $pdf = substr($manual, 0, -5).'.pdf';
+    // Both manuals are printed from the screenshots: the full one and the quick guide.
+    $manuals = array_values(array_filter($sandbox['docs'], fn (string $doc): bool => str_contains($doc, 'kezikonyv.html') && str_starts_with(basename($doc), 'hdid-')));
+    expect($manuals)->toHaveCount(2);
+    $pdfs = array_map(fn (string $doc): string => substr($doc, 0, -5).'.pdf', $manuals);
     $images = $sandbox['root'].'/'.$sandbox['images'];
     denylistWrite($sandbox['root'].'/.gitignore', ".DS_Store\n");
     denylistGit($sandbox, ['init', '--quiet', '-b', 'main']);
@@ -350,8 +355,10 @@ it('dates an uncommitted screenshot folder by the files git keeps, not by the fi
     // A new screenshot, then the manual printed again; neither committed yet.
     denylistWrite($images.'/02-vezerlopult.jpg', 'jpeg');
     touch($images.'/02-vezerlopult.jpg', time() + 60);
-    File::append($sandbox['root'].'/'.$pdf, "\n");
-    touch($sandbox['root'].'/'.$pdf, time() + 120);
+    foreach ($pdfs as $pdf) {
+        File::append($sandbox['root'].'/'.$pdf, "\n");
+        touch($sandbox['root'].'/'.$pdf, time() + 120);
+    }
     expect(denylistHarness($sandbox['base'], ['check_printed_pdfs', $sandbox['root'], '1'])->exitCode())->toBe(0);
 
     // The file manager writes its ignored folder settings afterwards: no source of the manual.
@@ -360,12 +367,18 @@ it('dates an uncommitted screenshot folder by the files git keeps, not by the fi
     $result = denylistHarness($sandbox['base'], ['check_printed_pdfs', $sandbox['root'], '1']);
     expect($result->exitCode())->toBe(0, $result->output().$result->errorOutput());
 
-    // A further screenshot after the print still makes the manual's PDF stale.
+    // A further screenshot after the print still makes the manuals' PDFs stale (the check stops at
+    // the first, the full manual); with that one printed again, the quick guide's still stops it.
     denylistWrite($images.'/03-ugyfel.jpg', 'jpeg');
     touch($images.'/03-ugyfel.jpg', time() + 240);
     $result = denylistHarness($sandbox['base'], ['check_printed_pdfs', $sandbox['root'], '1']);
     expect($result->exitCode())->not->toBe(0)
-        ->and($result->errorOutput())->toContain($pdf);
+        ->and($result->errorOutput())->toContain($pdfs[0]);
+
+    touch($sandbox['root'].'/'.$pdfs[0], time() + 300);
+    $result = denylistHarness($sandbox['base'], ['check_printed_pdfs', $sandbox['root'], '1']);
+    expect($result->exitCode())->not->toBe(0)
+        ->and($result->errorOutput())->toContain($pdfs[1]);
 });
 
 it('refuses a published PDF whose title is not the title of its HTML', function (): void {

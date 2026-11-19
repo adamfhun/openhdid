@@ -300,7 +300,7 @@ it('takes a PIN of digits only, at most as long as a PIN can be, before any sess
 
     Livewire::test(Identify::class, ['client' => $client->id])
         ->call('chooseMethod', 'pin')
-        ->assertSeeHtml('maxlength="'.PinService::MAX_ALLOWED_LENGTH.'"')
+        ->assertSeeHtml('maxlength="'.PinService::MAX_ACCEPTED_LENGTH.'"')
         ->set('pin', $pin)
         ->call('verifyPin')
         ->assertNotified();
@@ -308,7 +308,7 @@ it('takes a PIN of digits only, at most as long as a PIN can be, before any sess
     expect(IdSession::query()->count())->toBe(0)
         ->and($client->fresh()->pin_failed_attempts)->toBe(0);
 })->with([
-    'too long' => [str_repeat('1', PinService::MAX_ALLOWED_LENGTH + 1)],
+    'too long' => [str_repeat('1', PinService::MAX_ACCEPTED_LENGTH + 1)],
     'not digits' => ['12a456'],
     'shorter than any PIN can be' => ['123'],
     'huge' => [str_repeat('9', 100_000)],

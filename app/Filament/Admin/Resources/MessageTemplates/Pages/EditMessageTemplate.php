@@ -13,6 +13,7 @@ use App\Models\MessageTemplate;
 use App\Support\EmailAddressRule;
 use App\Support\PhoneNormalizer;
 use App\Support\PhoneNumberRule;
+use App\Support\Placeholders;
 use Filament\Actions\Action;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
@@ -69,7 +70,7 @@ class EditMessageTemplate extends EditRecord
                 ->icon('heroicon-o-paper-airplane')
                 ->color('info')
                 ->schema(fn (): array => $this->getRecord()->key->channel() === Channel::Sms
-                    ? [TextInput::make('phone')->label(__('Phone number'))->tel()->required()->maxLength(PhoneNumberRule::RAW_MAX_LENGTH)->rule(new PhoneNumberRule)->placeholder('+36 30 123 4567')]
+                    ? [TextInput::make('phone')->label(__('Phone number'))->tel()->placeholder(Placeholders::PHONE)->required()->maxLength(PhoneNumberRule::RAW_MAX_LENGTH)->rule(new PhoneNumberRule)->placeholder('+36 30 123 4567')]
                     : [TextInput::make('email')->label(__('E-mail address'))->type('email')->required()->maxLength(EmailAddressRule::MAX_LENGTH)->rule(new EmailAddressRule)->default(auth()->user()?->email)])
                 ->action(function (array $data): void {
                     /** @var MessageTemplate $record */

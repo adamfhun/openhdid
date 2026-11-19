@@ -103,10 +103,23 @@ final readonly class ExternalRecordDto
      */
     private static function build(array $row, array $mapping): self|string
     {
-        $cell = static function (string $target) use ($row, $mapping): mixed {
+        // The heading named in the column mapping is matched as it is written first, then
+        // without regard to letter case and outer spaces: "Department " in the source and
+        // "department" in the mapping are the same column.
+        $headings = [];
+        foreach (array_keys($row) as $heading) {
+            $headings[mb_strtolower(trim((string) $heading))] ??= $heading;
+        }
+        $cell = static function (string $target) use ($row, $mapping, $headings): mixed {
             $column = $mapping[$target] ?? $target;
 
-            return is_string($column) ? ($row[$column] ?? $row[$target] ?? null) : null;
+            if (! is_string($column)) {
+                return null;
+            }
+
+            $column = trim($column) === '' ? $target : $column;
+
+            return $row[$column] ?? $row[$headings[mb_strtolower(trim($column))] ?? $target] ?? $row[$target] ?? null;
         };
         $phoneColumns = (array) ($mapping['phones'] ?? 'phone');
         $cells = [...array_map($cell, self::FIELDS), ...array_map(fn (string $column): mixed => $row[$column] ?? null, $phoneColumns)];

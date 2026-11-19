@@ -67,6 +67,18 @@ class ClientAnswer extends Model
         return $this->belongsTo(Question::class);
     }
 
+    /**
+     * The question even when it was deleted (soft delete; it can be restored,
+     * the answers stay). For showing an answer only: whether it can be used
+     * is ClientAnswers::usableOnly(), where a deleted question never counts.
+     *
+     * @return BelongsTo<Question, $this>
+     */
+    public function questionEvenDeleted(): BelongsTo
+    {
+        return $this->belongsTo(Question::class, 'question_id')->withTrashed();
+    }
+
     /** @return BelongsTo<QuestionVersion, $this> */
     public function questionVersion(): BelongsTo
     {

@@ -14,6 +14,7 @@ enum Permission: string
     case ClientsView = 'clients.view';
     case ClientsManage = 'clients.manage';
     case ClientsPinSet = 'clients.pin.set';
+    case ClientsPhoneAddFromCall = 'clients.phone.add_from_call';
     case ClientsPackageOverride = 'clients.package.override';
     case ClientsExport = 'clients.export';
     case ExternalRecordsView = 'external-records.view';

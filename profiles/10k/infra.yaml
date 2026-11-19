@@ -70,7 +70,7 @@ services:
 
   # A sor, a zárak, a korlátszámlálók és a gyorsítótár (REDIS_HOST az alkalmazásgépeken).
   valkey:
-    image: valkey/valkey:9.1.3-alpine3.24@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
+    image: valkey/valkey:9.1.4-alpine3.24@sha256:56729e68bdda139cbd3f6a2538683dc3523325fc5711ea1a379938f1b37893f0
     restart: unless-stopped
     command: [valkey-server, /etc/valkey/valkey.conf]
     configs:
@@ -94,7 +94,7 @@ services:
 
   # A munkamenetek (REDIS_SESSION_HOST az alkalmazásgépeken), saját jelszóval.
   valkey-sessions:
-    image: valkey/valkey:9.1.3-alpine3.24@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
+    image: valkey/valkey:9.1.4-alpine3.24@sha256:56729e68bdda139cbd3f6a2538683dc3523325fc5711ea1a379938f1b37893f0
     restart: unless-stopped
     command: [valkey-server, /etc/valkey/valkey.conf]
     configs:

@@ -6,7 +6,7 @@ namespace App\Support;
  * Upper limits of free-form input, one place for the panel field
  * (maxLength), the server rule ("max:") and the column they end up in, so
  * the three cannot drift apart. Limits that belong to a domain stay with it
- * (PinService::MAX_ALLOWED_LENGTH, MobileOtpService::MIN_LENGTH,
+ * (PinService::MAX_ACCEPTED_LENGTH, MobileOtpService::MIN_LENGTH,
  * StaffMfa::CODE_LENGTH, OidcClient::MAX_TOKEN_LENGTH,
  * ExternalRecordDto::EXTERNAL_ID_PATTERN, EmailAddressRule, PhoneNumberRule,
  * DomainNameRule).

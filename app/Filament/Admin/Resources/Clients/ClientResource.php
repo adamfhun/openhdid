@@ -55,6 +55,8 @@ use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
+use Filament\Schemas\Components\Grid;
+use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Text;
 use Filament\Schemas\Schema;
@@ -640,6 +642,26 @@ class ClientResource extends BaseResource
      * What the PIN badge cannot say in two words: why it is locked (red) or
      * why the phone menu cannot use it (yellow). Null when nothing is wrong.
      */
+    /**
+     * Why an agent cannot check this client's PIN on a call, or null when the
+     * agent can: said on the client page, where a greyed-out method on the
+     * identification page would otherwise leave the reason to guesswork.
+     */
+    public static function agentPinCheckBlocker(Client $client): ?string
+    {
+        return match (true) {
+            ! app(PinService::class)->agentVerificationEnabled() => __('Switched off for the whole system (Settings › Identification › PIN › "Agents may check the PIN"): the caller uses the phone menu for the PIN.'),
+            ! $client->hasPin() => __('The client has no PIN.'),
+            ! static::isIdentifiable($client) => __('The client\'s account is closed or no longer entitled; it cannot be identified.'),
+            default => null,
+        };
+    }
+
+    private static function isIdentifiable(Client $client): bool
+    {
+        return ! $client->isClosed() && app(ClientTiers::class)->isEntitled($client);
+    }
+
     public static function pinNote(Client $client): ?string
     {
         // Said with or without a PIN: the security questions are suspended as well.
@@ -749,7 +771,7 @@ class ClientResource extends BaseResource
     public static function openDirectoryRecordAction(): Action
     {
         return Action::make('openDirectoryRecord')
-            ->label(__('Open EMD record'))
+            ->label(__('View EMD data'))
             ->icon('heroicon-o-arrow-top-right-on-square')
             ->color('primary')
             ->visible(fn (Client $record) => $record->externalRecord !== null && ExternalRecordResource::canAccess())
@@ -818,74 +840,101 @@ class ClientResource extends BaseResource
                     ->extraAttributes(fn (Client $record) => ['class' => filled($record->notes) ? static::NOTE_CLASSES : 'whitespace-pre-line'])
                     ->afterLabel(static::inline([static::editNotesAction()])),
             ]),
-            Section::make(__('Identification'))->columns(3)->schema([
-                TextEntry::make('pin_hash')->label(__('PIN'))->badge()
-                    ->state(fn (Client $record) => static::pinLabel($record))
-                    ->color(fn (Client $record) => static::pinColor($record))
-                    ->afterLabel(static::inline([SetPinAction::make(), static::clearPinAction()]))
-                    ->belowContent(static::note(fn (Client $record) => static::pinNote($record), fn (Client $record) => app(PinService::class)->isLocked($record) ? 'danger' : 'warning')),
-                TextEntry::make('answers')->label(__('Security questions'))->badge()
-                    ->state(fn (Client $record) => __(':n / :r answers', ['n' => $answers->usableCount($record), 'r' => $answers->requiredCount()]))
-                    ->color(fn (Client $record) => $answers->isEligible($record) ? 'success' : 'gray'),
-                TextEntry::make('shared_numbers')->label(__('Shared phone numbers'))->badge()->color('warning')
-                    ->state(fn (Client $record) => app(ClientPhones::class)->sharedNumbersOf($record))
-                    ->visible(fn (Client $record) => app(ClientPhones::class)->sharedNumbersOf($record) !== [])
-                    ->belowContent(static::note(fn (Client $record) => __('Also on file for another client: the phone menu cannot recognise the caller from these numbers, so no PIN is asked there. See the Shared phone numbers page.'), 'warning')),
-            ]),
-            Section::make(__('Packages and level'))->columns(3)->schema([
-                TextEntry::make('implicit_package')->label(__('Implicit package'))->placeholder('-'),
-                TextEntry::make('explicit_package')->label(__('Explicit package'))->placeholder('-'),
-                TextEntry::make('tier')->label(__('Portal access'))->badge()
-                    ->state(fn (Client $record) => app(ClientTiers::class)->tierFor($record)?->label() ?? __('None'))
-                    ->color(fn (Client $record) => match (app(ClientTiers::class)->tierFor($record)) {
-                        ClientTier::Premium => 'warning', ClientTier::Standard => 'success', default => 'gray',
-                    }),
-                TextEntry::make('package_override')->label(__('Package override'))->badge()->color('warning')->placeholder('-')
-                    ->state(fn (Client $record) => $record->hasActivePackageOverride() ? $record->package_override : null)
-                    ->afterLabel(static::inline([static::overrideAction(), static::endOverrideAction()]))
-                    ->helperText(fn (Client $record) => $record->hasActivePackageOverride()
-                        ? __(':reason · by :who · until :until', ['reason' => $record->package_override_reason, 'who' => $record->packageOverrideBy?->name ?? '-', 'until' => $record->package_override_until?->format(HuDate::DATETIME)])
-                        : null),
-                TextEntry::make('sponsor')->label(__('Linked to'))->placeholder(__('not linked'))->columnSpan(2)
-                    ->state(fn (Client $record) => $record->sponsor()?->name)
-                    ->url(fn (Client $record) => ($s = $record->sponsor()) ? static::getUrl('view', ['record' => $s]) : null)
-                    ->afterLabel(static::inline([static::linkToSponsorAction(), static::muteLinkWarningAction(), static::unmuteLinkWarningAction()]))
-                    ->belowContent([
-                        static::note(fn (Client $record) => static::linkWarning($record), 'danger'),
-                        static::note(fn (Client $record) => static::linkWarningMutedNote($record), 'gray'),
+            // Two columns from the wide screen up (owner's decision of 2026-11-18): what the helpdesk
+            // works with on the left (the ways to identify the client, each with whether it can be
+            // used now and why not), the account's background on the right.
+            Grid::make(['default' => 1, 'xl' => 3])->schema([
+                Group::make([
+                    Section::make(__('Identification: available methods'))->columns(1)
+                        ->description(__('Each method says whether it can be used now, and why not when it cannot.'))
+                        ->schema([
+                            TextEntry::make('pin_hash')->label(__('PIN in the phone menu'))->badge()
+                                ->state(fn (Client $record) => static::pinLabel($record))
+                                ->color(fn (Client $record) => static::pinColor($record))
+                                ->afterLabel(static::inline([SetPinAction::make(), static::clearPinAction()]))
+                                ->belowContent(static::note(fn (Client $record) => static::pinNote($record), fn (Client $record) => app(PinService::class)->isLocked($record) ? 'danger' : 'warning')),
+                            TextEntry::make('pin_agent_check')->label(__('PIN check by an agent'))->badge()
+                                ->state(fn (Client $record) => static::agentPinCheckBlocker($record) === null ? __('available') : __('not available'))
+                                ->color(fn (Client $record) => static::agentPinCheckBlocker($record) === null ? 'success' : 'gray')
+                                ->belowContent(static::note(fn (Client $record) => static::agentPinCheckBlocker($record), 'gray')),
+                            TextEntry::make('answers')->label(__('Security questions'))->badge()
+                                ->state(fn (Client $record) => $answers->summary($answers->usableCount($record)))
+                                ->color(fn (Client $record) => $answers->isEligible($record) ? 'success' : 'gray')
+                                ->belowContent(static::note(fn (Client $record) => ($stale = $answers->stale($record)->count()) > 0
+                                    ? trans_choice('{1} :n answer belongs to an earlier wording of its question and does not count until the client answers it again.|[2,*] :n answers belong to an earlier wording of their question and do not count until the client answers them again.', $stale, ['n' => $stale])
+                                    : null, 'warning')),
+                            TextEntry::make('one_time_code')->label(__('One-time identification code'))->badge()
+                                ->state(fn (Client $record) => static::isIdentifiable($record) ? __('available') : __('not available'))
+                                ->color(fn (Client $record) => static::isIdentifiable($record) ? 'success' : 'gray')
+                                ->belowContent(static::note(fn (Client $record) => static::isIdentifiable($record)
+                                    ? __('The client asks for a code on the portal or in the mobile app and reads it out on the call.')
+                                    : __('The client\'s account is closed or no longer entitled; it cannot be identified.'), 'gray')),
+                            TextEntry::make('manual_identification')->label(__('Manual identification'))->badge()->color('warning')
+                                ->state(__('exceptional'))
+                                ->belowContent(static::note(fn () => __('Only with a reason and with its own permission; every use is recorded.'), 'gray')),
+                            TextEntry::make('shared_numbers')->label(__('Shared phone numbers'))->badge()->color('warning')
+                                ->state(fn (Client $record) => app(ClientPhones::class)->sharedNumbersOf($record))
+                                ->visible(fn (Client $record) => app(ClientPhones::class)->sharedNumbersOf($record) !== [])
+                                ->belowContent(static::note(fn (Client $record) => __('Also on file for another client: the phone menu cannot recognise the caller from these numbers, so no PIN is asked there. See the Shared phone numbers page.'), 'warning')),
+                        ]),
+                ])->columnSpan(['default' => 1, 'xl' => 2]),
+                Group::make([
+                    Section::make(__('Packages and level'))->columns(2)->schema([
+                        TextEntry::make('implicit_package')->label(__('Implicit package'))->placeholder('-'),
+                        TextEntry::make('explicit_package')->label(__('Explicit package'))->placeholder('-'),
+                        TextEntry::make('tier')->label(__('Portal access'))->badge()
+                            ->state(fn (Client $record) => app(ClientTiers::class)->tierFor($record)?->label() ?? __('None'))
+                            ->color(fn (Client $record) => match (app(ClientTiers::class)->tierFor($record)) {
+                                ClientTier::Premium => 'warning', ClientTier::Standard => 'success', default => 'gray',
+                            }),
+                        TextEntry::make('package_override')->label(__('Package override'))->badge()->color('warning')->placeholder('-')->columnSpanFull()
+                            ->state(fn (Client $record) => $record->hasActivePackageOverride() ? $record->package_override : null)
+                            ->afterLabel(static::inline([static::overrideAction(), static::endOverrideAction()]))
+                            ->helperText(fn (Client $record) => $record->hasActivePackageOverride()
+                                ? __(':reason · by :who · until :until', ['reason' => $record->package_override_reason, 'who' => $record->packageOverrideBy?->name ?? '-', 'until' => $record->package_override_until?->format(HuDate::DATETIME)])
+                                : null),
+                        TextEntry::make('sponsor')->label(__('Linked to'))->placeholder(__('not linked'))->columnSpanFull()
+                            ->state(fn (Client $record) => $record->sponsor()?->name)
+                            ->url(fn (Client $record) => ($s = $record->sponsor()) ? static::getUrl('view', ['record' => $s]) : null)
+                            ->afterLabel(static::inline([static::linkToSponsorAction(), static::muteLinkWarningAction(), static::unmuteLinkWarningAction()]))
+                            ->belowContent([
+                                static::note(fn (Client $record) => static::linkWarning($record), 'danger'),
+                                static::note(fn (Client $record) => static::linkWarningMutedNote($record), 'gray'),
+                            ]),
                     ]),
+                    Section::make(__('Sign-in'))->columns(1)->schema([
+                        TextEntry::make('last_login_at')->label(__('Last login'))->since()->placeholder('-')
+                            ->afterLabel(static::inline([SendMagicLinkAction::make()])),
+                        TextEntry::make('sso_bindings')->label(__('Sign-in binding'))->listWithLineBreaks()
+                            ->state(fn (Client $record) => UnbindSsoAction::lines($record))
+                            ->placeholder(__('Not bound yet: the first company sign-in binds the account.'))
+                            ->helperText(__('The directory identity the account\'s company sign-in is bound to; a sign-in under the same e-mail address from another identity is refused until an administrator clears the binding.'))
+                            ->afterLabel(static::inline([UnbindSsoAction::make()])),
+                    ]),
+                    Section::make(__('EMD data'))->columns(2)
+                        ->description(__('Taken over from EMD and read-only; the further columns chosen under Settings › Clients and levels › Client list and client page are listed here too.'))
+                        ->schema([
+                            TextEntry::make('externalRecord.external_id')->key('external_id')->label(__('External id'))->placeholder(__('not linked to EMD'))->columnSpanFull()
+                                ->afterLabel(static::inline([static::openDirectoryRecordAction()]))
+                                ->belowContent(static::note(fn (Client $record) => static::directoryNote($record), fn (Client $record) => $record->externalRecord?->isMissing() ? 'danger' : 'warning')),
+                            TextEntry::make('externalRecord.company')->label(__('Company'))->placeholder('-'),
+                            TextEntry::make('job_title')->label(__('Job title'))->placeholder('-')->state(fn (Client $record) => $record->externalRecord?->jobTitle()),
+                            TextEntry::make('department')->label(__('Department'))->placeholder('-')->state(fn (Client $record) => $record->externalRecord?->departmentName()),
+                            TextEntry::make('externalRecord.login_name')->label(__('Login name'))->visible(fn (Client $record) => filled($record->externalRecord?->login_name)),
+                            TextEntry::make('externalRecord.room')->label(__('Room'))->visible(fn (Client $record) => filled($record->externalRecord?->room)),
+                            TextEntry::make('externalRecord.employment_status')->label(__('Employment status'))->visible(fn (Client $record) => filled($record->externalRecord?->employment_status)),
+                            TextEntry::make('externalRecord.email_domain')->label(__('E-mail domain'))->placeholder('-'),
+                            ...static::directoryFieldEntries(),
+                        ]),
+                    Section::make(__('Support line for this client'))->columns(1)->description(__('The client should call the line of their own level; the support contact shown to them on the portal.'))
+                        ->id('client-support-line')->collapsible()->collapsed()->persistCollapsed()
+                        ->schema([
+                            TextEntry::make('support_phone')->label(__('Phone'))->placeholder('-')->state(fn (Client $record) => static::supportOf($record)['phone'] ?? null),
+                            TextEntry::make('support_email')->label(__('E-mail'))->placeholder('-')->state(fn (Client $record) => static::supportOf($record)['email'] ?? null),
+                            TextEntry::make('support_hours')->label(__('Hours'))->placeholder('-')->state(fn (Client $record) => static::supportOf($record)['hours'] ?? null),
+                        ]),
+                ])->columnSpan(1),
             ]),
-            Section::make(__('Sign-in'))->columns(3)->schema([
-                TextEntry::make('last_login_at')->label(__('Last login'))->since()->placeholder('-')
-                    ->afterLabel(static::inline([SendMagicLinkAction::make()])),
-                TextEntry::make('sso_bindings')->label(__('Sign-in binding'))->listWithLineBreaks()->columnSpan(2)
-                    ->state(fn (Client $record) => UnbindSsoAction::lines($record))
-                    ->placeholder(__('Not bound yet: the first company sign-in binds the account.'))
-                    ->helperText(__('The directory identity the account\'s company sign-in is bound to; a sign-in under the same e-mail address from another identity is refused until an administrator clears the binding.'))
-                    ->afterLabel(static::inline([UnbindSsoAction::make()])),
-            ]),
-            Section::make(__('EMD data'))->columns(3)
-                ->description(__('Taken over from EMD and read-only; the further columns chosen under Settings › Clients and levels › Client list and client page are listed here too.'))
-                ->schema([
-                    TextEntry::make('externalRecord.external_id')->key('external_id')->label(__('External id'))->placeholder(__('not linked to EMD'))
-                        ->afterLabel(static::inline([static::openDirectoryRecordAction()]))
-                        ->belowContent(static::note(fn (Client $record) => static::directoryNote($record), fn (Client $record) => $record->externalRecord?->isMissing() ? 'danger' : 'warning')),
-                    TextEntry::make('externalRecord.company')->label(__('Company'))->placeholder('-'),
-                    TextEntry::make('job_title')->label(__('Job title'))->placeholder('-')->state(fn (Client $record) => $record->externalRecord?->jobTitle()),
-                    TextEntry::make('department')->label(__('Department'))->placeholder('-')->state(fn (Client $record) => $record->externalRecord?->departmentName()),
-                    TextEntry::make('externalRecord.login_name')->label(__('Login name'))->visible(fn (Client $record) => filled($record->externalRecord?->login_name)),
-                    TextEntry::make('externalRecord.room')->label(__('Room'))->visible(fn (Client $record) => filled($record->externalRecord?->room)),
-                    TextEntry::make('externalRecord.employment_status')->label(__('Employment status'))->visible(fn (Client $record) => filled($record->externalRecord?->employment_status)),
-                    TextEntry::make('externalRecord.email_domain')->label(__('E-mail domain'))->placeholder('-'),
-                    ...static::directoryFieldEntries(),
-                ]),
-            Section::make(__('Support line for this client'))->columns(3)->description(__('The client should call the line of their own level; the support contact shown to them on the portal.'))
-                ->id('client-support-line')->collapsible()->collapsed()->persistCollapsed()
-                ->schema([
-                    TextEntry::make('support_phone')->label(__('Phone'))->placeholder('-')->state(fn (Client $record) => static::supportOf($record)['phone'] ?? null),
-                    TextEntry::make('support_email')->label(__('E-mail'))->placeholder('-')->state(fn (Client $record) => static::supportOf($record)['email'] ?? null),
-                    TextEntry::make('support_hours')->label(__('Hours'))->placeholder('-')->state(fn (Client $record) => static::supportOf($record)['hours'] ?? null),
-                ]),
         ]);
     }
 
@@ -894,7 +943,9 @@ class ClientResource extends BaseResource
         $answers = app(ClientAnswers::class);
 
         return $table
-            ->modifyQueryUsing(fn (Builder $query) => $query->with(['externalRecord', 'phoneNumbers', 'ssoIdentities', 'activeSponsorLink.sponsor', 'linkWarningMutedBy'])->withCount('answers'))
+            ->modifyQueryUsing(fn (Builder $query) => $query->with(['externalRecord', 'phoneNumbers', 'ssoIdentities', 'activeSponsorLink.sponsor', 'linkWarningMutedBy'])
+                // The usable answers, as the client page counts them (not every stored one).
+                ->withCount(['answers' => ClientAnswers::usableOnly(...)]))
             // Phone numbers must reach the search whole ("06 30 123 4567"); names split into words below.
             ->splitSearchTerms(false)
             ->columns([
@@ -912,9 +963,11 @@ class ClientResource extends BaseResource
                 TextColumn::make('implicit_package')->label(__('Implicit package'))->placeholder('-')->toggleable(),
                 TextColumn::make('explicit_package')->label(__('Explicit package'))->placeholder('-')->toggleable(),
                 TextColumn::make('answers_count')->label(__('Answers'))->badge()->sortable()->alignCenter()
-                    ->color(fn (Client $record) => $answers->isEligible($record) ? 'success' : 'gray'),
+                    ->color(fn (Client $record) => (int) $record->answers_count >= $answers->requiredCount() ? 'success' : 'gray')
+                    ->tooltip(fn (Client $record) => (int) $record->answers_count >= $answers->requiredCount() ? null : $answers->summary((int) $record->answers_count)),
                 IconColumn::make('pin')->label(__('PIN'))->boolean()->alignCenter()->state(fn (Client $record) => $record->hasPin()),
-                IconColumn::make('externalRecord.id')->label(__('Linked to EMD'))->boolean()->alignCenter()->toggleable()
+                // Off by default (owner's decision of 2026-11-18): it says little in the daily work, and its place goes to the quick buttons.
+                IconColumn::make('externalRecord.id')->label(__('Linked to EMD'))->boolean()->alignCenter()->toggleable(isToggledHiddenByDefault: true)
                     ->color(fn (Client $record) => $record->externalRecord === null ? 'danger' : ($record->externalRecord->isMissing() ? 'warning' : 'success')),
                 TextColumn::make('closed_at')->label(__('Closed'))->since()->placeholder(__('open'))->badge()->color('danger')->toggleable(isToggledHiddenByDefault: true),
                 static::deletedColumn(),
@@ -970,15 +1023,16 @@ class ClientResource extends BaseResource
             ->emptyStateHeading(__('No clients match'))
             ->emptyStateDescription(__('Change the filters above, or switch off "Relevant clients only" to see EMD-only accounts too.'))
             ->recordActions([
+                // The everyday moves as quick buttons in the row: identify, new PIN, login link.
                 static::identifyAction()->iconButton()->tooltip(__('Identify')),
+                SetPinAction::make()->iconButton()->tooltip(fn (Client $record): string => app(PinService::class)->setPinBlocker($record) ?? __('Set PIN')),
+                SendMagicLinkAction::make()->iconButton()->tooltip(__('Send login link')),
                 ViewAction::make()->iconButton()->tooltip(__('View')),
-                // Two groups with a divider: the everyday helpdesk moves first, the
-                // administrative ones below; state-bound ones appear only in their state.
+                // The rest in the menu, two groups with a divider: the other helpdesk
+                // moves first, the administrative ones below; state-bound ones appear only in their state.
                 ActionGroup::make([
                     ActionGroup::make([
                         EditAction::make(),
-                        SetPinAction::make(),
-                        SendMagicLinkAction::make(),
                         static::clearPinAction(),
                     ])->dropdown(false),
                     ActionGroup::make([

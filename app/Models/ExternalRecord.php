@@ -5,6 +5,8 @@ namespace App\Models;
 use App\Audit\Auditable;
 use App\Enums\PrincipalType;
 use App\Models\Concerns\HasUuidKey;
+use App\Settings\SettingKey;
+use App\Settings\Settings;
 use Database\Factories\ExternalRecordFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
@@ -97,12 +99,25 @@ class ExternalRecord extends Model
      */
     public function jobTitle(): ?string
     {
-        return $this->title ?: $this->attribute('title');
+        return $this->title ?: $this->mappedAttribute('title');
     }
 
     public function departmentName(): ?string
     {
-        return $this->department ?: $this->attribute('department');
+        return $this->department ?: $this->mappedAttribute('department');
+    }
+
+    /**
+     * A field the sync left empty, read from the record's further source
+     * columns: under the heading the column mapping (Settings › EMD) names
+     * for it now, or under the field's own name. So a record taken over
+     * before the mapping was set shows the value without a new sync.
+     */
+    private function mappedAttribute(string $field): ?string
+    {
+        $mapped = app(Settings::class)->array(SettingKey::SyncColumnMapping)[$field] ?? null;
+
+        return (is_string($mapped) && trim($mapped) !== '' ? $this->attribute($mapped) : null) ?? $this->attribute($field);
     }
 
     public static function domainOf(?string $email): ?string

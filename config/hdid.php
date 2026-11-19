@@ -166,6 +166,15 @@ return [
         'csp_extra_sources' => env('HDID_CSP_EXTRA_SOURCES', ''),
     ],
 
+    'error_mail' => [
+        // HTTP 500 Report: a full report of every unexpected error (web request, queue job, command,
+        // scheduled task) to these addresses, comma-separated; empty: off. Needs a working mailer.
+        'to' => (string) env('HDID_ERROR_MAIL_TO', ''),
+        // The 5xx answers of a web request that send a report, comma-separated (500–599); empty: 500
+        // only. An unexpected error outside a web request counts as 500.
+        'statuses' => (string) env('HDID_ERROR_MAIL_STATUSES', ''),
+    ],
+
     'messages' => [
         // Queue of the short-lived sign-in secrets (client login links and SMS codes, staff MFA codes),
         // so a pile of other messages cannot delay them past their lifetime. The worker must listen on

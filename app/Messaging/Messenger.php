@@ -95,11 +95,14 @@ class Messenger
      * that carries a secret is wiped once it is out, like a code template.
      * A secret valid only until a given time (a staff sign-in code) is a
      * sign-in message: it goes on the priority queue and is not sent once
-     * expired or replaced by a newer one to the same recipient.
+     * expired or replaced by a newer one to the same recipient. Further
+     * marks go into the meta (an error report: error_report).
+     *
+     * @param  array<string, mixed>  $meta
      */
-    public function sendRaw(Channel $channel, string $recipient, ?string $subject, string $body, ?Client $client = null, bool $carriesSecret = false, ?CarbonInterface $validUntil = null, ?string $forUserId = null): OutboundMessage
+    public function sendRaw(Channel $channel, string $recipient, ?string $subject, string $body, ?Client $client = null, bool $carriesSecret = false, ?CarbonInterface $validUntil = null, ?string $forUserId = null, array $meta = []): OutboundMessage
     {
-        $meta = array_filter([
+        $meta = array_filter($meta + [
             'secret' => $carriesSecret || $validUntil !== null ? true : null,
             'valid_until' => $validUntil?->toIso8601String(),
             // Whose staff sign-in code it is: a newer code replaces only that user's older one.

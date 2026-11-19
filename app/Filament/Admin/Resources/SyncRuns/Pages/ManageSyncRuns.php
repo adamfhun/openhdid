@@ -4,6 +4,7 @@ namespace App\Filament\Admin\Resources\SyncRuns\Pages;
 
 use App\Auth\Permission;
 use App\Filament\Admin\Resources\SyncRuns\SyncRunResource;
+use App\Filament\Admin\Widgets\SyncDomainsWidget;
 use App\Filament\Concerns\LimitsSearchInput;
 use App\Filament\NotificationText;
 use App\Sync\ApiTokens;
@@ -40,6 +41,14 @@ class ManageSyncRuns extends ManageRecords
     public function getSubheading(): ?string
     {
         return app(ApiTokens::class)->describe();
+    }
+
+    /**
+     * The configured and the synced e-mail domains, for information, above the runs.
+     */
+    protected function getHeaderWidgets(): array
+    {
+        return [SyncDomainsWidget::class];
     }
 
     protected function getHeaderActions(): array

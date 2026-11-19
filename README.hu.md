@@ -120,7 +120,7 @@ Nem privilegizált felhasználóként (uid 82) fut, csak olvasható gyökér-fá
 Minden image aláírt, és származási (build provenance) és SBOM-igazolást hordoz. A `v` a telepített verzió (a `.env` `OPENHDID_VERSION` értéke):
 
 ```sh
-v=1.15.5
+v=1.16.0
 gh attestation verify oci://ghcr.io/adamfhun/openhdid:$v --owner adamfhun
 cosign verify ghcr.io/adamfhun/openhdid:$v \
   --certificate-identity-regexp '^https://github.com/adamfhun/openhdid/\.github/workflows/release\.yml@refs/tags/v' \
@@ -152,6 +152,7 @@ A [`docs/`](docs) mappában, magyarul, PDF-formában; minden kiadáshoz csatolva
 - `openhdid-telepitesi-utmutato`: telepítési útmutató (feltételek, beállítási referencia, HTTPS, adatbázis, első lépések, külső rendszerek, átvételi próbák)
 - `openhdid-uzemeltetesi-kezikonyv`: üzemeltetési kézikönyv (naplók, ütemező, rendszerállapot, mentés és visszaállítás, frissítés, skálázás, biztonság)
 - `felhasznaloi-kezikonyv`: felhasználói kézikönyv ügyintézőknek és rendszergazdáknak
+- `gyorskezikonyv`: gyorskézikönyv a napi ügyfélszolgálati munkához (néhány oldal)
 
 A repó gyökerében és kiadási mellékletként: `UPGRADE.md` (frissítés), `TROUBLESHOOTING.md` (hibakeresés, az `install.sh check` lelet-azonosítóival), `install.sh` (telepítő, ellenőrző és javító), `backup.sh` (mentés és visszaállítás).
 

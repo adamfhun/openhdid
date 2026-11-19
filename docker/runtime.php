@@ -248,6 +248,18 @@ function check_env(string $role): void
             $errors[] = 'HDID_HTTP_PROXY must be a proxy address such as http://proxy.example.org:3128 or http://user:password@proxy.example.org:3128 (the value is not shown, it may contain a password).';
         }
     }
+    // HTTP 500 Report: the application leaves a wrong entry out, the container
+    // does not start with one (an address nobody reads would hide every error).
+    foreach (env_list('HDID_ERROR_MAIL_TO') as $address) {
+        if (filter_var($address, FILTER_VALIDATE_EMAIL) === false) {
+            $errors[] = 'HDID_ERROR_MAIL_TO must list e-mail addresses separated by commas; not an address: '.$address;
+        }
+    }
+    foreach (env_list('HDID_ERROR_MAIL_STATUSES') as $status) {
+        if (preg_match('/^5\d\d$/', $status) !== 1) {
+            $errors[] = 'HDID_ERROR_MAIL_STATUSES must list HTTP statuses from 500 to 599 separated by commas (empty: 500); not one: '.$status;
+        }
+    }
     // An entry that is not a network, or one wide enough to take most of the internet
     // off the limits, stops every role: the application would ignore the list too.
     array_push($errors, ...exempt_networks()[1]);

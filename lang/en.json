@@ -502,6 +502,7 @@
     "permission.clients.manage": "Manage clients",
     "permission.clients.package.override": "Override client packages temporarily",
     "permission.clients.pin.set": "Set client PINs",
+    "permission.clients.phone.add_from_call": "Add the caller's number to the client during a call",
     "permission.clients.view": "View clients",
     "permission.external-records.view": "View Enterprise Master Data",
     "permission.helpdesk.access": "Access the helpdesk area",

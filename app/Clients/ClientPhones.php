@@ -77,7 +77,10 @@ class ClientPhones
 
     public function isShared(ClientPhoneNumber $phone): bool
     {
-        return in_array($phone->number_e164, $this->sharedNumbersOf($phone->client), true);
+        // A deleted client's numbers stay on its page (the client relation leaves it out).
+        $client = $phone->client ?? Client::withTrashed()->find($phone->client_id);
+
+        return $client !== null && in_array($phone->number_e164, $this->sharedNumbersOf($client), true);
     }
 
     /**
@@ -273,6 +276,85 @@ class ClientPhones
                 'is_primary' => $isFirst,
             ]);
         });
+    }
+
+    /**
+     * A number staff add on the client page. A number removed from the client
+     * earlier keeps its (soft-deleted) row, which the unique index on client
+     * and number still counts: that row comes back with the new details
+     * instead of a second row, which the index would refuse.
+     *
+     * @param  array<string, mixed>  $attributes  as the form gives them, with source and verification
+     */
+    public function addByStaff(Client $client, array $attributes): ClientPhoneNumber
+    {
+        /** @var ClientPhoneNumber|null $removed */
+        $removed = $client->phoneNumbers()->onlyTrashed()->where('number_e164', $attributes['number_e164'])->first();
+
+        if ($removed === null) {
+            return $client->phoneNumbers()->create($attributes);
+        }
+
+        $removed->restore();
+        // What the removed row held (label, primary flag, an old confirmation) does not carry over.
+        $removed->forceFill(['label' => null, 'is_primary' => false, 'verified_at' => null, 'verified_via' => null, 'verified_by_user_id' => null])->fill($attributes)->save();
+
+        return $removed;
+    }
+
+    /**
+     * The number the identified caller rings from, added to the client during
+     * the call, on the agent's word that the caller agreed to it. Only after
+     * a successful identification on this very call, and only a number the
+     * client does not have yet. It counts as confirmed by the identified call
+     * (the caller proved who they are on it), vouched for by the agent, and
+     * the audit entry names the call, the session and the consent.
+     *
+     * @throws ValidationException
+     */
+    public function addFromIdentifiedCall(IdSession $passed, User $agent): ClientPhoneNumber
+    {
+        $call = $passed->call_id === null ? null : $passed->call()->first();
+        $number = $call?->caller_number_e164;
+        $client = $passed->client;
+
+        if ($passed->status !== IdSessionStatus::Passed || $passed->isVoided() || $call === null || $number === null || $client === null) {
+            throw ValidationException::withMessages(['number' => __('The caller\'s number can only be added after a successful identification on a call that shows the number.')]);
+        }
+
+        if ($client->phoneNumbers()->where('number_e164', $number)->exists()) {
+            throw ValidationException::withMessages(['number' => __('The client already has this number.')]);
+        }
+
+        $phone = $this->addByStaff($client, [
+            'number_e164' => $number,
+            'source' => PhoneNumberSource::Admin,
+            'is_primary' => ! $client->phoneNumbers()->exists(),
+            'verified_at' => now(),
+            'verified_via' => PhoneVerificationSource::IdentifiedCall,
+            'verified_by_user_id' => $agent->id,
+        ]);
+
+        $holders = $this->otherHolders($number, $client);
+        $this->auditor->record('client_phone.added_from_call', $phone, [
+            'number' => $number,
+            'call_id' => $call->id,
+            'id_session_id' => $passed->id,
+            'consent' => 'given_on_the_call',
+            'shared_with' => $holders->pluck('id')->all(),
+        ], $agent);
+
+        return $phone;
+    }
+
+    /**
+     * Before a number of the client is changed to another one: the row the
+     * client's earlier, removed copy of that number left behind goes for
+     * good, so the changed row can take the number.
+     */
+    public function forgetRemovedCopy(Client $client, string $e164): void
+    {
+        $client->phoneNumbers()->onlyTrashed()->where('number_e164', $e164)->forceDelete();
     }
 
     /**

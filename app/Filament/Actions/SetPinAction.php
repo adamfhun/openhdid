@@ -3,6 +3,7 @@
 namespace App\Filament\Actions;
 
 use App\Audit\Auditor;
+use App\Auth\Mfa\StaffMfa;
 use App\Auth\Permission;
 use App\Enums\OutboundMessageStatus;
 use App\Filament\NotificationText;
@@ -14,10 +15,12 @@ use App\Sms\SmsDestinations;
 use Filament\Actions\Action;
 use Filament\Actions\Contracts\HasActions;
 use Filament\Facades\Filament;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Text;
+use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
@@ -38,6 +41,28 @@ class SetPinAction
         return app(SmsDestinations::class)->targetFor($client);
     }
 
+    /**
+     * Why the PIN cannot go out by SMS, or null when it can: the client has a
+     * number an SMS may go to, and an SMS gateway is connected (the "log"
+     * driver sends nothing).
+     */
+    public static function smsBlocker(Client $client): ?string
+    {
+        if (! StaffMfa::smsAvailable()) {
+            return __('No SMS gateway is connected (SMS_DRIVER=log), so the PIN cannot be sent.');
+        }
+
+        if (static::smsTarget($client) !== null) {
+            return null;
+        }
+
+        $primary = $client->primaryPhoneNumber();
+
+        return $primary === null
+            ? __('The client has no phone number, so the PIN cannot be sent.')
+            : __('No text message goes to :number (:reason), and the client has no other number that receives one.', ['number' => $primary, 'reason' => app(SmsDestinations::class)->refusal($primary)?->label() ?? '']);
+    }
+
     public static function make(string $name = 'setPin'): Action
     {
         $pins = app(PinService::class);
@@ -51,32 +76,50 @@ class SetPinAction
             ->disabled(fn (Client $record): bool => ! $pins->canSetPin($record))
             ->tooltip(fn (Client $record): ?string => $pins->setPinBlocker($record))
             ->modalHeading(fn (Client $record): string => __('New PIN for :name', ['name' => $record->name]))
-            ->modalSubmitActionLabel(__('Set PIN'))
+            // Two ways to finish: set it only, or set it and send it. The second one
+            // exists only while an SMS can really go out; the dialog says why when not.
+            ->modalSubmitActionLabel(__('Set PIN only'))
+            ->extraModalFooterActions(fn (Action $action, Client $record): array => static::smsBlocker($record) === null
+                ? [$action->makeModalSubmitAction('setAndSend', arguments: ['send_sms' => true])->label(__('Set and send by SMS'))->color('primary')]
+                : [])
             ->schema(fn (Client $record): array => [
+                Hidden::make('pin_shown')->default(false)->dehydrated(false),
                 TextInput::make('pin')
                     ->label(__('PIN'))
-                    ->default(fn () => $pins->generatePin($record))
+                    // Masked always; uncovered only by the audited button, and only when the setting allows it.
+                    ->password(fn (Get $get): bool => ! $get('pin_shown'))
+                    ->autocomplete('off')
+                    // A proposed PIN is of use only when it can reach the client by SMS (or be uncovered).
+                    ->default(fn (): ?string => static::smsBlocker($record) === null || $pins->staffMayReveal() ? $pins->generatePin($record) : null)
                     ->required()
                     ->inputMode('numeric')
                     ->rule('digits_between:'.$pins->minLength().','.$pins->maxLength())
                     ->minLength($pins->minLength())
                     ->maxLength($pins->maxLength())
-                    ->helperText(__(':min to :max digits. A random :min-digit PIN is proposed; overwrite it if the client asked for a specific one. The phone menu checks it only when the client calls from a registered number.', ['min' => $pins->minLength(), 'max' => $pins->maxLength()])),
-                // The primary number, or the first other one an SMS may go to; a client
-                // with landlines only gets no SMS, and the switch says why instead of
-                // claiming a send that the Messenger would refuse.
-                Toggle::make('send_sms')
-                    ->label(fn () => __('Send the PIN by SMS to :number', ['number' => static::smsTarget($record) ?? $record->primaryPhoneNumber()]))
-                    ->default(fn (): bool => static::smsTarget($record) !== null)
-                    ->disabled(fn (): bool => static::smsTarget($record) === null)
-                    ->helperText(fn (): ?string => static::smsTarget($record) === null && ($primary = $record->primaryPhoneNumber()) !== null
-                        ? __('No text message goes to :number (:reason), and the client has no other number that receives one: tell the PIN in person.', ['number' => $primary, 'reason' => app(SmsDestinations::class)->refusal($primary)?->label() ?? ''])
-                        : null)
-                    ->visible(fn () => $record->primaryPhoneNumber() !== null),
-                Text::make(__('The client has no phone number, so the PIN has to be told in person.'))
-                    ->visible(fn () => $record->primaryPhoneNumber() === null),
+                    ->suffixAction(
+                        Action::make('revealPin')
+                            ->label(__('Uncover the PIN'))
+                            ->icon('heroicon-o-eye')
+                            ->visible(fn (Get $get): bool => $pins->staffMayReveal() && ! $get('pin_shown'))
+                            ->action(function (Set $set) use ($record): void {
+                                $set('pin_shown', true);
+                                app(Auditor::class)->record('client.pin_revealed', $record, actor: Filament::auth()->user());
+                            }),
+                    )
+                    ->helperText(fn (): string => __(':min to :max digits, shown masked. The phone menu checks it only when the client calls from a registered number.', ['min' => $pins->minLength(), 'max' => $pins->maxLength()])
+                        .' '.(static::smsBlocker($record) === null || $pins->staffMayReveal()
+                            ? __('A random PIN is proposed; overwrite it if the client asked for a specific one.')
+                            : __('No PIN is proposed, because it could not reach the client: type the PIN the client asks for.'))
+                        .' '.($pins->staffMayReveal()
+                            ? __('Uncovering the PIN is written to the audit log.')
+                            : __('Uncovering is switched off (Settings › Identification › PIN).'))),
+                Text::make(fn (): string => __('The SMS goes to :number.', ['number' => (string) static::smsTarget($record)]))
+                    ->visible(fn (): bool => static::smsBlocker($record) === null),
+                Text::make(fn (): string => (string) static::smsBlocker($record).' '.__('The button that sends it is therefore not offered: tell the client the PIN in person.'))
+                    ->color('warning')
+                    ->visible(fn (): bool => static::smsBlocker($record) !== null),
             ])
-            ->action(function (Client $record, array $data, HasActions $livewire) use ($pins): void {
+            ->action(function (Client $record, array $data, array $arguments, HasActions $livewire) use ($pins): void {
                 try {
                     $pins->setPin($record, (string) $data['pin'], Filament::auth()->user());
                 } catch (ValidationException $e) {
@@ -91,7 +134,8 @@ class SetPinAction
 
                 $phone = static::smsTarget($record);
 
-                if (($data['send_sms'] ?? false) && $phone !== null) {
+                // Asked again on the server: the footer button is not what decides.
+                if (($arguments['send_sms'] ?? false) && static::smsBlocker($record) === null && $phone !== null) {
                     $message = app(Messenger::class)->sendTemplate(MessageKey::PinSms, $record, ['pin' => (string) $data['pin']], $phone);
 
                     if ($message->status === OutboundMessageStatus::Cancelled) {
