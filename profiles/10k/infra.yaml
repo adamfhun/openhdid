@@ -35,7 +35,7 @@ x-logging: &logging
 
 services:
   mariadb:
-    image: mariadb:12.3.3@sha256:4ebbcf100a3ba320766dfa0e1af008df12261301db6ef72798c7650f70794aed
+    image: mariadb:12.3.3@sha256:4aaf88b3106382c8c18e49f0cec60267be618fc22f858c4503afb2a2555afed3
     restart: unless-stopped
     # LOAD DATA LOCAL off on the server too: a restored dump (or any client) cannot make the server
     # read a file of the client's host. A command, not configs.content: a changed command makes a
@@ -70,7 +70,7 @@ services:
 
   # A sor, a zárak, a korlátszámlálók és a gyorsítótár (REDIS_HOST az alkalmazásgépeken).
   valkey:
-    image: valkey/valkey:9.1.4-alpine3.24@sha256:56729e68bdda139cbd3f6a2538683dc3523325fc5711ea1a379938f1b37893f0
+    image: valkey/valkey:9.2.0-alpine3.24@sha256:c8e2d17498838af5d91e12eb7c11220b3434a7b7131a333e3af52ad5e0b80882
     restart: unless-stopped
     command: [valkey-server, /etc/valkey/valkey.conf]
     configs:
@@ -94,7 +94,7 @@ services:
 
   # A munkamenetek (REDIS_SESSION_HOST az alkalmazásgépeken), saját jelszóval.
   valkey-sessions:
-    image: valkey/valkey:9.1.4-alpine3.24@sha256:56729e68bdda139cbd3f6a2538683dc3523325fc5711ea1a379938f1b37893f0
+    image: valkey/valkey:9.2.0-alpine3.24@sha256:c8e2d17498838af5d91e12eb7c11220b3434a7b7131a333e3af52ad5e0b80882
     restart: unless-stopped
     command: [valkey-server, /etc/valkey/valkey.conf]
     configs:

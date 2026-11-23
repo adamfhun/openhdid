@@ -36,6 +36,9 @@
 # - A gosu 1.19 egyetlen, a govulncheck szerint elérhető lelete (CVE-2026-61801, moby/sys/user, közepes
 #   súlyú) nincs a listán: a vizsgálat HIGH/CRITICAL szűrője nem mutatja, a gosu 1.20 javítja.
 # Az apt lelete (CVE-2026-109518) nem kivétel: a gyártó javított image-ével tűnik el.
+# Kiegészítés, 2026-11-19: a CVE-2026-97054 (net/http, MaxBytesReader, HTTP/1-kiszolgáló) ugyanerre a
+# binárisra szól; a gosu-ban nincs net/http szimbólum (go tool nm: 0 találat, és net, mime/multipart sincs),
+# az érintett kód tehát nincs a binárisban. A felülvizsgált gosu változatlan.
 vulnerabilities:
   - id: CVE-2025-61726
     paths:
@@ -166,4 +169,9 @@ vulnerabilities:
     paths:
       - usr/local/bin/gosu
     statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete; a govulncheck szerint a gosu nem éri el (részletek a fájl fejlécében)"
+    expired_at: 2027-02-10
+  - id: CVE-2026-97054
+    paths:
+      - usr/local/bin/gosu
+    statement: "A gosu Go 1.24.6-os szabványkönyvtárának lelete (net/http); a gosu binárisában nincs net/http (részletek a fájl fejlécében)"
     expired_at: 2027-02-10

@@ -123,7 +123,7 @@ services:
 
   # Beépített adatbázis: COMPOSE_PROFILES=db. Külső MariaDB esetén a profil kimarad.
   mariadb:
-    image: mariadb:12.3.3@sha256:4ebbcf100a3ba320766dfa0e1af008df12261301db6ef72798c7650f70794aed
+    image: mariadb:12.3.3@sha256:4aaf88b3106382c8c18e49f0cec60267be618fc22f858c4503afb2a2555afed3
     profiles: [db]
     restart: unless-stopped
     env_file: [db.env]
@@ -163,7 +163,7 @@ services:
   # memóriaplafonja a Valkey maxmemory korlátja fölött hagy helyet az AOF-újraírásnak és a
   # puffereknek, így egy betelt tár sem fogyasztja el a gazdagép memóriáját.
   valkey:
-    image: valkey/valkey:9.1.4-alpine3.24@sha256:56729e68bdda139cbd3f6a2538683dc3523325fc5711ea1a379938f1b37893f0
+    image: valkey/valkey:9.2.0-alpine3.24@sha256:c8e2d17498838af5d91e12eb7c11220b3434a7b7131a333e3af52ad5e0b80882
     profiles: [redis]
     restart: unless-stopped
     command: [valkey-server, /etc/valkey/valkey.conf]
@@ -191,7 +191,7 @@ services:
   # pillanatkép: tervezett újraindításkor a Valkey leálláskor ment, így senki nem lép ki;
   # összeomláskor legfeljebb az utolsó öt perc új belépései vesznek el.
   valkey-sessions:
-    image: valkey/valkey:9.1.4-alpine3.24@sha256:56729e68bdda139cbd3f6a2538683dc3523325fc5711ea1a379938f1b37893f0
+    image: valkey/valkey:9.2.0-alpine3.24@sha256:c8e2d17498838af5d91e12eb7c11220b3434a7b7131a333e3af52ad5e0b80882
     profiles: [redis]
     restart: unless-stopped
     command: [valkey-server, /etc/valkey/valkey.conf]
